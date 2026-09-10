@@ -1,0 +1,23 @@
+import { isKeyboardKind, stealLabel } from './analogKeyboard';
+import { isNoteInlet } from './controlInputs';
+import type { PatchEditor } from './editor';
+import type { Material } from '../../src/index';
+
+export function firstNoteTarget(editor: PatchEditor): Material | null {
+  for (const conn of editor.editor.getConnections()) {
+    if (!isKeyboardKind(editor.kinds.get(conn.source) ?? '')) continue;
+    if (!isNoteInlet(conn.targetInput)) continue;
+    const material = editor.materials.get(conn.target);
+    if (material) return material;
+  }
+  return null;
+}
+
+export function applyVoiceHint(editor: PatchEditor, analog: { setVoiceView: (view: { polyphony: number; steal: string; targetName: string }) => void }): void {
+  const material = firstNoteTarget(editor);
+  analog.setVoiceView({
+    polyphony: material?.polyphony ?? 1,
+    steal: stealLabel(material?.voiceStealing),
+    targetName: material?.name ?? '',
+  });
+}

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output (published to npm from a fresh build, never committed)
+dist/
+editor/dist/
+*.tsbuildinfo
+
+# Tooling caches
+.cache/
+.vite/
+.vite-temp/
+.eslintcache
+coverage/
+.nyc_output/
+
+# npm pack / local tarballs
+*.tgz
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+*.p12
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# OS junk
+.DS_Store
+._*
+Thumbs.db
