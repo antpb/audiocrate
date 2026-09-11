@@ -1,5 +1,7 @@
 # editor
 
+Live demo at: [https://audiocrate.homecrate.app/](https://audiocrate.homecrate.app/)
+
 Patch graph for audiocrate AudioMaterials. Lives in this repo as an example app,
 not in the npm package.
 
