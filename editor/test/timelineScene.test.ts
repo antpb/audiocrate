@@ -9,7 +9,7 @@ import {
   SCENE_PLAN_VERSION,
 } from '../../src/index';
 import { HAS_GRAIN } from './siblings';
-import { createGrainMaterial } from '../../../crate-grain/src/index';
+import { createGrainMaterial } from '../../examples/grain/src/index';
 import { applySample } from '../src/nodeAssets';
 import { silentJack, type JackActivity } from '../src/activity';
 import { idsReachingMaster } from '../src/graphReach';

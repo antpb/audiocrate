@@ -100,7 +100,7 @@ Every guide has a section on what is missing.
 |---|---|
 | Browser worklet | Live voice |
 | `OfflineRenderer` | Bounce and tests. Shares `compile.ts`. |
-| CrateASL (Swift) | Independent interpreter. The conformance twin. |
+| CrateASL (Swift) | Independent interpreter. [`examples/CrateASL`](../examples/CrateASL/). |
 | crate-xr | Host adapter into `THREE.Audio`. |
 | Android (Hermes + Oboe) | Same TypeScript interpreter, C++ kernels. `example-android/`. |
 

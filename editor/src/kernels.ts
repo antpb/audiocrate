@@ -1,8 +1,8 @@
-import namWasmUrl from '../../../crate-amp/wasm/dist/nam.wasm?url';
-import ampFxWasmUrl from '../../../crate-amp/wasm/dist/amp_fx.wasm?url';
-import grainFxWasmUrl from '../../../crate-grain/wasm/dist/grain_fx.wasm?url';
-import synthFxWasmUrl from '../../../crate-synth/wasm/dist/synth_fx.wasm?url';
-import spaceReverbWasmUrl from '../../../crate-space-reverb/wasm/dist/space_reverb.wasm?url';
+import namWasmUrl from '../../examples/amp/wasm/dist/nam.wasm?url';
+import ampFxWasmUrl from '../../examples/amp/wasm/dist/amp_fx.wasm?url';
+import grainFxWasmUrl from '../../examples/grain/wasm/dist/grain_fx.wasm?url';
+import synthFxWasmUrl from '../../examples/synth/wasm/dist/synth_fx.wasm?url';
+import spaceReverbWasmUrl from '../../examples/space-reverb/wasm/dist/space_reverb.wasm?url';
 import { fetchKernelBinary, type KernelBinaryMap } from '../../src/index';
 
 const AMP_KERNEL_SLOT = 'homecrate.amp';

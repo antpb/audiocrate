@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output (published to npm from a fresh build, never committed)
-dist/
+# Package build output (published to npm from a fresh build, never committed).
+# Anchored so examples/*/wasm/dist stays trackable.
+/dist/
 editor/dist/
 *.tsbuildinfo
 
@@ -37,6 +38,15 @@ pnpm-debug.log*
 .idea/
 .vscode/
 *.swp
+
+# Example WASM object dirs. Committed artefacts live in wasm/dist.
+examples/**/wasm/build/
+examples/**/wasm/build-fx/
+
+# SwiftPM (examples/CrateASL)
+.build/
+.swiftpm/
+Package.resolved
 
 # OS junk
 .DS_Store

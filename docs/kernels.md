@@ -120,6 +120,11 @@ source produces the same output for the same input, every time.
 complete example: C, one clang invocation, an 861-byte module, and a test
 that loads it through the same factory a third-party AudioMaterial would.
 
+The product kernels the editor plays (amp, grain, synth, room) live next
+to it under [`examples/`](../examples/README.md). They register through
+`examples/homecrate` and compile into that package's worklet entry. Core
+crate does not import them.
+
 ```bash
 cd examples/portable-kernel && ./build.sh
 ```

@@ -1,0 +1,13 @@
+{
+  "name": "audiocrate-amp",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Neural amp AudioMaterial: NAM inference plus analog FX kernel.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}

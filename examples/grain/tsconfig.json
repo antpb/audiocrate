@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["src", "worklet", "../../src/renderers/worklet/audioWorklet.d.ts"]
+}

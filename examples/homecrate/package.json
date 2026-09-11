@@ -1,0 +1,9 @@
+{
+  "name": "audiocrate-homecrate",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Registers amp, grain, synth, and space-reverb, plus the matching worklet entry.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts"
+}

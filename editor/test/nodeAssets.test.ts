@@ -10,7 +10,7 @@ import {
   wavetableAsset,
   wavetableBank,
 } from '../../src/index';
-import { ampIrAsset, ampNamAsset, createAmpMaterial } from '../../../crate-amp/src/index';
+import { ampIrAsset, ampNamAsset, createAmpMaterial } from '../../examples/amp/src/index';
 import {
   applyIr,
   applyNam,

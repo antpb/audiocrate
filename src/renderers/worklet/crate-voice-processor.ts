@@ -12,9 +12,8 @@
  * defineCrateVoiceProcessor('crate-voice-processor', { amp: myKernelFactory });
  * ```
  *
- * (`audiocrate-amp` and its siblings are companion packages that are not
- * published yet, so the example uses a local factory rather than pointing at
- * something you cannot install.)
+ * The product kernels that ship as examples live under `examples/` and are
+ * compiled into `examples/homecrate/worklet/homecrate-voice-processor.ts`.
  *
  * and then points its bundler's worklet entry at that file. Keeping the
  * processor *name* the same means `WebAudioRenderer` needs no change; passing

@@ -1,0 +1,8 @@
+Copied 2026-09-07 from examples/amp/dsp
+  CostelloReverbEngine.h
+  CostelloReverbEngine.cpp
+
+Those files were copied from the homecrate-amp-vst3 tree into examples/amp.
+Re-copy when the VST3 Costello engine is brought current.
+
+This package is reverb only. Delay, IR, and NAM stay in examples/amp.

@@ -1,5 +1,5 @@
-import { registerHomecrateMaterials } from '../../../../crate-homecrate/src/index';
-import { setNamMaxFrames } from '../../../../crate-amp/src/index';
+import { registerHomecrateMaterials } from '../../../examples/homecrate/src/index';
+import { setNamMaxFrames } from '../../../examples/amp/src/index';
 
 export function registerOptionalMaterials(): void {
   registerHomecrateMaterials();

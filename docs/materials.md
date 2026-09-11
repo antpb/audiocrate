@@ -268,6 +268,10 @@ without having been built with it.
 The one case that still needs a custom build is DSP that must be arbitrary
 JavaScript on the audio thread.
 
+The plugins the editor plays (amp, grain, synth, room) are that shape.
+They live in [`examples/`](../examples/README.md) and register through
+`examples/homecrate`. Core crate does not import them.
+
 ## What is missing
 
 - **A published inspector component.** The model is shipped. The component

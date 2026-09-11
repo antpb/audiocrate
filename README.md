@@ -1,7 +1,8 @@
 # audiocrate
 
-A scene graph, an extensible AudioMaterial system, and a serializable DSP
-graph that the same interpreter runs offline and in an AudioWorklet.
+A Web Audio scene graph, an extensible AudioMaterial system, and a
+serializable DSP graph that the same interpreter runs offline and in an
+AudioWorklet.
 
 Inspired by how three.js is organized: a scene of objects, materials you
 can write yourself, and loaders. Not an editor. This repo also has
@@ -122,7 +123,8 @@ and a transport that offline and live rendering share.
 
 ## Same graph, more than one place
 
-A second interpreter exists in Swift. A conformance gate renders 83 graphs
+A second interpreter exists in Swift
+([`examples/CrateASL`](examples/CrateASL/)). A conformance gate renders 83 graphs
 covering all 70 node kinds through both, comparing sample by sample to a
 tolerance of 5e-6. Adding a node kind to one implementation and not the other
 fails the build on both sides.
@@ -184,6 +186,7 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 | [Hooks](docs/hooks.md) | Extending a host without forking Audiocrate |
 | [Conformance](docs/conformance.md) | How cross-implementation agreement is enforced |
 | [Editor](editor/README.md) | Example AudioMaterial graph editor (not published) |
+| [Examples](examples/README.md) | Custom-kernel plugins the editor plays, and the Swift interpreter |
 
 Full docs: **<https://homecrate.app/docs/crate/>**
 
@@ -196,7 +199,8 @@ Full docs: **<https://homecrate.app/docs/crate/>**
 - **Not a cloud service.** Nothing here requires a server. The collaboration
   layer takes a transport you supply.
 - **Not a sample library.** Core ships primitives: filters, envelopes,
-  delays, the usual building blocks.
+  delays, the usual building blocks. Custom kernels that need a worklet
+  entry live in [`examples/`](examples/README.md) and are not published.
 
 ## Status
 

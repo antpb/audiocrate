@@ -1,0 +1,16 @@
+Copied 2026-09-05 from /Users/anthonyburchell/Desktop/homecrate-amp-vst3
+  src/dsp/*  ->  dsp/
+  src/plugin/params_gen.h  ->  params/params_gen.h
+
+Apple-free VST3 port of the AUv3 kernel (no AudioToolbox, no vDSP, no
+os_log). Re-copy from that tree when the VST3 DSP is brought current.
+
+NAM core is not vendored. Same checkout both native builds use:
+  ~/Desktop/v2nam/NeuralAmpModelerCore
+  NAM_ENABLE_A2_FAST=1
+  WHOLE_ARCHIVE / PRESERVE_DEAD_CODE_INITS_AND_TERMS so architecture
+  parsers self-register.
+
+IRConvolver uses pffft from HC_PFFFT_DIR, compiled into amp_fx.wasm.
+Factory A2-full used by tests:
+  assets/NAM/red_face_75_4vol_a2full.nam -> wasm/fixtures/

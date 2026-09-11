@@ -3,9 +3,9 @@
 Patch graph for audiocrate AudioMaterials. Lives in this repo as an example app,
 not in the npm package.
 
-Patch nodes, play them, export a `crate.plugin`. Amp, grain, synth, and IR
-plugins load when those packages sit next to this one (`../crate-amp`, and so
-on). A crate-only checkout still boots.
+Patch nodes, play them, export a `crate.plugin`. The default patch uses Amp
+and Synth from [`examples/`](../examples/README.md). Those plugins live in
+this repo; a clone is enough to play the starter graph.
 
 ![audiocrate.js patcher with the default graph, palette, inspector, and keybed](docs/editor.png)
 

@@ -51,7 +51,7 @@ Four caveats, all of which still hold:
 | `asl/conformanceFixture.ts` | The fixture as a value, and its stamp |
 | `test/asl/conformanceFixture.test.ts` | Is the file on disk still a description of this code |
 | `fixtures/asl-conformance.json` | The graphs, the input, and the expected samples |
-| `CrateASL/Tests/ConformanceTests.swift` | Does the second implementation agree |
+| `examples/CrateASL/Tests/CrateASLTests/ConformanceTests.swift` | Does the second implementation agree |
 
 The vocabulary is an array rather than a bare union. A TypeScript union does
 not survive to runtime, so nothing could ask "is every kind covered" without
@@ -88,7 +88,7 @@ Each step fails until you do the next one.
    The Swift suite now fails `testNodeVocabulariesAreIdentical`: *"kinds
    Audiocrate can emit that this interpreter cannot decode."*
 
-5. **Add the case to `NodeKind`** in `CrateASL/Sources/CrateASL/Graph.swift`.
+5. **Add the case to `NodeKind`** in `examples/CrateASL/Sources/CrateASL/Graph.swift`.
 
    The Swift build now fails: the switch in `Nodes.swift` is exhaustive.
 
@@ -108,7 +108,8 @@ the fixture is compared rather than trusted.
 cd packages/crate && npx vitest run     # includes the coverage and staleness gates
 npm run fixtures:asl                    # only when you meant to change the fixture
 
-# Swift suite (CrateASL)
+# Swift suite (examples/CrateASL)
+cd examples/CrateASL
 /usr/bin/swift test                     # the cross-implementation comparison
 /usr/bin/swift test -c release          # the same, plus a throughput number
 ```

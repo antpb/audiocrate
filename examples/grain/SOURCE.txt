@@ -1,0 +1,8 @@
+Copied 2026-09-05 from /Users/anthonyburchell/Desktop/homecrate-grain-vst3
+  src/dsp/*  ->  dsp/
+  src/plugin/params_gen.h  ->  params/params_gen.h
+
+Apple-free VST3 port of the AUv3 kernel (no AudioToolbox, no vDSP, no
+os_log). Re-copy from that tree when the VST3 DSP is brought current.
+
+The WASM bind compiles dsp/ as copied.

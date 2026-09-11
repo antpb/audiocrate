@@ -1,0 +1,4 @@
+# SwiftPM build products. Several hundred megabytes, rebuilt from source.
+.build/
+.swiftpm/
+Package.resolved

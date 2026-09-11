@@ -21,7 +21,7 @@ import {
 } from './host/ampAssets';
 import { IR_ASSET, IR_ASSET_REF } from '../../src/materials/ir';
 import { decodeHostedAudio } from './host/decodeAudio';
-import factoryNamUrl from '../../../crate-amp/wasm/fixtures/red_face_75_4vol_a2full.nam?url';
+import factoryNamUrl from '../../examples/amp/wasm/fixtures/red_face_75_4vol_a2full.nam?url';
 
 export const FACTORY_NAM_NAME = 'red_face_75_4vol_a2full.nam';
 

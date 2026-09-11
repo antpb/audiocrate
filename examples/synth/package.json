@@ -1,0 +1,13 @@
+{
+  "name": "audiocrate-synth",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Wavetable / IR synth AudioMaterial and WASM kernel.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}

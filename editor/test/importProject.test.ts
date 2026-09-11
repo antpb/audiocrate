@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { zipSync } from 'fflate';
 import { HAS_HOMECRATE } from './siblings';
-import { registerHomecrateMaterials } from '../../../crate-homecrate/src/index';
+import { registerHomecrateMaterials } from '../../examples/homecrate/src/index';
 import { AU_TYPE_EFFECT, AU_TYPE_MUSIC_EFFECT } from '../../src/index';
 import {
   HOMECRATE_AMP_MANUFACTURER,
   HOMECRATE_AMP_SUBTYPE,
   ampNamAsset,
   ampNamAssetR,
-} from '../../../crate-amp/src/index';
-import { HOMECRATE_SYNTH_MANUFACTURER, HOMECRATE_SYNTH_SUBTYPE } from '../../../crate-synth/src/index';
-import { HOMECRATE_GRAIN_MANUFACTURER, HOMECRATE_GRAIN_SUBTYPE } from '../../../crate-grain/src/index';
+} from '../../examples/amp/src/index';
+import { HOMECRATE_SYNTH_MANUFACTURER, HOMECRATE_SYNTH_SUBTYPE } from '../../examples/synth/src/index';
+import { HOMECRATE_GRAIN_MANUFACTURER, HOMECRATE_GRAIN_SUBTYPE } from '../../examples/grain/src/index';
 import { importProjectBytes, summarizeImportNotes } from '../src/importProject';
 
 const MANIFEST = {
