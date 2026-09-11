@@ -7,6 +7,8 @@ Patch nodes, play them, export a `crate.plugin`. Amp, grain, synth, and IR
 plugins load when those packages sit next to this one (`../crate-amp`, and so
 on). A crate-only checkout still boots.
 
+![audiocrate.js patcher with the default graph, palette, inspector, and keybed](docs/editor.png)
+
 ## Run
 
 From the audiocrate package root:
