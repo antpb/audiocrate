@@ -10,6 +10,12 @@ Inspired by how three.js is organized: a scene of objects, materials you
 can write yourself, and loaders. Not an editor. This repo also has
 [`editor/`](editor/README.md), an example app that is not in the npm package.
 
+[Demo] Editor live demo: [audiocrate.homecrate.app](https://audiocrate.homecrate.app)
+
+[Demo] Three.js implementation via [XR Publisher](https://www.npmjs.com/package/@antpb/xr-publisher) Plugin demo: [audiocrate.homecrate.app/xr-publisher](https://audiocrate.homecrate.app/xr-publisher/)
+
+homecrate for iOS/macOS/visionOS: [homecrate.app](https://homecrate.app) 
+
 ```bash
 npm install audiocrate
 ```

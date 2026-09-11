@@ -1,5 +1,7 @@
 # crate-xr
 
+Live demo available at: [audiocrate.homecrate.app/xr-publisher](https://audiocrate.homecrate.app/xr-publisher/)
+
 **Crate as a source for three.js audio, and an XR Publisher plugin built on it.**
 
 three.js `Audio` is an `Object3D` that owns a `GainNode`. `PositionalAudio`

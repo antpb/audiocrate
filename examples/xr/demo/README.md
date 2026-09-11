@@ -14,6 +14,8 @@ npm run example:xr
 
 http://localhost:5176
 
+Hosted: **https://crate-playground.sxpdigital.workers.dev/xr-publisher/**
+
 The page loads the published UMD runtime, then
 `crate-stones-xr-publisher-plugin.umd.js` from this example. The load overlay
 uses [`assets/preview.jpg`](assets/preview.jpg). No NPC plugins, no publishing
