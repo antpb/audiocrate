@@ -4,7 +4,7 @@ import { Transport, type PlaybackOrigin, type TransportHost } from './Transport'
 import { Bus } from './graph/Bus';
 import type { AudioBufferLike } from './graph/Clip';
 import type { Track } from './graph/Track';
-import type { Material } from './graph/Material';
+import type { AudioMaterial } from './graph/AudioMaterial';
 import { planScenePlayback } from './playback/plan';
 import { MidiPlayback, type MidiVoiceTarget } from './playback/MidiPlayback';
 import { ScenePlayback } from './playback/ScenePlayback';
@@ -108,7 +108,7 @@ export class AudioScene implements TransportHost {
   }
 
   /**
-   * Bakes every track's Material chain into wet clip buffers that
+   * Bakes every track's AudioMaterial chain into wet clip buffers that
    * `beginPlayback` schedules instead of the dry ones. Offline-bake before
    * scheduling, because `transport.play()` stays synchronous and cannot
    * await WASM setup itself. Must be called (again, if state changed)
@@ -237,7 +237,7 @@ export class AudioScene implements TransportHost {
       for (const scheduled of track.clips) {
         buffers.set(scheduled.clip.id, this.bakedInserts.get(scheduled.clip.id) ?? scheduled.clip.buffer);
       }
-      // A bound Material directly on `track.materials` (no
+      // A bound AudioMaterial directly on `track.materials` (no
       // `prepareLiveVoices` involved) still works as a MIDI target.
       // `start.instrumentTargets` below (`track.instrument`, live-bound)
       // takes precedence when both exist for the same track.

@@ -18,16 +18,16 @@
  * `hz`, `gate`, ...) so a patch can follow live playing. Flatten turns
  * those cables into `pitch` / `peak` / `rms` followers.
  */
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { tap, DEFAULT_CAPTURE_WINDOW } from '../asl/analysis';
 
-/** The tap id each Material reports under, so a reader knows what to look for. */
+/** The tap id each AudioMaterial reports under, so a reader knows what to look for. */
 export const METER_TAP = 'meter';
 export const SCOPE_TAP = 'scope';
 
-export function createMeterMaterial(): Material {
-  return new Material({
+export function createMeterMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'Meter',
     kind: 'meter',
     params: {},
@@ -41,13 +41,13 @@ export function createMeterMaterial(): Material {
 }
 
 /**
- * Captures a window for the main thread to analyse. One Material serves an
+ * Captures a window for the main thread to analyse. One AudioMaterial serves an
  * oscilloscope, a spectrum analyser, a tuner and a loudness meter, because
  * all four want the same thing from the audio thread and differ only in what
  * is done with it afterwards.
  */
-export function createScopeMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): Material {
-  return new Material({
+export function createScopeMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): AudioMaterial {
+  return new AudioMaterial({
     name: 'Scope',
     kind: 'scope',
     params: {},
@@ -57,8 +57,8 @@ export function createScopeMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW)
 }
 
 /** Level and window together, for a UI that wants both from one insert. */
-export function createAnalyzerMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): Material {
-  return new Material({
+export function createAnalyzerMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): AudioMaterial {
+  return new AudioMaterial({
     name: 'Analyzer',
     kind: 'analyzer',
     params: {},
@@ -68,8 +68,8 @@ export function createAnalyzerMaterial(windowSize: number = DEFAULT_CAPTURE_WIND
 }
 
 /** Same capture as Analyzer, inspector-first for pitch. */
-export function createTunerMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): Material {
-  return new Material({
+export function createTunerMaterial(windowSize: number = DEFAULT_CAPTURE_WINDOW): AudioMaterial {
+  return new AudioMaterial({
     name: 'Tuner',
     kind: 'tuner',
     params: {},

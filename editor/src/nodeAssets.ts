@@ -9,7 +9,7 @@ import {
   setWavetableAsset,
   wavetableAsset,
   type AudioAssetData,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import {
   AMP_ASSET,
@@ -70,57 +70,57 @@ export async function loadFactoryNam(): Promise<NamAssetData> {
   return parseNamText(await response.text(), FACTORY_NAM_NAME);
 }
 
-export function namFilename(material: Material): string | null {
+export function namFilename(material: AudioMaterial): string | null {
   return ampNamAsset(material)?.filename ?? null;
 }
 
-export function namFilenameR(material: Material): string | null {
+export function namFilenameR(material: AudioMaterial): string | null {
   return ampNamAssetR(material)?.filename ?? null;
 }
 
-export function irFilename(material: Material, kind: string): string | null {
+export function irFilename(material: AudioMaterial, kind: string): string | null {
   if (kind === 'amp') return null;
   return irAsset(material)?.filename ?? null;
 }
 
-export function sampleFilename(material: Material): string | null {
+export function sampleFilename(material: AudioMaterial): string | null {
   return sampleAsset(material)?.filename ?? null;
 }
 
-export function wavetableFilename(material: Material): string | null {
+export function wavetableFilename(material: AudioMaterial): string | null {
   return wavetableAsset(material)?.filename ?? null;
 }
 
-export function applyNam(material: Material, asset: NamAssetData): void {
+export function applyNam(material: AudioMaterial, asset: NamAssetData): void {
   setAmpNamAsset(material, asset);
 }
 
-export function applyNamR(material: Material, asset: NamAssetData): void {
+export function applyNamR(material: AudioMaterial, asset: NamAssetData): void {
   setAmpNamAssetR(material, asset);
 }
 
-export function applyIr(material: Material, kind: string, asset: AudioAssetData): void {
+export function applyIr(material: AudioMaterial, kind: string, asset: AudioAssetData): void {
   if (kind === 'amp') return;
   setIrAsset(material, asset);
 }
 
-export function applySample(material: Material, asset: AudioAssetData): void {
+export function applySample(material: AudioMaterial, asset: AudioAssetData): void {
   setSampleAsset(material, asset);
 }
 
-export function applyWavetable(material: Material, asset: AudioAssetData): void {
+export function applyWavetable(material: AudioMaterial, asset: AudioAssetData): void {
   setWavetableAsset(material, asset);
 }
 
-export function clearNam(material: Material): void {
+export function clearNam(material: AudioMaterial): void {
   material.clearAsset(AMP_ASSET.nam);
 }
 
-export function clearNamR(material: Material): void {
+export function clearNamR(material: AudioMaterial): void {
   material.clearAsset(AMP_ASSET.namR);
 }
 
-export function clearIr(material: Material, kind: string): void {
+export function clearIr(material: AudioMaterial, kind: string): void {
   if (kind === 'amp') {
     material.clearAsset(AMP_ASSET.ir);
     material.clearAsset(AMP_ASSET.irRef);
@@ -130,11 +130,11 @@ export function clearIr(material: Material, kind: string): void {
   material.clearAsset(IR_ASSET_REF);
 }
 
-export function clearSample(material: Material): void {
+export function clearSample(material: AudioMaterial): void {
   clearSampleAsset(material);
 }
 
-export function clearWavetable(material: Material): void {
+export function clearWavetable(material: AudioMaterial): void {
   clearWavetableAsset(material);
 }
 

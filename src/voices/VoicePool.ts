@@ -1,4 +1,4 @@
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 import { allocateSlot, type VoiceSnapshot, type VoiceStealingPolicy } from './allocate';
 
 export interface VoiceBackend {
@@ -12,7 +12,7 @@ interface Slot extends VoiceSnapshot {
 }
 
 /**
- * One pool per Material. Release tails keep occupying a
+ * One pool per AudioMaterial. Release tails keep occupying a
  * slot until stolen or allNotesOff; steal cuts the tail with noteOff then
  * noteOn on the same backend.
  */
@@ -22,7 +22,7 @@ export class VoicePool {
   private readonly policy: VoiceStealingPolicy;
 
   constructor(
-    private readonly material: Material,
+    private readonly material: AudioMaterial,
     voices: VoiceBackend[],
     policy: VoiceStealingPolicy = 'oldest',
   ) {

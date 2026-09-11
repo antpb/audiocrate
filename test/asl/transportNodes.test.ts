@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compileVoice } from '../../src/asl/compile';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
 import { delay, uniform } from '../../src/asl/builders';
 import {
@@ -23,7 +23,7 @@ import { syncedClockMaterial, syncedDelayMaterial, syncedRampMaterial } from '..
 const SR = 48000;
 
 function renderGraph(
-  material: Material,
+  material: AudioMaterial,
   frames: number,
   snapshot: Partial<TransportSnapshot> = {},
 ): Float32Array {
@@ -37,9 +37,9 @@ function renderGraph(
   return out;
 }
 
-/** A one-node Material wrapping a transport expression, so it can be rendered. */
-function probe(build: () => ReturnType<typeof transport.beats>): Material {
-  return new Material({ name: 'Probe', channels: 1, graph: () => build() });
+/** A one-node AudioMaterial wrapping a transport expression, so it can be rendered. */
+function probe(build: () => ReturnType<typeof transport.beats>): AudioMaterial {
+  return new AudioMaterial({ name: 'Probe', channels: 1, graph: () => build() });
 }
 
 describe('divisions', () => {
@@ -66,7 +66,7 @@ describe('divisions', () => {
   });
 
   it('keeps the menu and the lookup table aligned', () => {
-    // A Material's enum shows the names and its graph looks up the beats by
+    // An AudioMaterial's enum shows the names and its graph looks up the beats by
     // index. If these ever fall out of step every synced effect silently
     // plays the wrong note length.
     expect(COMMON_DIVISION_NAMES.length).toBe(COMMON_DIVISION_BEATS.length);
@@ -247,7 +247,7 @@ describe('synced Materials', () => {
 
   it('turns the chosen division into the right delay time', () => {
     // An eighth at 120 bpm is 0.25s; a dotted eighth is 0.375s.
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Probe',
       channels: 1,
       params: { division: syncedDelayMaterial.params.division! },
@@ -268,7 +268,7 @@ describe('synced Materials', () => {
     const quarterSecond = SR / 4;
     // A quarter note is the division. At 60 bpm a quarter second is a quarter
     // of the way through it; at 120 bpm it is halfway. Nothing was set on the
-    // Material between these two renders.
+    // AudioMaterial between these two renders.
     expect(at(60)[quarterSecond]).toBeCloseTo(0.25, 3);
     expect(at(120)[quarterSecond]).toBeCloseTo(0.5, 3);
   });
@@ -319,7 +319,7 @@ describe('synced Materials', () => {
 
 describe('transport in a graph with a delay line', () => {
   it('drives an ordinary delay from a synced time', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Probe',
       params: { fb: param.range(0, 0.9, { default: 0 }) },
       graph: ({ input, params }) =>
@@ -379,7 +379,7 @@ describe('a graph under a tempo map', () => {
 
   it('reports the tempo at the position, not the base tempo', () => {
     const map = new TempoMap([{ atBeat: 2, bpm: 60 }], 120);
-    const probe = new Material({ name: 'Bpm', channels: 1, graph: () => transport.bpm() });
+    const probe = new AudioMaterial({ name: 'Bpm', channels: 1, graph: () => transport.bpm() });
     const { samples } = OfflineRenderer.render(probe.graph, {
       duration: 2,
       sampleRate: SR,

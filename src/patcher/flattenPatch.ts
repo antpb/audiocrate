@@ -1,11 +1,11 @@
 /**
- * Turning a patch document (the free-form Material graph a node editor
- * saves) into ONE Material a DAW can host on `track.materials` or
+ * Turning a patch document (the free-form AudioMaterial graph a node editor
+ * saves) into ONE AudioMaterial a DAW can host on `track.materials` or
  * `track.instrument`.
  *
  * A patch is modular-synth topology: N Materials sharing one signal path,
  * eight oscillator voices summed into one filter. A hosted plugin is the
- * other shape: one Material, one `VoicePool`, N copies of the whole chain,
+ * other shape: one AudioMaterial, one `VoicePool`, N copies of the whole chain,
  * one per voice. Flattening converts the first into the second by splicing
  * every node's ASL graph into a single graph:
  *
@@ -29,14 +29,14 @@
  *
  * This is deliberately ASL-only. A graph that names a kernel slot (amp,
  * grain, anything block-shaped) cannot flatten, because the flattened
- * Material would need that kernel bound per voice, which is the portable
+ * AudioMaterial would need that kernel bound per voice, which is the portable
  * kernel path, not this one.
  */
 import { paramNode, peak, pitch, rms } from '../asl/builders';
 import { transport } from '../asl/transportNodes';
 import { constNode, makeNode, type ASLNode } from '../asl/types';
 import { ASLValue } from '../asl/ASLValue';
-import { Material, type VoiceStealingPolicy } from '../graph/Material';
+import { AudioMaterial, type VoiceStealingPolicy } from '../graph/AudioMaterial';
 import { isAnalysisKind } from '../materials/meters';
 import { isLooperKind, isLooperPulseOutput } from '../materials/time';
 import type { ParamDescriptor } from '../graph/param';
@@ -88,11 +88,11 @@ const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig']);
 
 export interface FlattenPatchOptions {
   /**
-   * `kind -> Material` for every non-I/O node in the document. Crate has no
-   * "list every Material" API on purpose; the caller (a patcher's catalog, a
+   * `kind -> AudioMaterial` for every non-I/O node in the document. Crate has no
+   * "list every AudioMaterial" API on purpose; the caller (a patcher's catalog, a
    * host's registry) says what a kind means. Returning null throws.
    */
-  resolve: (kind: string) => Material | null | undefined;
+  resolve: (kind: string) => AudioMaterial | null | undefined;
   name?: string;
   kind?: string;
   /** Omit to detect: any keyboard cable into a note jack means instrument. */
@@ -119,7 +119,7 @@ export function detectPatchRole(patch: PatchDocument, io: Partial<PatchIoKinds> 
   return 'insert';
 }
 
-export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions): Material {
+export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions): AudioMaterial {
   const io: PatchIoKinds = { ...DEFAULT_PATCH_IO, ...options.io };
   const role = options.role ?? detectPatchRole(patch, io);
   const name = options.name ?? 'Patch';
@@ -133,7 +133,7 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
     kind === io.midiIn ||
     kind === io.midiOut;
 
-  const materials = new Map<string, Material>();
+  const materials = new Map<string, AudioMaterial>();
   for (const node of patch.nodes) {
     if (isIo(node.kind)) continue;
     const proto = options.resolve(node.kind);
@@ -273,7 +273,7 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
     ? options.polyphony ?? Math.max(1, ...[...materials.values()].map((m) => m.polyphony))
     : 1;
 
-  return new Material({
+  return new AudioMaterial({
     name,
     kind: options.kind ?? name,
     params: published,
@@ -393,7 +393,7 @@ function asBipolar(node: ASLNode, polarity: 'unipolar' | 'bipolar'): ASLNode {
 function cvReplaced(
   patch: PatchDocument,
   kinds: Map<string, string>,
-  materials: Map<string, Material>,
+  materials: Map<string, AudioMaterial>,
   io: PatchIoKinds,
   id: string,
   param: string,
@@ -408,12 +408,12 @@ function cvReplaced(
 }
 
 /**
- * Material-to-material edges only (audio and CV both order evaluation).
+ * AudioMaterial-to-material edges only (audio and CV both order evaluation).
  * Cables to and from the I/O nodes do not constrain order.
  */
 function topoSort(
   patch: PatchDocument,
-  materials: Map<string, Material>,
+  materials: Map<string, AudioMaterial>,
   kinds: Map<string, string>,
   io: PatchIoKinds,
 ): string[] {
@@ -449,7 +449,7 @@ function topoSort(
   return order;
 }
 
-function rejectKernels(material: Material): void {
+function rejectKernels(material: AudioMaterial): void {
   const seen = new Set<number>();
   const walk = (node: ASLNode): void => {
     if (seen.has(node.id)) return;
@@ -476,7 +476,7 @@ interface RewriteContext {
 }
 
 /**
- * Rebuilds a Material's built graph with substitutions, preserving shared
+ * Rebuilds an AudioMaterial's built graph with substitutions, preserving shared
  * subtrees (the interpreter keys per-node state by id, so an untouched node
  * keeps its identity and a touched path gets fresh ids from `makeNode`).
  *

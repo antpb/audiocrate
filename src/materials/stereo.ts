@@ -9,12 +9,12 @@
  * eight new DSP algorithms, they are eight ways of arranging two numbers.
  * These exist because they are common mixer vocabulary.
  *
- * `channelSplit` is missing on purpose. A Material has one output, so
+ * `channelSplit` is missing on purpose. An AudioMaterial has one output, so
  * splitting a stereo pair into two independently-routed signals is a graph
  * shape, not a node. `monoLeft` / `monoRight` cover the half of it that fits
  * an insert: take one side and drop the other.
  */
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { audio, delay, lfo, panLaw, rectify, select, uniform } from '../asl/builders';
 import type { ASLValueLike } from '../asl/ASLValue';
@@ -22,7 +22,7 @@ import type { ASLValueLike } from '../asl/ASLValue';
 /** +1 on the left lane, -1 on the right. The sign that turns M/S into L/R. */
 const laneSign = () => uniform(1).add(audio.lane().mul(-2));
 
-export const monoSumMaterial = new Material({
+export const monoSumMaterial = new AudioMaterial({
   name: 'MonoSum',
   kind: 'monosum',
   params: {},
@@ -31,21 +31,21 @@ export const monoSumMaterial = new Material({
   graph: ({ audio: a }) => a.left().add(a.right()).mul(0.5),
 });
 
-export const monoLeftMaterial = new Material({
+export const monoLeftMaterial = new AudioMaterial({
   name: 'MonoLeft',
   kind: 'monoleft',
   params: {},
   graph: ({ audio: a }) => a.left().mul(1),
 });
 
-export const monoRightMaterial = new Material({
+export const monoRightMaterial = new AudioMaterial({
   name: 'MonoRight',
   kind: 'monoright',
   params: {},
   graph: ({ audio: a }) => a.right().mul(1),
 });
 
-export const channelSwapMaterial = new Material({
+export const channelSwapMaterial = new AudioMaterial({
   name: 'ChannelSwap',
   kind: 'swap',
   params: {},
@@ -58,7 +58,7 @@ export const channelSwapMaterial = new Material({
  * component is what gets scaled; the mid is untouched, so a width change
  * never moves the centre.
  */
-export const stereoWidthMaterial = new Material({
+export const stereoWidthMaterial = new AudioMaterial({
   name: 'StereoWidth',
   kind: 'width',
   params: {
@@ -73,7 +73,7 @@ export const stereoWidthMaterial = new Material({
 });
 
 /** Left carries mid, right carries side. Feed the result to `midSideDecode`. */
-export const midSideEncodeMaterial = new Material({
+export const midSideEncodeMaterial = new AudioMaterial({
   name: 'MidSideEncode',
   kind: 'midside',
   params: {},
@@ -85,7 +85,7 @@ export const midSideEncodeMaterial = new Material({
 });
 
 /** The inverse: a mid/side pair back to left/right. */
-export const midSideDecodeMaterial = new Material({
+export const midSideDecodeMaterial = new AudioMaterial({
   name: 'MidSideDecode',
   kind: 'midsidedecode',
   params: {},
@@ -96,7 +96,7 @@ export const midSideDecodeMaterial = new Material({
  * Independent trim on each side, in linear gain. Balance, unlike pan, does
  * not move a signal across the image; it turns one side down.
  */
-export const balanceMaterial = new Material({
+export const balanceMaterial = new AudioMaterial({
   name: 'Balance',
   kind: 'balance',
   params: {
@@ -129,7 +129,7 @@ function stereoPanMatrix(pan: ASLValueLike) {
   return collapsed.mul(gain);
 }
 
-export const stereoPanMaterial = new Material({
+export const stereoPanMaterial = new AudioMaterial({
   name: 'StereoPan',
   kind: 'stereopan',
   channels: 2,
@@ -141,7 +141,7 @@ export const stereoPanMaterial = new Material({
 });
 
 /** Pan swept by an LFO. `depth` 1 sweeps hard left to hard right. */
-export const autoPanMaterial = new Material({
+export const autoPanMaterial = new AudioMaterial({
   name: 'AutoPan',
   kind: 'autopan',
   channels: 2,
@@ -161,7 +161,7 @@ export const autoPanMaterial = new Material({
  * it stops widening and starts being an echo, which is why the range stops
  * where it does.
  */
-export const haasMaterial = new Material({
+export const haasMaterial = new AudioMaterial({
   name: 'Haas',
   kind: 'haas',
   params: {
@@ -181,8 +181,8 @@ export const haasMaterial = new Material({
  * channel, the `sidechain` port becomes the right. This is the merge half of
  * the splitter/merger pair, and the reason a second audio input had to exist.
  */
-export function createStereoMergeMaterial(): Material {
-  return new Material({
+export function createStereoMergeMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'StereoMerge',
     kind: 'stereomerge',
     params: {},

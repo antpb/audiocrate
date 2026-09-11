@@ -32,7 +32,7 @@ export interface VoiceHandle {
   /** Updates one param on the already-running voice, e.g. an inspector slider moved mid-note. */
   setParam(name: string, value: number): void;
   /**
-   * Creates the DSP bound to a kernel slot the Material's graph names
+   * Creates the DSP bound to a kernel slot the AudioMaterial's graph names
    * (`renderers/kernel.ts`). `payload` is whatever that kernel's factory
    * expects, and it has to carry everything the kernel needs, because the
    * worklet realm cannot fetch or import anything for itself: a WASM binary
@@ -118,7 +118,7 @@ export interface WebAudioRendererOptions {
 
 /**
  * Fuses an ASL graph into one AudioWorkletProcessor
- * (worklet/defineVoiceProcessor.ts). One worklet per voice. `Material.bind`
+ * (worklet/defineVoiceProcessor.ts). One worklet per voice. `AudioMaterial.bind`
  * calls `createVoice` once per `polyphony` slot.
  *
  * Not covered by vitest: AudioWorkletNode/AudioContext do not exist in Node.

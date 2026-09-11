@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { wasmKernelFactory, isWasmKernelPayload, CRATE_KERNEL_ABI_VERSION } from '../../../src/renderers/kernels/wasmKernel';
 import type { WasmKernelDescriptor } from '../../../src/renderers/kernels/wasmKernel';
 import { buildWasmKernelFixture, WASM_KERNEL_FIXTURE_DESCRIPTOR } from '../../../src/testing/wasmKernelFixture';
-import { Material } from '../../../src/graph/Material';
+import { AudioMaterial } from '../../../src/graph/AudioMaterial';
 import { kernel } from '../../../src/asl/builders';
 import { compileVoice } from '../../../src/asl/compile';
 
@@ -90,9 +90,9 @@ describe('portable WASM kernel', () => {
   });
 
   it('runs inside a compiled voice at a slot crate core has never heard of', async () => {
-    // The whole point: a Material names its own slot, and nothing in this
+    // The whole point: an AudioMaterial names its own slot, and nothing in this
     // build was compiled knowing that name exists.
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Acme Tape',
       kind: 'acme.tape',
       params: {},

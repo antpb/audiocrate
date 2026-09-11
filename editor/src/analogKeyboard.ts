@@ -1,8 +1,8 @@
 /**
- * Host keyboard for the editor, not a crate Material.
+ * Host keyboard for the editor, not a crate AudioMaterial.
  *
  * Analog jacks (cv, gate, trig, velocity) are last-note, like a hardware
- * mono keyboard. CV is 1V/oct with A4 at 0V. note/gate cables into a Material
+ * mono keyboard. CV is 1V/oct with A4 at 0V. note/gate cables into an AudioMaterial
  * are polyphonic; voice lamps follow that target.
  */
 

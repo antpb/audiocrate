@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { filter } from '../asl/builders';
 
-export const lowpassMaterial = new Material({
+export const lowpassMaterial = new AudioMaterial({
   name: 'Lowpass',
   kind: 'lowpass',
   params: {
@@ -13,7 +13,7 @@ export const lowpassMaterial = new Material({
   graph: ({ input, params }) => filter.lowpass(input, { cutoff: params.cutoff, q: params.q }),
 });
 
-export const highpassMaterial = new Material({
+export const highpassMaterial = new AudioMaterial({
   name: 'Highpass',
   kind: 'highpass',
   params: {
@@ -24,7 +24,7 @@ export const highpassMaterial = new Material({
   graph: ({ input, params }) => filter.highpass(input, { cutoff: params.cutoff, q: params.q }),
 });
 
-export const bandpassMaterial = new Material({
+export const bandpassMaterial = new AudioMaterial({
   name: 'Bandpass',
   kind: 'bandpass',
   params: {
@@ -35,7 +35,7 @@ export const bandpassMaterial = new Material({
   graph: ({ input, params }) => filter.bandpass(input, { cutoff: params.cutoff, q: params.q }),
 });
 
-export const notchMaterial = new Material({
+export const notchMaterial = new AudioMaterial({
   name: 'Notch',
   kind: 'notch',
   params: {
@@ -46,7 +46,7 @@ export const notchMaterial = new Material({
   graph: ({ input, params }) => filter.notch(input, { cutoff: params.cutoff, q: params.q }),
 });
 
-export const lowShelfMaterial = new Material({
+export const lowShelfMaterial = new AudioMaterial({
   name: 'LowShelf',
   kind: 'lowshelf',
   params: {
@@ -59,7 +59,7 @@ export const lowShelfMaterial = new Material({
     filter.lowshelf(input, { freq: params.freq, gainDb: params.gainDb, q: params.q }),
 });
 
-export const highShelfMaterial = new Material({
+export const highShelfMaterial = new AudioMaterial({
   name: 'HighShelf',
   kind: 'highshelf',
   params: {
@@ -72,7 +72,7 @@ export const highShelfMaterial = new Material({
     filter.highshelf(input, { freq: params.freq, gainDb: params.gainDb, q: params.q }),
 });
 
-export const allpassMaterial = new Material({
+export const allpassMaterial = new AudioMaterial({
   name: 'Allpass',
   kind: 'allpass',
   params: {
@@ -83,7 +83,7 @@ export const allpassMaterial = new Material({
   graph: ({ input, params }) => filter.allpass(input, { cutoff: params.cutoff, q: params.q }),
 });
 
-export const onePoleLowpassMaterial = new Material({
+export const onePoleLowpassMaterial = new AudioMaterial({
   name: 'OnePoleLowpass',
   kind: 'onepolelowpass',
   params: {
@@ -93,7 +93,7 @@ export const onePoleLowpassMaterial = new Material({
   graph: ({ input, params }) => filter.onePoleLowpass(input, { cutoff: params.cutoff }),
 });
 
-export const onePoleHighpassMaterial = new Material({
+export const onePoleHighpassMaterial = new AudioMaterial({
   name: 'OnePoleHighpass',
   kind: 'onepolehighpass',
   params: {
@@ -103,7 +103,7 @@ export const onePoleHighpassMaterial = new Material({
   graph: ({ input, params }) => filter.onePoleHighpass(input, { cutoff: params.cutoff }),
 });
 
-export const svfLowpassMaterial = new Material({
+export const svfLowpassMaterial = new AudioMaterial({
   name: 'SVFLowpass',
   kind: 'svflowpass',
   params: {
@@ -115,7 +115,7 @@ export const svfLowpassMaterial = new Material({
     filter.svf(input, { cutoff: params.cutoff, q: params.q, mode: 'lowpass' }),
 });
 
-export const svfHighpassMaterial = new Material({
+export const svfHighpassMaterial = new AudioMaterial({
   name: 'SVFHighpass',
   kind: 'svfhighpass',
   params: {
@@ -127,7 +127,7 @@ export const svfHighpassMaterial = new Material({
     filter.svf(input, { cutoff: params.cutoff, q: params.q, mode: 'highpass' }),
 });
 
-export const svfBandpassMaterial = new Material({
+export const svfBandpassMaterial = new AudioMaterial({
   name: 'SVFBandpass',
   kind: 'svfbandpass',
   params: {
@@ -139,7 +139,7 @@ export const svfBandpassMaterial = new Material({
     filter.svf(input, { cutoff: params.cutoff, q: params.q, mode: 'bandpass' }),
 });
 
-export const ladderMaterial = new Material({
+export const ladderMaterial = new AudioMaterial({
   name: 'Ladder',
   kind: 'ladder',
   params: {
@@ -151,7 +151,7 @@ export const ladderMaterial = new Material({
     filter.ladder(input, { cutoff: params.cutoff, resonance: params.resonance }),
 });
 
-export const combMaterial = new Material({
+export const combMaterial = new AudioMaterial({
   name: 'Comb',
   kind: 'comb',
   params: {
@@ -164,7 +164,7 @@ export const combMaterial = new Material({
     filter.comb(input, { freq: params.freq, feedback: params.feedback, mix: params.mix }),
 });
 
-export const slopeLowpass12Material = new Material({
+export const slopeLowpass12Material = new AudioMaterial({
   name: 'SlopeLowpass12',
   kind: 'slopelowpass12',
   params: {
@@ -174,7 +174,7 @@ export const slopeLowpass12Material = new Material({
   graph: ({ input, params }) => filter.slope(input, { cutoff: params.cutoff, poles: 2, mode: 'lowpass' }),
 });
 
-export const slopeLowpass24Material = new Material({
+export const slopeLowpass24Material = new AudioMaterial({
   name: 'SlopeLowpass24',
   kind: 'slopelowpass24',
   params: {
@@ -184,7 +184,7 @@ export const slopeLowpass24Material = new Material({
   graph: ({ input, params }) => filter.slope(input, { cutoff: params.cutoff, poles: 4, mode: 'lowpass' }),
 });
 
-export const slopeHighpass12Material = new Material({
+export const slopeHighpass12Material = new AudioMaterial({
   name: 'SlopeHighpass12',
   kind: 'slopehighpass12',
   params: {

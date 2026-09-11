@@ -6,7 +6,7 @@ import type { AudioBufferLike } from '../../src/graph/Clip';
 import type { VoiceHandle } from '../../src/renderers/WebAudioRenderer';
 import { fakeVoiceHandle } from '../../src/testing/fakeVoice';
 import { Track } from '../../src/graph/Track';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { Bus } from '../../src/graph/Bus';
 
 interface FakeNode {
@@ -172,11 +172,11 @@ describe('ScenePlayback: live voice wiring', () => {
     expect(instrumentNode.connectedTo).toHaveLength(1);
   });
 
-  it('feeds a Material aux input from the track it names, on the right worklet input', () => {
+  it('feeds an AudioMaterial aux input from the track it names, on the right worklet input', () => {
     const { ctx, nodes } = createFakeWebAudioContext();
     const kick = new Track({ name: 'Kick' });
     const bass = new Track({ name: 'Bass' });
-    const ducker = new Material({
+    const ducker = new AudioMaterial({
       name: 'Ducker',
       params: {},
       graph: ({ input, audio }) => input.mul(audio.sidechain()),
@@ -212,7 +212,7 @@ describe('ScenePlayback: live voice wiring', () => {
   it('leaves an undeclared aux input unconnected rather than mixing the key into the audio', () => {
     const { ctx, nodes } = createFakeWebAudioContext();
     const track = new Track({ name: 'T' });
-    track.materials.add(new Material({ name: 'Gain', params: {}, graph: ({ input }) => input.mul(1) }));
+    track.materials.add(new AudioMaterial({ name: 'Gain', params: {}, graph: ({ input }) => input.mul(1) }));
     const insertVoice = fakeVoice([]);
     const liveVoices: LiveSceneVoices = {
       master: [],

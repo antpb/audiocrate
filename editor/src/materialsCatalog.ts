@@ -1,4 +1,4 @@
-import { describeMaterial, type InspectorControl, type Material } from '../../src/index';
+import { describeAudioMaterial, type InspectorControl, type AudioMaterial } from '../../src/index';
 import { catalog, createMaterial, isToolEntry } from './catalog';
 import { hasFileSlots } from './nodeAssets';
 import {
@@ -171,7 +171,7 @@ export function formatMaterialsCatalog(): string {
     'A cable into a param jack is CV. Unipolar sources (ADSR, clocks) map 0 to min and 1 to max.',
     'Bipolar sources (LFO) map -1..1 across that range. At most ten param jacks (`MAX_CV_JACKS`).',
     '',
-    'Generated from the catalog. After a Material change, run:',
+    'Generated from the catalog. After an AudioMaterial change, run:',
     '',
     '```bash',
     'npm run test:editor',
@@ -210,7 +210,7 @@ function formatEntry(mod: ModuleSnapshot): string[] {
     `- Jacks: in ${ins} / out ${outs}`,
   ];
 
-  let material: Material | null = null;
+  let material: AudioMaterial | null = null;
   if (!KERNEL_KINDS.has(mod.kind) && !isToolKind(mod.kind)) {
     try {
       material = createMaterial(mod.kind);
@@ -232,7 +232,7 @@ function formatEntry(mod: ModuleSnapshot): string[] {
     lines.push(`- File: ${FILE_SLOT[mod.kind]}`);
   }
 
-  const table = material ? controlTable(describeMaterial(material).controls) : snapshotTable(mod);
+  const table = material ? controlTable(describeAudioMaterial(material).controls) : snapshotTable(mod);
   if (table) {
     lines.push('', table);
   } else {

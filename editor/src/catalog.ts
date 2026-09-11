@@ -1,5 +1,5 @@
 /**
- * Palette for this editor. Core has no "list every Material" API and does
+ * Palette for this editor. Core has no "list every AudioMaterial" API and does
  * not name amp/grain/synth. Prototypes use `duplicate()`, registered plugins
  * use `create()`. Grain and IR ASL protos share kinds with the plugins, so
  * they stay under Plugins. Sample Player is silent until a file is loaded.
@@ -61,7 +61,7 @@ import {
   looperMaterial,
   lowpassMaterial,
   lowShelfMaterial,
-  materialRegistry,
+  audioMaterialRegistry,
   meterMaterial,
   midSideDecodeMaterial,
   midSideEncodeMaterial,
@@ -122,7 +122,7 @@ import {
   tunerMaterial,
   waveshapeMaterial,
   wavetableMaterial,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 
 export type CatalogCategory =
@@ -146,17 +146,17 @@ export interface CatalogEntry {
   role?: 'material' | 'tool';
   inputs?: readonly string[];
   outputs?: readonly string[];
-  create?: () => Material;
+  create?: () => AudioMaterial;
 }
 
 type ProtoSpec = {
-  proto: Material;
+  proto: AudioMaterial;
   category: Exclude<CatalogCategory, 'Tools' | 'Plugins'>;
   label?: string;
-  create?: () => Material;
+  create?: () => AudioMaterial;
 };
 
-function fromProto(proto: Material, label?: string, create?: () => Material): CatalogEntry {
+function fromProto(proto: AudioMaterial, label?: string, create?: () => AudioMaterial): CatalogEntry {
   return {
     kind: proto.kind,
     label: label ?? proto.name,
@@ -171,7 +171,7 @@ function pluginEntry(kind: string, label: string, category: CatalogCategory): Ca
     label,
     category,
     create: () => {
-      const plugin = materialRegistry.get(kind);
+      const plugin = audioMaterialRegistry.get(kind);
       if (!plugin) throw new Error(`No plugin registered for kind "${kind}"`);
       return plugin.create();
     },
@@ -295,7 +295,7 @@ const CORE: ProtoSpec[] = [
   { proto: spatialMasterMaterial, category: 'Spatial', label: 'Spatial Master' },
 ];
 
-export const coreProtos: Material[] = CORE.map((entry) => entry.proto);
+export const coreProtos: AudioMaterial[] = CORE.map((entry) => entry.proto);
 
 export const catalog: CatalogEntry[] = [
   {
@@ -367,10 +367,10 @@ export function addCatalogEntry(entry: CatalogEntry): void {
   byKind.set(entry.kind, entry);
 }
 
-export function createMaterial(kind: string): Material {
+export function createMaterial(kind: string): AudioMaterial {
   const entry = catalogEntry(kind);
   if (!entry) throw new Error(`Unknown material kind "${kind}"`);
-  if (!entry.create) throw new Error(`"${kind}" is a tool, not a Material`);
+  if (!entry.create) throw new Error(`"${kind}" is a tool, not an AudioMaterial`);
   return entry.create();
 }
 

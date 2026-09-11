@@ -1,8 +1,8 @@
-import { materialRegistry, type MaterialRegistry } from '../registry/MaterialRegistry';
+import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
 import type { ASLGraphDescriptor } from '../asl/graph';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
 import type { KernelBinaryMap } from '../renderers/kernel';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 import type { Track } from '../graph/Track';
 import type { Bus } from '../graph/Bus';
 
@@ -15,7 +15,7 @@ import type { Bus } from '../graph/Bus';
 export interface LiveVoiceRenderer {
   /**
    * The graph is the whole request: how many audio inputs the voice needs is
-   * read off it (`asl/ports.ts`), not passed alongside it, so a Material that
+   * read off it (`asl/ports.ts`), not passed alongside it, so an AudioMaterial that
    * grows a sidechain does not also have to be wired differently here.
    */
   createVoice(graph: ASLGraphDescriptor): Promise<VoiceHandle>;
@@ -42,25 +42,25 @@ export interface LiveSceneVoices {
 }
 
 /**
- * One live voice for a Material: created, given its current param snapshot,
+ * One live voice for an AudioMaterial: created, given its current param snapshot,
  * then handed to whichever plugin owns it so that plugin can load its kernels
  * and push its hydrated assets. Not connected to anything yet, connecting is
  * `ScenePlayback`'s job, once the destination nodes it needs exist.
  *
  * This function used to branch on `material.name === 'Amp'` and friends. It
- * now knows nothing about any Material: a Material whose plugin is not
+ * now knows nothing about any AudioMaterial: an AudioMaterial whose plugin is not
  * registered, or whose plugin has no `bindLiveVoice`, still gets a working
  * voice running its plain ASL graph, which is the correct behavior for a pure
- * ASL Material and a survivable one for a plugin that failed to register.
+ * ASL AudioMaterial and a survivable one for a plugin that failed to register.
  *
  * Instrument and insert voices are the same call. The role difference is
  * where `ScenePlayback` connects them, not how they are built.
  */
 async function createVoiceFor(
   renderer: LiveVoiceRenderer,
-  material: Material,
+  material: AudioMaterial,
   wasm: LiveWasmBinaries,
-  registry: MaterialRegistry,
+  registry: AudioMaterialRegistry,
 ): Promise<VoiceHandle> {
   const voice = await renderer.createVoice(material.graph);
   voice.noteOn(material.snapshotParams());
@@ -89,7 +89,7 @@ export async function prepareLiveVoices(
   tracks: readonly Track[],
   master: Bus,
   wasm: LiveWasmBinaries = {},
-  registry: MaterialRegistry = materialRegistry,
+  registry: AudioMaterialRegistry = audioMaterialRegistry,
 ): Promise<LiveSceneVoices> {
   const masterVoices: VoiceHandle[] = [];
   for (const material of master.materials) {

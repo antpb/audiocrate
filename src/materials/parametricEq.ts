@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { filter, select } from '../asl/builders';
 import type { ASLValue, ASLValueLike } from '../asl/ASLValue';
@@ -26,7 +26,7 @@ function peakOrShelf(
  * high (shelf or peak), lowpass. Gains at 0 dB are exact bypass. The
  * filters default off so an unused node does not color the signal.
  */
-export const parametricEqMaterial = new Material({
+export const parametricEqMaterial = new AudioMaterial({
   name: 'ParametricEQ',
   kind: 'ParametricEQ',
   params: {

@@ -3,7 +3,7 @@ import { AudioScene } from '../../src/AudioScene';
 import { Track } from '../../src/graph/Track';
 import { Bus } from '../../src/graph/Bus';
 import { Clip, type AudioBufferLike } from '../../src/graph/Clip';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { uniform } from '../../src/asl/builders';
 import { Time } from '../../src/Time';
 
@@ -17,8 +17,8 @@ function fakeBuffer(length = 1000, sampleRate = 48000): AudioBufferLike {
   };
 }
 
-function fakeMaterial(name: string): Material {
-  return new Material({ name, graph: () => uniform(0) });
+function fakeMaterial(name: string): AudioMaterial {
+  return new AudioMaterial({ name, graph: () => uniform(0) });
 }
 
 describe('AudioNode3 (via Track/Bus)', () => {

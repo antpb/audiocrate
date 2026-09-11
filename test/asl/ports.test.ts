@@ -2,14 +2,14 @@
  * Two things a graph could not do until ports existed: read a second live
  * signal, and know which channel it is on. Both are checked here against the
  * interpreter directly, because they are properties of the compiler rather
- * than of any particular Material.
+ * than of any particular AudioMaterial.
  */
 import { describe, expect, it } from 'vitest';
 import { ASL } from '../../src/asl/graph';
 import { audio, compressor, envFollow, filter, select, uniform } from '../../src/asl/builders';
 import { compileVoice } from '../../src/asl/compile';
 import { audioPortNames, auxAudioPorts } from '../../src/asl/ports';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 
 const SR = 48000;
 
@@ -21,7 +21,7 @@ function ramp(length: number, from: number, to: number): Float32Array {
 
 describe('audio ports', () => {
   it('lists every port a graph reads, sorted, and separates the aux ones', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Two',
       params: {},
       graph: ({ input, audio: a }) => input.add(a.sidechain()),
@@ -31,8 +31,8 @@ describe('audio ports', () => {
     expect(material.auxAudioInputs).toEqual(['sidechain']);
   });
 
-  it('reports no ports for a source Material, which is why it renders mono', () => {
-    const material = new Material({
+  it('reports no ports for a source AudioMaterial, which is why it renders mono', () => {
+    const material = new AudioMaterial({
       name: 'Source',
       params: {},
       graph: ({ note }) => note.toFrequency().mul(0),
@@ -42,7 +42,7 @@ describe('audio ports', () => {
   });
 
   it('feeds a named aux port per sample', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Ring',
       params: {},
       graph: ({ input, audio: a }) => input.mul(a.sidechain()),
@@ -57,7 +57,7 @@ describe('audio ports', () => {
   });
 
   it('reads 0 from a port with nothing connected', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Ring',
       params: {},
       graph: ({ input, audio: a }) => input.mul(a.sidechain()),
@@ -69,7 +69,7 @@ describe('audio ports', () => {
   });
 
   it('keys a compressor off the sidechain rather than the input', () => {
-    const graph = new Material({
+    const graph = new AudioMaterial({
       name: 'SC',
       params: {},
       graph: ({ input, audio: a }) =>
@@ -106,7 +106,7 @@ describe('channels', () => {
   it('renders an effect once per channel with independent node state', () => {
     // One lowpass, two channels. If the two shared a biquad's delay line the
     // right channel's output would depend on the left's history; it does not.
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'LP',
       params: {},
       graph: ({ input }) => filter.lowpass(input, { cutoff: 800, q: 0.707 }),
@@ -129,7 +129,7 @@ describe('channels', () => {
   });
 
   it('mirrors instead of rendering twice when the graph reads no audio', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Tone',
       params: {},
       graph: ({ note }) => note.toFrequency().mul(0).add(0.5),
@@ -142,7 +142,7 @@ describe('channels', () => {
   });
 
   it('lets a graph behave differently per channel', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'HardPan',
       params: {},
       graph: ({ input, audio: a }) => select(input, uniform(0), { which: a.lane() }),
@@ -157,7 +157,7 @@ describe('channels', () => {
   });
 
   it('reads a fixed side regardless of the channel being rendered', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Sum',
       params: {},
       graph: ({ audio: a }) => a.left().add(a.right()).mul(0.5),
@@ -173,7 +173,7 @@ describe('channels', () => {
   });
 
   it('falls back to the left channel when the source is mono', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Right',
       params: {},
       graph: ({ audio: a }) => a.right().mul(1),
@@ -185,7 +185,7 @@ describe('channels', () => {
   });
 
   it('honours an explicit channel count over the derived one', () => {
-    const meter = new Material({
+    const meter = new AudioMaterial({
       name: 'Meter',
       params: {},
       channels: 1,

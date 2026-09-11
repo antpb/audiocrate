@@ -6,7 +6,7 @@ Palette modules and their parameters.
 A cable into a param jack is CV. Unipolar sources (ADSR, clocks) map 0 to min and 1 to max.
 Bipolar sources (LFO) map -1..1 across that range. At most ten param jacks (`MAX_CV_JACKS`).
 
-Generated from the catalog. After a Material change, run:
+Generated from the catalog. After an AudioMaterial change, run:
 
 ```bash
 npm run test:editor

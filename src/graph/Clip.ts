@@ -35,7 +35,7 @@ export interface ClipOptions {
 
 let nextClipId = 1;
 
-/** A buffer plus a Material chain, placed on a track. */
+/** A buffer plus an AudioMaterial chain, placed on a track. */
 export class Clip {
   readonly id: number = nextClipId++;
   name: string;

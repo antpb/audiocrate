@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { uniform } from '../../src/asl/builders';
-import { MaterialNotBoundError } from '../../src/errors';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterialNotBoundError } from '../../src/errors';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { allocateSlot, type VoiceSnapshot } from '../../src/voices/allocate';
 
 function slot(partial: Partial<VoiceSnapshot> & Pick<VoiceSnapshot, 'index'>): VoiceSnapshot {
@@ -70,14 +70,14 @@ function fakeVoice() {
   };
 }
 
-describe('Material.noteOn', () => {
-  it('throws MaterialNotBoundError before attachVoices', () => {
-    const material = new Material({ name: 'Pluck', polyphony: 2, graph: () => uniform(0) });
-    expect(() => material.noteOn(60, { velocity: 0.8 })).toThrow(MaterialNotBoundError);
+describe('AudioMaterial.noteOn', () => {
+  it('throws AudioMaterialNotBoundError before attachVoices', () => {
+    const material = new AudioMaterial({ name: 'Pluck', polyphony: 2, graph: () => uniform(0) });
+    expect(() => material.noteOn(60, { velocity: 0.8 })).toThrow(AudioMaterialNotBoundError);
   });
 
   it('holds two notes and retriggers the same pitch', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Pluck',
       polyphony: 2,
       voiceStealing: 'oldest',
@@ -98,7 +98,7 @@ describe('Material.noteOn', () => {
   });
 
   it('steals the oldest held voice when the pool is full', () => {
-    const material = new Material({ name: 'Pluck', polyphony: 2, voiceStealing: 'oldest', graph: () => uniform(0) });
+    const material = new AudioMaterial({ name: 'Pluck', polyphony: 2, voiceStealing: 'oldest', graph: () => uniform(0) });
     const a = fakeVoice();
     const b = fakeVoice();
     material.attachVoices([a, b]);
@@ -110,7 +110,7 @@ describe('Material.noteOn', () => {
   });
 
   it('fans setParam to every backend', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Pluck',
       params: { cutoff: { kind: 'range', min: 200, max: 8000, default: 2000 } },
       graph: () => uniform(0),

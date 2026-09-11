@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { env, filter, impulse, noise, osc, samplePlay, uniform, wavetable } from '../asl/builders';
 import type { SampleBox } from '../asl/types';
@@ -68,7 +68,7 @@ export const OSC_WAVE_NAMES = [
 ] as const;
 
 /** Note-driven oscillator. Wave type and shapeMod are live, matching the homecrate synth osc. */
-export const oscillatorMaterial = new Material({
+export const oscillatorMaterial = new AudioMaterial({
   name: 'Oscillator',
   kind: 'oscillator',
   params: {
@@ -90,7 +90,7 @@ export const oscillatorMaterial = new Material({
 
 export const NOISE_COLOR_NAMES = ['White', 'Pink', 'Brown', 'Blue', 'Violet', 'Grey'] as const;
 
-export const noiseMaterial = new Material({
+export const noiseMaterial = new AudioMaterial({
   name: 'Noise',
   kind: 'noise',
   params: {
@@ -106,7 +106,7 @@ export const noiseMaterial = new Material({
  * Free-running sine. `oscillator` is a keyboard voice (silent without a
  * gate). This one makes sound on Play, and `freq` is a CV jack.
  */
-export const toneMaterial = new Material({
+export const toneMaterial = new AudioMaterial({
   name: 'Tone',
   kind: 'tone',
   params: {
@@ -117,17 +117,17 @@ export const toneMaterial = new Material({
   graph: ({ params }) => osc({ freq: params.freq, type: 'sine' }).mul(params.gain),
 });
 
-export const impulseMaterial = new Material({
+export const impulseMaterial = new AudioMaterial({
   name: 'Impulse',
   kind: 'impulse',
   graph: ({ input }) => impulse({ gate: input }),
 });
 
-const wavetableBoxes = new WeakMap<Material, SampleBox>();
+const wavetableBoxes = new WeakMap<AudioMaterial, SampleBox>();
 
-export function createWavetableMaterial(): Material {
+export function createWavetableMaterial(): AudioMaterial {
   const box: SampleBox = { samples: wavetableBank(), sampleRate: 48000 };
-  const material = new Material({
+  const material = new AudioMaterial({
     name: 'Wavetable',
     kind: 'wavetable',
     params: {
@@ -171,7 +171,7 @@ export const wavetableMaterial = createWavetableMaterial();
 
 export const WAVETABLE_ASSET = 'wavetable';
 
-export function setWavetable(material: Material, samples: Float32Array, sampleRate = 48000): void {
+export function setWavetable(material: AudioMaterial, samples: Float32Array, sampleRate = 48000): void {
   const box = wavetableBoxes.get(material);
   if (box) {
     box.samples = samples;
@@ -179,27 +179,27 @@ export function setWavetable(material: Material, samples: Float32Array, sampleRa
   }
 }
 
-export function setWavetableAsset(material: Material, asset: AudioAssetData): void {
+export function setWavetableAsset(material: AudioMaterial, asset: AudioAssetData): void {
   material.setAsset(WAVETABLE_ASSET, asset);
   setWavetable(material, asset.samples, asset.sampleRate);
 }
 
-export function clearWavetableAsset(material: Material): void {
+export function clearWavetableAsset(material: AudioMaterial): void {
   material.clearAsset(WAVETABLE_ASSET);
   setWavetable(material, wavetableBank(), 48000);
 }
 
-export function wavetableAsset(material: Material): AudioAssetData | undefined {
+export function wavetableAsset(material: AudioMaterial): AudioAssetData | undefined {
   return material.getAsset<AudioAssetData>(WAVETABLE_ASSET);
 }
 
-const sampleBoxes = new WeakMap<Material, SampleBox>();
+const sampleBoxes = new WeakMap<AudioMaterial, SampleBox>();
 
 export const SAMPLE_ASSET = 'sample';
 
-export function createSamplePlayerMaterial(): Material {
+export function createSamplePlayerMaterial(): AudioMaterial {
   const box: SampleBox = { samples: new Float32Array(0), sampleRate: 48000 };
-  const material = new Material({
+  const material = new AudioMaterial({
     name: 'SamplePlayer',
     kind: 'sampleplayer',
     params: {
@@ -226,7 +226,7 @@ export function createSamplePlayerMaterial(): Material {
 
 export const samplePlayerMaterial = createSamplePlayerMaterial();
 
-export function setSampleAsset(material: Material, asset: AudioAssetData): void {
+export function setSampleAsset(material: AudioMaterial, asset: AudioAssetData): void {
   material.setAsset(SAMPLE_ASSET, asset);
   const box = sampleBoxes.get(material);
   if (box) {
@@ -235,7 +235,7 @@ export function setSampleAsset(material: Material, asset: AudioAssetData): void 
   }
 }
 
-export function clearSampleAsset(material: Material): void {
+export function clearSampleAsset(material: AudioMaterial): void {
   material.clearAsset(SAMPLE_ASSET);
   const box = sampleBoxes.get(material);
   if (box) {
@@ -244,6 +244,6 @@ export function clearSampleAsset(material: Material): void {
   }
 }
 
-export function sampleAsset(material: Material): AudioAssetData | undefined {
+export function sampleAsset(material: AudioMaterial): AudioAssetData | undefined {
   return material.getAsset<AudioAssetData>(SAMPLE_ASSET);
 }

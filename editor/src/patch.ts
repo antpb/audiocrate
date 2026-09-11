@@ -1,5 +1,5 @@
 /**
- * A crate.patch: a Material graph plus editor positions.
+ * A crate.patch: an AudioMaterial graph plus editor positions.
  * Not a DAW project (those are tracks, clips, and plugin slots).
  */
 

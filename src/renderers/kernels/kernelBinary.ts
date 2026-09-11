@@ -8,7 +8,7 @@
  *
  * Audiocrate's existing answer is `KernelBinaryMap`, a map the *host* fills. That
  * is right for an application's own plugins, where the host already knows
- * what it ships and when to load it. It is wrong for a third-party Material:
+ * what it ships and when to load it. It is wrong for a third-party AudioMaterial:
  * it would mean installing a package and then also editing host code to
  * fetch its binary, which is most of the barrier the portable kernel format
  * exists to remove.

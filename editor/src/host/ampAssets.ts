@@ -1,4 +1,4 @@
-import type { Material } from '../../../src/index';
+import type { AudioMaterial } from '../../../src/index';
 
 export const AMP_ASSET = {
   nam: 'amp.nam',
@@ -19,18 +19,18 @@ function toNam(asset: NamAssetData | { filename: string; text: string } | undefi
   return { filename: asset.filename, json: asset.text };
 }
 
-export function ampNamAsset(material: Material): NamAssetData | undefined {
+export function ampNamAsset(material: AudioMaterial): NamAssetData | undefined {
   return toNam(material.getAsset<NamAssetData | { filename: string; text: string }>(AMP_ASSET.nam));
 }
 
-export function ampNamAssetR(material: Material): NamAssetData | undefined {
+export function ampNamAssetR(material: AudioMaterial): NamAssetData | undefined {
   return toNam(material.getAsset<NamAssetData | { filename: string; text: string }>(AMP_ASSET.namR));
 }
 
-export function setAmpNamAsset(material: Material, asset: NamAssetData): void {
+export function setAmpNamAsset(material: AudioMaterial, asset: NamAssetData): void {
   material.setAsset(AMP_ASSET.nam, asset);
 }
 
-export function setAmpNamAssetR(material: Material, asset: NamAssetData): void {
+export function setAmpNamAssetR(material: AudioMaterial, asset: NamAssetData): void {
   material.setAsset(AMP_ASSET.namR, asset);
 }

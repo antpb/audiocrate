@@ -1,5 +1,5 @@
 /**
- * The claim this file exists to check: a Material can ship DSP that a worklet
+ * The claim this file exists to check: an AudioMaterial can ship DSP that a worklet
  * bundle was never built with.
  *
  * It drives the real `defineCrateVoiceProcessor` with the audio-thread
@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineCrateVoiceProcessor } from '../../../src/renderers/worklet/defineVoiceProcessor';
 import { buildWasmKernelFixture, WASM_KERNEL_FIXTURE_DESCRIPTOR } from '../../../src/testing/wasmKernelFixture';
 import { fetchKernelBinary, clearKernelBinaryCache } from '../../../src/renderers/kernels/kernelBinary';
-import { Material } from '../../../src/graph/Material';
+import { AudioMaterial } from '../../../src/graph/AudioMaterial';
 import { kernel } from '../../../src/asl/builders';
 import { tap } from '../../../src/asl/analysis';
 
@@ -76,8 +76,8 @@ async function waitForKernel(port: FakePort, slot: string): Promise<Record<strin
   throw new Error(`no kernelReady/kernelError for "${slot}"`);
 }
 
-/** A Material from a package crate core has never heard of. */
-const acmeTape = new Material({
+/** An AudioMaterial from a package crate core has never heard of. */
+const acmeTape = new AudioMaterial({
   name: 'Acme Tape',
   kind: 'acme.tape',
   params: {},
@@ -182,7 +182,7 @@ describe('fetching a kernel binary', () => {
 });
 
 describe('analysis frames from the worklet', () => {
-  const metered = new Material({
+  const metered = new AudioMaterial({
     name: 'Metered',
     kind: 'metered.test',
     params: {},
@@ -256,7 +256,7 @@ describe('analysis frames from the worklet', () => {
         poll: () => ({ polls: ++polls }),
       }),
     });
-    const seamed = new Material({
+    const seamed = new AudioMaterial({
       name: 'Seamed',
       kind: 'seamed.test',
       params: {},

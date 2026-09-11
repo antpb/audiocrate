@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { materialRegistry, parseCratePlugin, stringifyCratePlugin } from '../../src/index';
+import { audioMaterialRegistry, parseCratePlugin, stringifyCratePlugin } from '../../src/index';
 import { catalogEntry } from '../src/catalog';
 import { PATCH_KIND, PATCH_VERSION, type CratePatch } from '../src/patch';
 import { buildPluginDocument, registerPluginDocument, suggestedRole } from '../src/pluginDoc';
@@ -56,7 +56,7 @@ describe('patch to plugin', () => {
     const back = parseCratePlugin(stringifyCratePlugin(doc));
     registerPluginDocument(back);
 
-    const plugin = materialRegistry.get('user.starter-synth');
+    const plugin = audioMaterialRegistry.get('user.starter-synth');
     expect(plugin?.role).toBe('instrument');
     const material = plugin!.create();
     expect(material.polyphony).toBe(8);

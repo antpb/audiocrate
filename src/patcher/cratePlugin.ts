@@ -1,6 +1,6 @@
 /**
  * The shareable plugin document: a `crate.plugin` is a patch plus the
- * metadata a host needs to register it (`MaterialPlugin`). The full inner
+ * metadata a host needs to register it (`AudioMaterialPlugin`). The full inner
  * patch rides along so a patcher can reopen and edit what it exported;
  * flattening happens at `create()`, never at save.
  *
@@ -10,8 +10,8 @@
  * user-plugin manufacturer code.
  */
 import { AU_TYPE_EFFECT, AU_TYPE_INSTRUMENT } from '../host/pluginSlots';
-import type { Material } from '../graph/Material';
-import type { MaterialPlugin } from '../registry/MaterialPlugin';
+import type { AudioMaterial } from '../graph/AudioMaterial';
+import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
 import type { CompiledMaterialDocument } from './compiledPlugin';
 import {
   flattenPatch,
@@ -127,14 +127,14 @@ export function pluginSubtypeFromId(id: string): number {
 export type CratePluginPreset = Record<string, number>;
 
 export interface PluginFromDocumentOptions {
-  resolve: (kind: string) => Material | null | undefined;
+  resolve: (kind: string) => AudioMaterial | null | undefined;
   io?: Partial<PatchIoKinds>;
 }
 
 export function pluginFromDocument(
   doc: CratePluginDocument,
   options: PluginFromDocumentOptions,
-): MaterialPlugin<CratePluginPreset> {
+): AudioMaterialPlugin<CratePluginPreset> {
   return {
     kind: doc.id,
     label: doc.label,

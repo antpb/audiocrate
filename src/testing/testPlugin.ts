@@ -1,5 +1,5 @@
 /**
- * Two Material plugins that exist only for crate's own tests.
+ * Two AudioMaterial plugins that exist only for crate's own tests.
  *
  * They matter more than the usual fixture. Audiocrate's host paths (project slot
  * mapping, asset hydration, PDC, live binding, baking, export staging) used to
@@ -11,15 +11,15 @@
  *
  * "Fuzz" is an insert with a seam kernel, one referenced file, and reported
  * latency. "Tone" is an instrument with a source kernel. Between them they
- * exercise every optional field on `MaterialPlugin`.
+ * exercise every optional field on `AudioMaterialPlugin`.
  */
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { kernel } from '../asl/builders';
 import { decodeAddressedParams, asPresetFilename, AU_TYPE_EFFECT, AU_TYPE_INSTRUMENT } from '../host/pluginSlots';
 import { decodePresetBlob } from '../loaders/decodeKeyedArchive';
 import type { AssetRequest, AudioAssetData } from '../graph/assets';
-import type { MaterialPlugin } from '../registry/MaterialPlugin';
+import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
 import type { RangeParamDescriptor } from '../graph/param';
 
 export const FUZZ_KERNEL_SLOT = 'test.fuzz';
@@ -41,8 +41,8 @@ export const fuzzParams: Record<string, RangeParamDescriptor> = {
   tone: param.range(-12, 12, { default: 0, unit: 'dB', address: 1 }),
 };
 
-export function createFuzzMaterial(): Material {
-  return new Material({
+export function createFuzzMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'Fuzz',
     kind: 'test.fuzz',
     params: fuzzParams,
@@ -57,7 +57,7 @@ export interface DecodedFuzzPreset {
   raw: Record<string, unknown>;
 }
 
-export const fuzzPlugin: MaterialPlugin<DecodedFuzzPreset> = {
+export const fuzzPlugin: AudioMaterialPlugin<DecodedFuzzPreset> = {
   kind: 'test.fuzz',
   label: 'Fuzz',
   role: 'insert',
@@ -96,8 +96,8 @@ export const fuzzPlugin: MaterialPlugin<DecodedFuzzPreset> = {
   },
 };
 
-export function createToneMaterial(): Material {
-  return new Material({
+export function createToneMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'Tone',
     kind: 'test.tone',
     params: { level: param.range(0, 1, { default: 0.5, address: 0 }) },
@@ -105,7 +105,7 @@ export function createToneMaterial(): Material {
   });
 }
 
-export const tonePlugin: MaterialPlugin<{ params: Record<string, number>; raw: Record<string, unknown> }> = {
+export const tonePlugin: AudioMaterialPlugin<{ params: Record<string, number>; raw: Record<string, unknown> }> = {
   kind: 'test.tone',
   label: 'Tone',
   role: 'instrument',

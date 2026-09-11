@@ -1,7 +1,7 @@
 /**
  * The wire format for live peer state.
  *
- * A track's gain and pan and a Material's automated parameters are the same
+ * A track's gain and pan and an AudioMaterial's automated parameters are the same
  * shape: lots of small numeric state, changing at different rates, most of
  * it unchanged on any given tick.
  *

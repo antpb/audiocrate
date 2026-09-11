@@ -2,7 +2,7 @@
  * Live implementations for the two spatial node kinds, plus the rules the
  * editor needs to keep B-format cables away from ordinary audio ones.
  *
- * Follows the `nativeMixer.ts` pattern: the Material carries the params and
+ * Follows the `nativeMixer.ts` pattern: the AudioMaterial carries the params and
  * the serialization, and the sound is made by something the ASL interpreter
  * has no way to express. Here that is an `AudioWorkletNode` with four output
  * channels for the source, and a graph of gains and panners for the master.
@@ -19,7 +19,7 @@
  * param's own value the way a modular patch does: an LFO at amount 1 into `x`
  * swings the source a metre either side of wherever the inspector left it.
  */
-import { SpatialBus, SPATIAL_DECODE_MODES, FOA_ENCODER_PROCESSOR, type Material } from '../../src/index';
+import { SpatialBus, SPATIAL_DECODE_MODES, FOA_ENCODER_PROCESSOR, type AudioMaterial } from '../../src/index';
 
 export interface SpatialLive {
   input: AudioNode;
@@ -34,7 +34,7 @@ export interface SpatialLive {
  * Ports that carry B-format rather than audio, keyed by node kind.
  *
  * Keyed by kind and port name rather than by a naming convention, because the
- * port names come from the Material's graph (`input`, `audio`) and renaming
+ * port names come from the AudioMaterial's graph (`input`, `audio`) and renaming
  * them would make these two nodes serialize unlike every other node in a
  * patch for no gain.
  */
@@ -71,7 +71,7 @@ export function isSpatialKind(kind: string): boolean {
  * explicitly is also what stops the platform from helpfully folding four
  * channels down to two on the way to the master.
  */
-export function createSpatialSource(ctx: AudioContext, material: Material | undefined): SpatialLive {
+export function createSpatialSource(ctx: AudioContext, material: AudioMaterial | undefined): SpatialLive {
   const node = new AudioWorkletNode(ctx, FOA_ENCODER_PROCESSOR, {
     numberOfInputs: 1,
     numberOfOutputs: 1,
@@ -108,11 +108,11 @@ export function createSpatialSource(ctx: AudioContext, material: Material | unde
 /**
  * The master: B-format in, stereo out.
  *
- * `decode` is an enum index on the Material and a string on the bus, so the
+ * `decode` is an enum index on the AudioMaterial and a string on the bus, so the
  * mapping goes through `SPATIAL_DECODE_MODES`, which is declared next to the
  * enum it mirrors rather than inline here.
  */
-export function createSpatialMaster(ctx: AudioContext, material: Material | undefined): SpatialLive {
+export function createSpatialMaster(ctx: AudioContext, material: AudioMaterial | undefined): SpatialLive {
   const decodeIndex = Math.round(material?.getParam('decode') ?? 0);
   const bus = new SpatialBus(ctx, {
     decode: SPATIAL_DECODE_MODES[decodeIndex] ?? 'binaural',

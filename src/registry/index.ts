@@ -1,2 +1,2 @@
-export { MaterialRegistry, materialRegistry, registerMaterial } from './MaterialRegistry';
-export type { MaterialPlugin, HostPluginIdentity } from './MaterialPlugin';
+export { AudioMaterialRegistry, audioMaterialRegistry, registerAudioMaterial } from './AudioMaterialRegistry';
+export type { AudioMaterialPlugin, HostPluginIdentity } from './AudioMaterialPlugin';

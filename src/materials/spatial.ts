@@ -10,7 +10,7 @@
  * down on the way past.
  *
  * They are Materials anyway, for the same reason `gain` and `stereopan` are
- * Materials whose live implementation is a native node: a Material is what
+ * Materials whose live implementation is a native node: an AudioMaterial is what
  * carries parameter descriptors, ranges, automation targets, inspector labels
  * and patch serialization. Without one, a spatial node would be a `tool` like
  * `master`, and a tool cannot be edited, automated or saved with its values.
@@ -21,7 +21,7 @@
  * the signal rather than silence, and the position lives where it can actually
  * be applied at audio rate.
  */
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 
 /**
@@ -34,7 +34,7 @@ import { param } from '../graph/param';
  * looks like. Azimuth and distance remain the interchange encoding, converted
  * at the export boundary by `cartesianToSpherical`.
  */
-export const spatialSourceMaterial = new Material({
+export const spatialSourceMaterial = new AudioMaterial({
   name: 'Spatial Source',
   kind: 'spatialsource',
   params: {
@@ -63,7 +63,7 @@ export const spatialSourceMaterial = new Material({
  * `yaw` and `pitch` are the listener's head, not the field's: yaw 0 looks
  * down -z and positive yaw turns right, matching `SpatialListener`.
  */
-export const spatialMasterMaterial = new Material({
+export const spatialMasterMaterial = new AudioMaterial({
   name: 'Spatial Master',
   kind: 'spatialmaster',
   params: {

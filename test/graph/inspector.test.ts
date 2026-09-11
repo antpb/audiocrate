@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { describeMaterial, humanizeParamName } from '../../src/graph/inspector';
-import { Material } from '../../src/graph/Material';
+import { describeAudioMaterial, humanizeParamName } from '../../src/graph/inspector';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
 import { filter, uniform } from '../../src/asl/builders';
 import { quantizeMaterial, euclideanMaterial } from '../../src/materials/control';
 import { looperMaterial } from '../../src/materials/time';
 import { createInputSelectMaterial } from '../../src/materials/sidechain';
 
-const shaper = new Material({
+const shaper = new AudioMaterial({
   name: 'Shaper',
   kind: 'acme.shaper',
   params: {
@@ -21,15 +21,15 @@ const shaper = new Material({
   graph: ({ input, params }) => filter.lowpass(input, { cutoff: params.cutoff }).mul(params.gainDb),
 });
 
-describe('describeMaterial', () => {
-  it('names the Material and its registry kind', () => {
-    const model = describeMaterial(shaper);
+describe('describeAudioMaterial', () => {
+  it('names the AudioMaterial and its registry kind', () => {
+    const model = describeAudioMaterial(shaper);
     expect(model.name).toBe('Shaper');
     expect(model.kind).toBe('acme.shaper');
   });
 
   it('emits one control per declared param, in declaration order', () => {
-    const model = describeMaterial(shaper);
+    const model = describeAudioMaterial(shaper);
     expect(model.controls.map((c) => c.name)).toEqual([
       'shape',
       'poles',
@@ -40,7 +40,7 @@ describe('describeMaterial', () => {
   });
 
   it('picks a control kind per param kind', () => {
-    const byName = new Map(describeMaterial(shaper).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(shaper).controls.map((c) => [c.name, c]));
     expect(byName.get('shape')!.kind).toBe('menu');
     expect(byName.get('poles')!.kind).toBe('stepper');
     expect(byName.get('active')!.kind).toBe('switch');
@@ -48,81 +48,81 @@ describe('describeMaterial', () => {
   });
 
   it('carries the option labels a menu and a switch need to draw', () => {
-    const byName = new Map(describeMaterial(shaper).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(shaper).controls.map((c) => [c.name, c]));
     expect(byName.get('shape')!.options).toEqual(['sine', 'saw', 'square']);
     expect(byName.get('active')!.options).toEqual(['Off', 'On']);
     expect(byName.get('cutoff')!.options).toBeUndefined();
   });
 
   it('reports the live value, its normalized form, and its display string', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'One',
       params: { drive: param.range(0, 4, { default: 1 }) },
       graph: ({ params }) => uniform(1).mul(params.drive),
     });
     material.setParam('drive', 3);
-    const control = describeMaterial(material).controls[0]!;
+    const control = describeAudioMaterial(material).controls[0]!;
     expect(control.value).toBe(3);
     expect(control.normalized).toBe(0.75);
     expect(control.display).toBe('3');
   });
 
   it('prefers a declared label and derives one otherwise', () => {
-    const byName = new Map(describeMaterial(shaper).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(shaper).controls.map((c) => [c.name, c]));
     expect(byName.get('gainDb')!.label).toBe('Output');
     expect(byName.get('cutoff')!.label).toBe('Cutoff');
   });
 
   it('marks which controls an automation lane may write', () => {
-    const byName = new Map(describeMaterial(shaper).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(shaper).controls.map((c) => [c.name, c]));
     expect(byName.get('cutoff')!.automatable).toBe(true);
     expect(byName.get('shape')!.automatable).toBe(false);
   });
 
   it('passes a plugin address through when there is one', () => {
-    const byName = new Map(describeMaterial(shaper).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(shaper).controls.map((c) => [c.name, c]));
     expect(byName.get('cutoff')!.address).toBe(12);
     expect(byName.get('gainDb')!.address).toBeUndefined();
   });
 
-  it('says whether the Material is an insert or a source', () => {
-    expect(describeMaterial(shaper).readsAudio).toBe(true);
-    const source = new Material({
+  it('says whether the AudioMaterial is an insert or a source', () => {
+    expect(describeAudioMaterial(shaper).readsAudio).toBe(true);
+    const source = new AudioMaterial({
       name: 'Tone',
       params: { level: param.range(0, 1, { default: 0.5 }) },
       graph: ({ params }) => uniform(1).mul(params.level),
     });
-    expect(describeMaterial(source).readsAudio).toBe(false);
+    expect(describeAudioMaterial(source).readsAudio).toBe(false);
   });
 
   it('lists aux inputs a host still has to route', () => {
-    const model = describeMaterial(createInputSelectMaterial());
+    const model = describeAudioMaterial(createInputSelectMaterial());
     expect(model.auxInputs).toEqual(['sidechain']);
-    expect(describeMaterial(shaper).auxInputs).toEqual([]);
+    expect(describeAudioMaterial(shaper).auxInputs).toEqual([]);
   });
 
   it('reports polyphony and held assets', () => {
-    const poly = new Material({
+    const poly = new AudioMaterial({
       name: 'Pad',
       polyphony: 8,
       params: {},
       graph: ({ note }) => note.toFrequency(),
     });
     poly.setAsset('acme.table', new Float32Array(4));
-    const model = describeMaterial(poly);
+    const model = describeAudioMaterial(poly);
     expect(model.polyphony).toBe(8);
     expect(model.assets).toEqual(['acme.table']);
   });
 
-  it('produces no controls for a Material with none', () => {
-    const plain = new Material({ name: 'Invert', graph: ({ input }) => input.mul(-1) });
-    expect(describeMaterial(plain).controls).toEqual([]);
+  it('produces no controls for an AudioMaterial with none', () => {
+    const plain = new AudioMaterial({ name: 'Invert', graph: ({ input }) => input.mul(-1) });
+    expect(describeAudioMaterial(plain).controls).toEqual([]);
   });
 });
 
 describe('the core library through the inspector model', () => {
   it('shows the quantizer root and scale as menus of names', () => {
-    const byName = new Map(describeMaterial(quantizeMaterial).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(quantizeMaterial).controls.map((c) => [c.name, c]));
     expect(byName.get('root')!.kind).toBe('menu');
     expect(byName.get('root')!.options?.[0]).toBe('C');
     expect(byName.get('scale')!.options).toEqual([
@@ -144,13 +144,13 @@ describe('the core library through the inspector model', () => {
   });
 
   it('shows a whole-number control as a stepper', () => {
-    const byName = new Map(describeMaterial(euclideanMaterial).controls.map((c) => [c.name, c]));
+    const byName = new Map(describeAudioMaterial(euclideanMaterial).controls.map((c) => [c.name, c]));
     expect(byName.get('steps')!.kind).toBe('stepper');
     expect(byName.get('steps')!.step).toBe(1);
   });
 
   it('shows a gate as a switch with the labels that mean something', () => {
-    const control = describeMaterial(looperMaterial).controls[0]!;
+    const control = describeAudioMaterial(looperMaterial).controls[0]!;
     expect(control.kind).toBe('switch');
     expect(control.options).toEqual(['Off', 'Record']);
   });

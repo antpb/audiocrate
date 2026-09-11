@@ -13,19 +13,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import { env, osc } from '../../src/asl/builders';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { OfflineRenderer } from '../../src/renderers/OfflineRenderer';
 
 /**
  * Note the `.trigger(1)`. `env.adsr` defaults its trigger to 0, so a bare
  * `env.adsr({...})` renders silence until a velocity is bound. That is
  * deliberate (velocity is meant to come from the voice, and a default of 1
- * would let a Material silently ignore velocity), and it is why these tests
+ * would let an AudioMaterial silently ignore velocity), and it is why these tests
  * assert audio rather than assuming it.
  */
 const render = (build: () => ReturnType<typeof env.adsr>) =>
   OfflineRenderer.render(
-    new Material({ name: 'probe', params: {}, graph: () => osc({ freq: 440, type: 'sine' }).mul(build()) }).graph,
+    new AudioMaterial({ name: 'probe', params: {}, graph: () => osc({ freq: 440, type: 'sine' }).mul(build()) }).graph,
     { duration: 0.05, sampleRate: 48000 },
   ).samples;
 

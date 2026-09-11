@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 
 /** VCA. Linear gain, default unity. */
-export const gainMaterial = new Material({
+export const gainMaterial = new AudioMaterial({
   name: 'Gain',
   kind: 'gain',
   params: {

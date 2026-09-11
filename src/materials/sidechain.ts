@@ -6,8 +6,8 @@
  * signal rather than a second number. Ducking a bass under a kick, gating a
  * room mic from a snare close mic, multiplying one voice by another, mixing
  * a send back in. `audio.sidechain()` (`asl/ports.ts`) is that second input,
- * and a renderer gives the Material a second real audio input when its graph
- * reads one. `Material.setAudioSource('sidechain', ...)` says where from.
+ * and a renderer gives the AudioMaterial a second real audio input when its graph
+ * reads one. `AudioMaterial.setAudioSource('sidechain', ...)` says where from.
  *
  * A signal times a control voltage and a signal times another signal are the
  * same node, and only the source of the second operand differs. Audiocrate's split
@@ -24,7 +24,7 @@
  * the module-level singleton between them would silently make the second
  * `setAudioSource` win on both.
  */
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { compare, compressor, envFollow, mix, panLaw, select, uniform } from '../asl/builders';
 
@@ -32,8 +32,8 @@ import { compare, compressor, envFollow, mix, panLaw, select, uniform } from '..
  * Compression keyed off another track. Identical to `compressor` except for
  * where the detector looks, which is the whole idea.
  */
-export function createSidechainCompressorMaterial(): Material {
-  return new Material({
+export function createSidechainCompressorMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'SidechainCompressor',
     kind: 'sidechaincomp',
     params: {
@@ -60,8 +60,8 @@ export function createSidechainCompressorMaterial(): Material {
  * want when they say "duck the music under the voice", and it is one
  * multiply rather than a gain computer.
  */
-export function createDuckerMaterial(): Material {
-  return new Material({
+export function createDuckerMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'Ducker',
     kind: 'ducker',
     params: {
@@ -85,8 +85,8 @@ export function createDuckerMaterial(): Material {
  * opened by the close mic, which is the standard way to keep a drum kit's
  * bleed under control.
  */
-export function createSidechainGateMaterial(): Material {
-  return new Material({
+export function createSidechainGateMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'SidechainGate',
     kind: 'sidechaingate',
     params: {
@@ -105,11 +105,11 @@ export function createSidechainGateMaterial(): Material {
 /**
  * One signal times another. Ring modulation when both are audio, an
  * amplitude envelope when the second is slow, a VCA when it is a control
- * signal. The `ringMod` Material is this against an oscillator crate
+ * signal. The `ringMod` AudioMaterial is this against an oscillator crate
  * generates itself; this is the version where the modulator is yours.
  */
-export function createAudioMultiplyMaterial(): Material {
-  return new Material({
+export function createAudioMultiplyMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'AudioMultiply',
     kind: 'audiomultiply',
     params: {
@@ -125,8 +125,8 @@ export function createAudioMultiplyMaterial(): Material {
 }
 
 /** Sums a second input in at a level. The return leg of a send. */
-export function createAudioMixMaterial(): Material {
-  return new Material({
+export function createAudioMixMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'AudioMix',
     kind: 'audiomix',
     params: {
@@ -142,8 +142,8 @@ export function createAudioMixMaterial(): Material {
  * alone, at 1 the sidechain is, and the sum of powers stays constant across
  * the sweep instead of dipping in the middle the way a linear blend does.
  */
-export function createCrossfadeMaterial(): Material {
-  return new Material({
+export function createCrossfadeMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'Crossfade',
     kind: 'crossfade',
     params: {
@@ -168,8 +168,8 @@ export function createCrossfadeMaterial(): Material {
  * A switch, not a fade: use it for source selection, not for automating a
  * transition, where it will click.
  */
-export function createInputSelectMaterial(): Material {
-  return new Material({
+export function createInputSelectMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'InputSelect',
     kind: 'inputselect',
     params: {

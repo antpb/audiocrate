@@ -2,7 +2,7 @@
 
 Most DSP does not need one of these. Anything expressible as ASL nodes
 crosses into the audio thread as data and installs with no build step. 107
-of the 108 Materials crate ships have no kernel. Use this when DSP is
+of the 108 AudioMaterials crate ships have no kernel. Use this when DSP is
 block-shaped: neural inference, a granular voice manager, a partitioned
 convolver. A biquad is not block-shaped. A tremolo is not either. The one
 here is a tremolo because the interesting part of this example is the
@@ -21,7 +21,7 @@ exists. This is the build.
 
 The test that loads it is
 `test/renderers/kernels/portableKernel.example.test.ts`. It uses the same
-`wasmKernelFactory` a third-party Material would, so if the instructions
+`wasmKernelFactory` a third-party AudioMaterial would, so if the instructions
 below stop producing something crate can load, a test goes red.
 
 ## Build it
@@ -57,14 +57,14 @@ await voice.loadKernel('example.tremolo', {
     abi: 1,
     name: 'example.tremolo',
     mode: 'seam',
-    params: { rate: 0, depth: 1 },   // Material param name -> the id the C switches on
+    params: { rate: 0, depth: 1 },   // AudioMaterial param name -> the id the C switches on
     maxFrames: 128,
   },
   params: material.snapshotParams(),
 });
 ```
 
-The Material's graph names the same slot:
+The AudioMaterial's graph names the same slot:
 
 ```ts
 graph: ({ input }) => kernel.seam('example.tremolo', input)
@@ -106,7 +106,7 @@ pinned by a test.
 The module imports nothing. Not a console, not a clock, not a random source.
 That is the capability surface:
 
-- **Installing a Material never means running its author's code in your
+- **Installing an AudioMaterial never means running its author's code in your
   audio thread.** A wasm module with no imports cannot reach your page.
 - **A render is reproducible.** A kernel with no clock and no random source
   produces the same output for the same input, every time.
@@ -115,7 +115,7 @@ A kernel that wants noise brings its own PRNG.
 
 ## Where this stops
 
-A portable kernel cannot declare its own parameter schema; the Material
+A portable kernel cannot declare its own parameter schema; the AudioMaterial
 declares parameters and the descriptor only maps them to ids. DSP that will
 not compile freestanding, or that is arbitrary JavaScript, still needs a
 composed worklet build.

@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { clip } from '../asl/builders';
 
-export const softClipMaterial = new Material({
+export const softClipMaterial = new AudioMaterial({
   name: 'SoftClip',
   kind: 'softclip',
   params: {
@@ -12,7 +12,7 @@ export const softClipMaterial = new Material({
   graph: ({ input, params }) => clip(input, { drive: params.drive, mode: 'soft' }),
 });
 
-export const hardClipMaterial = new Material({
+export const hardClipMaterial = new AudioMaterial({
   name: 'HardClip',
   kind: 'hardclip',
   params: {

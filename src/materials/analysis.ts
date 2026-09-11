@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { onset, peak, rms } from '../asl/builders';
 
-export const rmsMaterial = new Material({
+export const rmsMaterial = new AudioMaterial({
   name: 'RMS',
   kind: 'rms',
   params: {
@@ -12,7 +12,7 @@ export const rmsMaterial = new Material({
   graph: ({ input, params }) => rms(input, { windowSec: params.windowSec }),
 });
 
-export const peakMaterial = new Material({
+export const peakMaterial = new AudioMaterial({
   name: 'Peak',
   kind: 'peak',
   params: {
@@ -22,7 +22,7 @@ export const peakMaterial = new Material({
   graph: ({ input, params }) => peak(input, { release: params.release }),
 });
 
-export const onsetMaterial = new Material({
+export const onsetMaterial = new AudioMaterial({
   name: 'Onset',
   kind: 'onset',
   params: {

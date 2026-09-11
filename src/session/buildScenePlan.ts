@@ -25,7 +25,7 @@
  * plays at an instant, so pre-filtering here would bake one host's memory
  * budget into the document.
  *
- * **It does not hydrate anything.** No file is read, no Material is loaded, no
+ * **It does not hydrate anything.** No file is read, no AudioMaterial is loaded, no
  * context is created.
  */
 import { warpSegmentsFromMs } from '../clip/region';

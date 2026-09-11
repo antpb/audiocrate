@@ -1,7 +1,7 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { dcBlock } from '../asl/builders';
 
-export const dcBlockerMaterial = new Material({
+export const dcBlockerMaterial = new AudioMaterial({
   name: 'DCBlocker',
   kind: 'dcblock',
   graph: ({ input }) => dcBlock(input),

@@ -3,7 +3,7 @@
  * IFFT(FFT(x)) === x. Length must be a power of two.
  *
  * This is the substrate for the partitioned convolver. It is not a
- * public Material; graphs that need a spectrum go through `OfflineRenderer`
+ * public AudioMaterial; graphs that need a spectrum go through `OfflineRenderer`
  * or a kernel, not this function.
  */
 export function fftRadix2(re: Float64Array, im: Float64Array, inverse: boolean): void {

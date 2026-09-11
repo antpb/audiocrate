@@ -1,9 +1,9 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { bitcrush, downsample, rectify, select, waveshape } from '../asl/builders';
 import type { ASLValue } from '../asl/ASLValue';
 
-export const bitcrushMaterial = new Material({
+export const bitcrushMaterial = new AudioMaterial({
   name: 'Bitcrush',
   kind: 'bitcrush',
   params: {
@@ -13,7 +13,7 @@ export const bitcrushMaterial = new Material({
   graph: ({ input, params }) => bitcrush(input, { bits: params.bits }),
 });
 
-export const downsampleMaterial = new Material({
+export const downsampleMaterial = new AudioMaterial({
   name: 'Downsample',
   kind: 'downsample',
   params: {
@@ -23,13 +23,13 @@ export const downsampleMaterial = new Material({
   graph: ({ input, params }) => downsample(input, { factor: params.factor }),
 });
 
-export const fullRectifyMaterial = new Material({
+export const fullRectifyMaterial = new AudioMaterial({
   name: 'FullRectify',
   kind: 'fullrectify',
   graph: ({ input }) => rectify(input, { mode: 'full' }),
 });
 
-export const halfRectifyMaterial = new Material({
+export const halfRectifyMaterial = new AudioMaterial({
   name: 'HalfRectify',
   kind: 'halfrectify',
   graph: ({ input }) => rectify(input, { mode: 'half' }),
@@ -64,7 +64,7 @@ function pickCurve(input: ASLValue, type: ASLValue): ASLValue {
  * Transfer-curve shaper. Drive hits the curve harder, mix is dry/wet.
  * Soft and hard saturate, fold bounces, asym leans, sine is a sine shaper.
  */
-export const waveshapeMaterial = new Material({
+export const waveshapeMaterial = new AudioMaterial({
   name: 'Waveshape',
   kind: 'waveshape',
   params: {

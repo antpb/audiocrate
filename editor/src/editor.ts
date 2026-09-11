@@ -7,7 +7,7 @@ import {
   applyTransportToMaterial,
   isTransportKind,
   transportFromMaterial,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import { isAnalysisKind } from './analysisKinds';
 import { KEYBOARD_OUTPUTS, isKeyboardKind } from './analogKeyboard';
@@ -67,7 +67,7 @@ function jackLabel(name: string): string {
 }
 
 /**
- * A spatial source's outlet is called `audio` by the Material, because that
+ * A spatial source's outlet is called `audio` by the AudioMaterial, because that
  * is what the graph calls its output. Showing that on the node would invite
  * exactly the cable the socket type exists to refuse.
  */
@@ -91,7 +91,7 @@ export interface EditorHooks {
 export class PatchEditor {
   readonly editor: NodeEditor<Schemes>;
   readonly area: AreaPlugin<Schemes, AreaExtra>;
-  readonly materials = new Map<string, Material>();
+  readonly materials = new Map<string, AudioMaterial>();
   readonly kinds = new Map<string, string>();
   transport: PatchTransport | null = null;
   private readonly hooks: EditorHooks;
@@ -173,7 +173,7 @@ export class PatchEditor {
     return this.selected ? this.kinds.get(this.selected) ?? null : null;
   }
 
-  selectedMaterial(): Material | null {
+  selectedMaterial(): AudioMaterial | null {
     return this.selected ? this.materials.get(this.selected) ?? null : null;
   }
 
@@ -274,7 +274,7 @@ export class PatchEditor {
     this.hooks.onSelect(null);
   }
 
-  firstTransportMaterial(): Material | null {
+  firstTransportMaterial(): AudioMaterial | null {
     for (const [id, kind] of this.kinds) {
       if (!isTransportKind(kind)) continue;
       return this.materials.get(id) ?? null;
@@ -326,7 +326,7 @@ export class PatchEditor {
       if (isToolEntry(entry)) {
         node = new PatchNode(entry.kind, entry.label, entry.inputs ?? [], entry.outputs ?? (isKeyboardKind(saved.kind) ? KEYBOARD_OUTPUTS : []));
       } else {
-        let material: Material;
+        let material: AudioMaterial;
         try {
           material = createMaterial(saved.kind);
         } catch {

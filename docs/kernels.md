@@ -7,7 +7,7 @@ manager owns its own scheduling and produces a block from nothing.
 Convolution needs a block to convolve. Expressing those as per-sample
 expressions is the wrong shape.
 
-So a Material's graph may name a **kernel slot**, and something binds real
+So an AudioMaterial's graph may name a **kernel slot**, and something binds real
 DSP to it.
 
 ## Two shapes
@@ -39,7 +39,7 @@ fallback: `passthrough` for an effect, `silence` for an instrument.
 
 The audio thread runs in an isolated context with no dynamic imports. A
 running worklet cannot be handed new code. Installing a package gets you
-the main-thread half of a Material. The audio-thread half has to already
+the main-thread half of an AudioMaterial. The audio-thread half has to already
 be inside a bundle compiled before the page loaded.
 
 Audiocrate has two answers.
@@ -50,7 +50,7 @@ A graph is data, and data crosses the boundary without a build step. **Every
 piece of DSP expressible as ASL nodes needs no kernel at all.**
 
 The core node library is large for that reason. The more ASL can express,
-the fewer Materials need a kernel.
+the fewer AudioMaterials need a kernel.
 
 ## Ship it as data
 
@@ -75,7 +75,7 @@ await voice.loadKernel('acme.tape.kernel', {
 The renderer has no factory registered under that name, sees a portable
 payload, and loads it. Nothing was rebuilt.
 
-A portable kernel cannot be arbitrary JavaScript. Installing a Material
+A portable kernel cannot be arbitrary JavaScript. Installing an AudioMaterial
 does not run its author's code on the audio thread.
 
 ### The interface, version 1
@@ -118,7 +118,7 @@ source produces the same output for the same input, every time.
 
 [`examples/portable-kernel/`](../examples/portable-kernel/README.md) is a
 complete example: C, one clang invocation, an 861-byte module, and a test
-that loads it through the same factory a third-party Material would.
+that loads it through the same factory a third-party AudioMaterial would.
 
 ```bash
 cd examples/portable-kernel && ./build.sh
@@ -175,7 +175,7 @@ defineCrateVoiceProcessor('crate-voice-processor', {
 Point your bundler at that file instead of Audiocrate's own entry. Audiocrate's
 default build carries only the primitives that belong in every renderer.
 
-Registering a Material and building its kernel into the renderer are two
+Registering an AudioMaterial and building its kernel into the renderer are two
 halves of one thing. Registering without the kernel means every load fails.
 Building the kernel in without registering means saved projects never map
 onto it.
@@ -216,7 +216,7 @@ A `describe()` result is how a host tells a fast path from a fallback. A
 kernel that silently took the slower path is a performance regression with
 no other symptom. A test that only asserts nothing threw will not catch it.
 
-Kernels may also report measurements alongside a Material's taps, at the
+Kernels may also report measurements alongside an AudioMaterial's taps, at the
 rate the host asked for, never per block. Keep that to reading state the
 kernel already has. Analysis that needs real work belongs on the main
 thread.
@@ -228,7 +228,7 @@ thread.
 - **A compiler from ASL to a compiled kernel.** ASL runs through an
   interpreter. The public API would not change if that were replaced.
 - **Portable kernels cannot declare their own parameter schema.** The
-  Material declares parameters; the descriptor only maps them to ids.
+  AudioMaterial declares parameters; the descriptor only maps them to ids.
 - **Portable kernels cannot be sent anything but numbers.** No `onMessage`,
   so no impulse response, no sample table. This is the constraint most
   likely to push a third-party kernel into needing a composed renderer

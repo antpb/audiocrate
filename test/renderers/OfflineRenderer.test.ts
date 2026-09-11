@@ -61,7 +61,7 @@ describe('OfflineRenderer', () => {
     expect(Math.abs(samples[samples.length - 1]!)).toBeGreaterThan(0.01);
   });
 
-  it('feeds inputSignal into an effect Material param-by-param, matching a manual compileVoice loop', () => {
+  it('feeds inputSignal into an effect AudioMaterial param-by-param, matching a manual compileVoice loop', () => {
     const inputSignal = Float32Array.from({ length: 200 }, (_, i) => Math.sin((2 * Math.PI * 100 * i) / 48000));
     const { samples } = OfflineRenderer.render(parametricEqMaterial.graph, {
       duration: 200 / 48000,

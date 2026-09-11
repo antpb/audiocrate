@@ -12,10 +12,10 @@ export class SceneNotStartedError extends Error {
   }
 }
 
-/** Thrown when `Material.noteOn` is called before `bind(renderer)`. */
-export class MaterialNotBoundError extends Error {
+/** Thrown when `AudioMaterial.noteOn` is called before `bind(renderer)`. */
+export class AudioMaterialNotBoundError extends Error {
   constructor(name: string) {
-    super(`Material "${name}".noteOn requires bind(renderer) first.`);
-    this.name = 'MaterialNotBoundError';
+    super(`AudioMaterial "${name}".noteOn requires bind(renderer) first.`);
+    this.name = 'AudioMaterialNotBoundError';
   }
 }

@@ -9,7 +9,7 @@
  * present.
  */
 import { describe, expect, it } from 'vitest';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
 import { audio, filter, uniform, wavetable } from '../../src/asl/builders';
 import { compileVoice } from '../../src/asl/compile';
@@ -85,7 +85,7 @@ describe('serializeGraph', () => {
 });
 
 describe('compileCratePlugin', () => {
-  const gainProto = new Material({
+  const gainProto = new AudioMaterial({
     name: 'Gain',
     kind: 'test.gain',
     params: { gain: param.range(0, 4, { default: 1, address: 7 }) },
@@ -117,7 +117,7 @@ describe('compileCratePlugin', () => {
     expect(published.length).toBeGreaterThan(0);
     // Addresses are the whole reason the schema travels with the graph: they
     // are the AUParameterAddress on the other side. Flattening reassigns them
-    // sequentially rather than carrying the inner Material's own, because two
+    // sequentially rather than carrying the inner AudioMaterial's own, because two
     // copies of the same node would otherwise claim the same address. Every
     // published param has one, and no two share.
     const addresses = published.map((descriptor) => descriptor.address);
@@ -128,7 +128,7 @@ describe('compileCratePlugin', () => {
   it('is the same graph the browser path builds', () => {
     const doc = cratePluginDocument({ label: 'Test Gain', role: 'insert', patch });
     const compiled = compileCratePlugin(doc, options);
-    // What a browser runs: flatten the patch and use the Material's graph.
+    // What a browser runs: flatten the patch and use the AudioMaterial's graph.
     const live = flattenPatch(doc.patch, {
       resolve: options.resolve,
       name: doc.label,

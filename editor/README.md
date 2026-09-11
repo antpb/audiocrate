@@ -1,6 +1,6 @@
 # editor
 
-Patch graph for audiocrate Materials. Lives in this repo as an example app,
+Patch graph for audiocrate AudioMaterials. Lives in this repo as an example app,
 not in the npm package.
 
 Patch nodes, play them, export a `crate.plugin`. Amp, grain, synth, and IR
@@ -24,8 +24,8 @@ Then open http://localhost:5175
 npm run test:editor
 ```
 
-JS-only changes hot reload. After a Material or worklet change, hard-refresh
-the tab.
+JS-only changes hot reload. After an AudioMaterial or worklet change,
+hard-refresh the tab.
 
 ## Transport
 

@@ -1,10 +1,10 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { delay, filter, mix, uniform } from '../asl/builders';
 
 const COMB_TIMES = [0.0253, 0.0269, 0.029, 0.0307, 0.0338, 0.0367] as const;
 
-export const reverbMaterial = new Material({
+export const reverbMaterial = new AudioMaterial({
   name: 'Reverb',
   kind: 'reverb',
   params: {

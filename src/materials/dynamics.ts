@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { compare, compressor, envFollow, expander, transient } from '../asl/builders';
 
-export const compressorMaterial = new Material({
+export const compressorMaterial = new AudioMaterial({
   name: 'Compressor',
   kind: 'compressor',
   params: {
@@ -25,7 +25,7 @@ export const compressorMaterial = new Material({
   },
 });
 
-export const limiterMaterial = new Material({
+export const limiterMaterial = new AudioMaterial({
   name: 'Limiter',
   kind: 'limiter',
   params: {
@@ -43,7 +43,7 @@ export const limiterMaterial = new Material({
     }),
 });
 
-export const gateMaterial = new Material({
+export const gateMaterial = new AudioMaterial({
   name: 'Gate',
   kind: 'gate',
   params: {
@@ -58,7 +58,7 @@ export const gateMaterial = new Material({
   },
 });
 
-export const expanderMaterial = new Material({
+export const expanderMaterial = new AudioMaterial({
   name: 'Expander',
   kind: 'expander',
   params: {
@@ -77,7 +77,7 @@ export const expanderMaterial = new Material({
     }),
 });
 
-export const transientMaterial = new Material({
+export const transientMaterial = new AudioMaterial({
   name: 'Transient',
   kind: 'transient',
   params: {

@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { mix, panLaw, select } from '../asl/builders';
 
-export const selectMaterial = new Material({
+export const selectMaterial = new AudioMaterial({
   name: 'Select',
   kind: 'select',
   params: {
@@ -13,7 +13,7 @@ export const selectMaterial = new Material({
   graph: ({ input, params }) => select(input, params.other, { which: params.which }),
 });
 
-export const panLeftMaterial = new Material({
+export const panLeftMaterial = new AudioMaterial({
   name: 'PanLeft',
   kind: 'panleft',
   params: {
@@ -23,7 +23,7 @@ export const panLeftMaterial = new Material({
   graph: ({ input, params }) => panLaw(input, { pan: params.pan, channel: 'left' }),
 });
 
-export const panRightMaterial = new Material({
+export const panRightMaterial = new AudioMaterial({
   name: 'PanRight',
   kind: 'panright',
   params: {
@@ -33,7 +33,7 @@ export const panRightMaterial = new Material({
   graph: ({ input, params }) => panLaw(input, { pan: params.pan, channel: 'right' }),
 });
 
-export const mixMaterial = new Material({
+export const mixMaterial = new AudioMaterial({
   name: 'Mix',
   kind: 'mix',
   params: {

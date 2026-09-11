@@ -1,9 +1,9 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { osc } from '../asl/builders';
 
 /** Named multiply against a sine. The node is `mul`; the name is how people patch it. */
-export const ringModMaterial = new Material({
+export const ringModMaterial = new AudioMaterial({
   name: 'RingMod',
   kind: 'ringmod',
   params: {

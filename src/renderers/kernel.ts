@@ -7,7 +7,7 @@
  * produces a block from nothing. A partitioned-FFT convolver needs a block
  * to convolve. Expressing those as per-sample ASL nodes is the wrong shape.
  *
- * So a Material's graph may name a **kernel slot**, and a host binds a
+ * So an AudioMaterial's graph may name a **kernel slot**, and a host binds a
  * `KernelProcessor` into that slot. Crate core defines the contract and
  * nothing else: it does not know what a NAM or a grain engine is, the same
  * way three.js core knows `ShaderMaterial` without knowing any particular
@@ -26,7 +26,7 @@
  *
  * Every method is optional. A kernel that only implements `processSeam` is a
  * complete kernel. A slot with nothing bound is a passthrough, not silence:
- * a Material whose asset failed to load still runs the rest of its graph.
+ * an AudioMaterial whose asset failed to load still runs the rest of its graph.
  */
 
 /**
@@ -38,7 +38,7 @@
 export interface KernelProcessor {
   /**
    * Receives the voice's current param values once per block, before
-   * processing. Params are the Material's declared schema (`graph/param.ts`),
+   * processing. Params are the AudioMaterial's declared schema (`graph/param.ts`),
    * so a kernel reads whichever ones it cares about by name.
    */
   applyParams?(params: Record<string, number>): void;

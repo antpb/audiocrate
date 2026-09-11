@@ -13,11 +13,11 @@ import {
   isLooperPulseOutput,
   isTransportAbsoluteOutput,
   isTransportKind,
-  materialRegistry,
+  audioMaterialRegistry,
   resolvedTransport,
   sampleAsset,
   type AudioContextLike,
-  type Material,
+  type AudioMaterial,
   type TransportAnchor,
   type TransportOutput,
   type VoiceBackend,
@@ -708,7 +708,7 @@ export class PatchAudio {
     const material = this.editor?.materials.get(nodeId);
     const live = this.lives.get(nodeId);
     if (!material || !live) return;
-    const plugin = materialRegistry.forMaterial(material);
+    const plugin = audioMaterialRegistry.forMaterial(material);
     if (!plugin?.bindLiveVoice) return;
     const wasm = await patcherKernelBinaries();
     for (const handle of live.handles) {
@@ -1555,7 +1555,7 @@ export class PatchAudio {
     }
   }
 
-  private createSampleLive(ctx: AudioContext, material: Material): LiveNode {
+  private createSampleLive(ctx: AudioContext, material: AudioMaterial): LiveNode {
     const mix = ctx.createGain();
     const gain = material.getParam('gain');
     mix.gain.value = Number.isFinite(gain) ? gain : 0.85;
@@ -1629,7 +1629,7 @@ export class PatchAudio {
 
   private fireMidi(
     live: LiveNode,
-    material: Material | null,
+    material: AudioMaterial | null,
     pitch: number,
     velocity: number,
     when: number,
@@ -1677,7 +1677,7 @@ export class PatchAudio {
   private async createLive(
     ctx: AudioContext,
     renderer: WebAudioRenderer,
-    material: Material,
+    material: AudioMaterial,
     nodeId: string,
   ): Promise<LiveNode> {
     const kernelPoly = material.kind === 'synth' || material.kind === 'grain';
@@ -1694,7 +1694,7 @@ export class PatchAudio {
       }
       handles.push(handle);
     }
-    const plugin = materialRegistry.forMaterial(material);
+    const plugin = audioMaterialRegistry.forMaterial(material);
     if (plugin?.bindLiveVoice) {
       try {
         const wasm = await patcherKernelBinaries();
@@ -1782,7 +1782,7 @@ export class PatchAudio {
   }
 }
 
-export function applyParam(material: Material, name: string, value: number): void {
+export function applyParam(material: AudioMaterial, name: string, value: number): void {
   material.setParam(name, value);
 }
 
@@ -1892,7 +1892,7 @@ function writeMidiInJacks(
   }
 }
 
-function driveLive(live: LiveNode, material: Material, event: AnalogEvent): void {
+function driveLive(live: LiveNode, material: AudioMaterial, event: AnalogEvent): void {
   const { note, velocity, snapshot } = event;
   const handle = live.handles[0];
   if (live.kernelPoly && handle) {

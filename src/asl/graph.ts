@@ -21,7 +21,7 @@ export interface ASLGraphDescriptor {
  * value instead), and remembers every lazily-minted name it ever handed
  * out. This is what lets `ASL.node(({ note, velocity }) => ...)`
  * work without the caller declaring its input names anywhere
- * else: destructuring IS the declaration. `Material`
+ * else: destructuring IS the declaration. `AudioMaterial`
  * reuses this with `params` reserved to a pre-built object, so
  * `({ input, params }) => ...` works the same way.
  */

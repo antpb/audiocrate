@@ -20,7 +20,7 @@ import type { ASLNode } from '../asl/types';
 import type { ParamDescriptor } from '../graph/param';
 import { flattenPatch, type PatchIoKinds } from './flattenPatch';
 import type { CratePluginDocument } from './cratePlugin';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 
 /**
  * A graph node with every typed array turned into a plain one, so it
@@ -93,9 +93,9 @@ export function serializeGraph(graph: ASLGraphDescriptor): SerializedGraph {
   };
 }
 
-/** The compiled form of an already-built Material. */
+/** The compiled form of an already-built AudioMaterial. */
 export function compileMaterial(
-  material: Material,
+  material: AudioMaterial,
   role: 'insert' | 'instrument',
   polyphony?: number,
 ): CompiledMaterialDocument {
@@ -110,7 +110,7 @@ export function compileMaterial(
 }
 
 export interface CompileCratePluginOptions {
-  resolve: (kind: string) => Material | null | undefined;
+  resolve: (kind: string) => AudioMaterial | null | undefined;
   io?: Partial<PatchIoKinds>;
 }
 

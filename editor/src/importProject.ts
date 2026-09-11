@@ -14,7 +14,7 @@ import {
   sampleAsset,
   type AssetRequest,
   type AudioAssetData,
-  type Material,
+  type AudioMaterial,
   type ProjectFileData,
   type ProjectMidiNoteData,
   type ProjectTrackData,
@@ -41,7 +41,7 @@ const ROW = 260;
 export interface ImportedAsset {
   nodeId: string;
   kind: string;
-  material: Material;
+  material: AudioMaterial;
 }
 
 export interface ImportedProject {
@@ -229,7 +229,7 @@ async function buildImportedProject(
     connections.push({ source, sourceOutput, target, targetInput });
   };
 
-  const keep = (nodeId: string, kind: string, material: Material) => {
+  const keep = (nodeId: string, kind: string, material: AudioMaterial) => {
     assets.push({ nodeId, kind, material });
   };
 
@@ -386,8 +386,8 @@ async function bindSlots(
   container: { [key: string]: unknown },
   readFile: (rel: string) => Promise<Uint8Array | null>,
   warnings: string[],
-): Promise<Array<{ kind: string; role: 'insert' | 'instrument'; material: Material }>> {
-  const bound: Array<{ kind: string; role: 'insert' | 'instrument'; material: Material }> = [];
+): Promise<Array<{ kind: string; role: 'insert' | 'instrument'; material: AudioMaterial }>> {
+  const bound: Array<{ kind: string; role: 'insert' | 'instrument'; material: AudioMaterial }> = [];
   for (const slot of listPluginSlots(container)) {
     const mapped = mapPluginSlot(slot?.plugin, slot?.savedPresetData);
     if (!mapped.bound) continue;
@@ -468,7 +468,7 @@ function readImportedMidiNotes(raw: ProjectMidiNoteData[]): PatchMidiNote[] {
 }
 
 async function hydratePluginAssets(
-  material: Material,
+  material: AudioMaterial,
   requests: readonly AssetRequest[],
   readFile: (rel: string) => Promise<Uint8Array | null>,
   warnings: string[],
@@ -506,8 +506,8 @@ async function loadClips(
   track: ProjectTrackData,
   readFile: (rel: string) => Promise<Uint8Array | null>,
   warnings: string[],
-): Promise<Array<{ id: string; params: Record<string, number>; material: Material; offsetSec: number; durationSec: number }>> {
-  const clips: Array<{ id: string; params: Record<string, number>; material: Material; offsetSec: number; durationSec: number }> = [];
+): Promise<Array<{ id: string; params: Record<string, number>; material: AudioMaterial; offsetSec: number; durationSec: number }>> {
+  const clips: Array<{ id: string; params: Record<string, number>; material: AudioMaterial; offsetSec: number; durationSec: number }> = [];
   for (const clip of track.clips ?? []) {
     if (!clip.audioFileUri) continue;
     let path: string;
@@ -564,7 +564,7 @@ function decodeAudioAsset(bytes: Uint8Array, filename: string): AudioAssetData |
   }
 }
 
-function copyMaterialAssets(from: Material, to: Material, kind: string): void {
+function copyMaterialAssets(from: AudioMaterial, to: AudioMaterial, kind: string): void {
   for (const key of from.assetKeys) {
     const value = from.getAsset(key);
     if (value !== undefined) to.setAsset(key, value);

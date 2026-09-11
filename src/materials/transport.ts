@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { transport } from '../asl/transportNodes';
 
@@ -8,7 +8,7 @@ import { transport } from '../asl/transportNodes';
  * Clock is a free-running pulse in Hz. Synced Clock reads the host snapshot
  * and fires on a division. Neither one is where a patcher sets tempo.
  *
- * This Material is the publisher: its params are what a host without a DAW
+ * This AudioMaterial is the publisher: its params are what a host without a DAW
  * session (the crate editor) writes onto `setTransport`. Synced Delay,
  * Synced Clock, Looper, and every other `transport.*` reader keep using the
  * snapshot. Homecrate already has a session clock, so it does not need this
@@ -83,7 +83,7 @@ export function resolvedTransport(input: Partial<MaterialTransport> | null | und
   };
 }
 
-export function transportFromMaterial(material: Material, startSec?: number): MaterialTransport {
+export function transportFromMaterial(material: AudioMaterial, startSec?: number): MaterialTransport {
   return resolvedTransport({
     bpm: material.getParam('bpm'),
     beatsPerBar: material.getParam('beatsPerBar'),
@@ -92,7 +92,7 @@ export function transportFromMaterial(material: Material, startSec?: number): Ma
   });
 }
 
-export function applyTransportToMaterial(material: Material, input: Partial<MaterialTransport>): void {
+export function applyTransportToMaterial(material: AudioMaterial, input: Partial<MaterialTransport>): void {
   const next = resolvedTransport({
     bpm: input.bpm ?? material.getParam('bpm'),
     beatsPerBar: input.beatsPerBar ?? material.getParam('beatsPerBar'),
@@ -103,7 +103,7 @@ export function applyTransportToMaterial(material: Material, input: Partial<Mate
   material.setParam('beatUnit', next.beatUnit);
 }
 
-export const transportMaterial = new Material({
+export const transportMaterial = new AudioMaterial({
   name: 'Transport',
   kind: TRANSPORT_KIND,
   channels: 1,

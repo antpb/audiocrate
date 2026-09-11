@@ -45,7 +45,7 @@ function ramp(trackIndex: number, slotIndex: number, paramAddress: number, minVa
 }
 
 describe('HostedAutomationBridge', () => {
-  it('routes a write to the live voice whose Material carries the matching hostedSlot', () => {
+  it('routes a write to the live voice whose AudioMaterial carries the matching hostedSlot', () => {
     const amp = createFuzzMaterial();
     amp.hostedSlot = { trackIndex: 3, slotIndex: 1 };
     const track = new Track({ name: 'T' });
@@ -145,7 +145,7 @@ describe('HostedAutomationBridge', () => {
   });
 
   it('binds a track instrument voice by its own hostedSlot', () => {
-    // Any Material with addressed params works here; the bridge addresses by
+    // Any AudioMaterial with addressed params works here; the bridge addresses by
     // (trackIndex, slotIndex, paramAddress), never by plugin identity.
     const amp = createFuzzMaterial();
     amp.hostedSlot = { trackIndex: 1, slotIndex: 4 };

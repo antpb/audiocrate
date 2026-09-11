@@ -1,6 +1,6 @@
 /**
  * The worked example in `examples/portable-kernel/`, loaded the way a
- * third-party Material would load it.
+ * third-party AudioMaterial would load it.
  *
  * `wasmKernel.test.ts` already proves the loader against
  * `testing/wasmKernelFixture.ts`, a module assembled byte by byte with no
@@ -43,7 +43,7 @@ function dc(frames: number, value = 1): Float32Array {
 }
 
 describe('the portable kernel example', () => {
-  it('loads through the same factory a third-party Material would use', async () => {
+  it('loads through the same factory a third-party AudioMaterial would use', async () => {
     const kernel = await load();
     expect(kernel.describe?.()).toMatchObject({
       portable: true,

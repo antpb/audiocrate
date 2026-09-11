@@ -4,7 +4,7 @@
  * `asl/conformanceFixture.ts` keeps the two interpreters agreeing about
  * per-sample maths. This file does the same job one level up, for the part of
  * crate that is not DSP at all: the host jacks. MIDI In and MIDI Out are
- * Material kinds handled in `patcher/flattenPatch.ts`, not ASL node kinds, so
+ * AudioMaterial kinds handled in `patcher/flattenPatch.ts`, not ASL node kinds, so
  * nothing in the ASL fixture has ever been able to see them. The rules in
  * `midiIo.ts` (gate owns length, trig is the event, trig retriggers only
  * while gate is high) existed as prose in a handoff and as one implementation,

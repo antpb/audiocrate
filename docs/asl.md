@@ -1,6 +1,6 @@
 # The Audio Shader Language
 
-ASL is how you describe what a Material does to a signal. It occupies the
+ASL is how you describe what an AudioMaterial does to a signal. It occupies the
 same position as a shader language: a small expression language, evaluated
 per sample rather than per pixel, fused into a single unit before it runs.
 
@@ -15,14 +15,14 @@ That expression does not process audio. It builds a plain object describing a
 computation. Nothing in it holds a buffer or an audio context.
 
 - The same graph renders in real time and offline, with one evaluator.
-- A graph can cross a thread boundary, which is how a Material reaches the
+- A graph can cross a thread boundary, which is how an AudioMaterial reaches the
   audio thread without a build step.
 - A graph can be stored in a project file and diffed between versions.
 - A graph can be inspected. It is an object, so you can print it.
 
 The graph is also **fused**: the whole expression compiles into one unit that
-runs per sample. A twelve-operation Material is one unit of work, not twelve
-platform nodes.
+runs per sample. A twelve-operation AudioMaterial is one unit of work, not
+twelve platform nodes.
 
 ## Building expressions
 
@@ -78,7 +78,7 @@ quiet. An unconnected ducker stops ducking. Neither throws.
 
 ### Wiring a second input
 
-A Material that reads `audio.sidechain()` gets a second real input on its
+An AudioMaterial that reads `audio.sidechain()` gets a second real input on its
 renderer node. Declare where it comes from:
 
 ```ts
@@ -266,9 +266,9 @@ tap.meter(audio.left().add(audio.right()).mul(0.5))
 
 ## Two ways to chain
 
-**Inside a Material**, operations fuse into one unit. Cheaper.
+**Inside an AudioMaterial**, operations fuse into one unit. Cheaper.
 
-**Between Materials**, a track's insert chain creates real edges between
+**Between AudioMaterials**, a track's insert chain creates real edges between
 separate units. More expensive. Adds and removes effects while audio is
 running, addresses each effect's parameters independently for automation,
 and compensates latency per effect.
@@ -277,9 +277,9 @@ and compensates latency per effect.
 
 - **Author-time type checking of graphs.** Errors surface when a graph is
   built, which is early, but they are not caught by the type system.
-- **Multi-output Materials.** A Material has one output, so splitting a
-  stereo pair into two independently routed signals is a graph shape rather
-  than a node. The merge direction works.
+- **Multi-output AudioMaterials.** An AudioMaterial has one output, so
+  splitting a stereo pair into two independently routed signals is a graph
+  shape rather than a node. The merge direction works.
 - **A spectrum as a graph node.** FFT bins stay on the main thread. Tuner
   and Analyzer publish the scalars they already compute (`note`, `hz`,
   `cents`, `gate`, `peak`, `rms`, `lufs`) as CV. Flatten turns those

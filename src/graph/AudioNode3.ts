@@ -1,5 +1,5 @@
 import type { AutomationLane } from '../automation/AutomationLane';
-import { MaterialChain } from './Material';
+import { AudioMaterialChain } from './AudioMaterial';
 
 export interface AudioNode3Options {
   name?: string;
@@ -9,12 +9,12 @@ let nextAudioNode3Id = 1;
 
 /**
  * Shared mixer fields for `Track` and `Bus`: volume, pan, mute, and a
- * Material chain. Not a transform hierarchy.
+ * AudioMaterial chain. Not a transform hierarchy.
  */
 export abstract class AudioNode3 {
   readonly id: number = nextAudioNode3Id++;
   name: string;
-  readonly materials = new MaterialChain();
+  readonly materials = new AudioMaterialChain();
 
   /**
    * Equal-power pan crosspoint, -1 (full left) to 1 (full right). Averages
@@ -44,7 +44,7 @@ export abstract class AudioNode3 {
     this.name = options.name ?? this.constructor.name;
   }
 
-  /** `target` is a Material param name or `gain` / `pan`. */
+  /** `target` is an AudioMaterial param name or `gain` / `pan`. */
   automate(target: string, lane: AutomationLane): void {
     this.automation.push({ target, lane });
   }

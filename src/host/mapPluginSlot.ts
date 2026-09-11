@@ -1,7 +1,7 @@
-import { materialRegistry, type MaterialRegistry } from '../registry/MaterialRegistry';
+import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
 import type { AUv3PluginDescriptor } from './pluginSlots';
-import type { Material } from '../graph/Material';
-import type { MaterialPlugin } from '../registry/MaterialPlugin';
+import type { AudioMaterial } from '../graph/AudioMaterial';
+import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
 
 export type MappedPluginSlot =
   | {
@@ -15,7 +15,7 @@ export type MappedPluginSlot =
       bound: true;
       kind: string;
       role: 'insert' | 'instrument';
-      material: Material;
+      material: AudioMaterial;
       /**
        * The plugin's own decoded preset. Typed `unknown` because crate does
        * not know the shape: the plugin that produced it does, and a caller
@@ -23,7 +23,7 @@ export type MappedPluginSlot =
        * usually a guard).
        */
       preset: unknown;
-      plugin: MaterialPlugin;
+      plugin: AudioMaterialPlugin;
     }
   | { bound: false; kind: 'skip'; reason: 'empty' | 'unknown'; subtype?: number };
 
@@ -35,7 +35,7 @@ export type MappedPluginSlot =
 export function mapPluginSlot(
   plugin: AUv3PluginDescriptor | null | undefined,
   savedPresetData?: string | null,
-  registry: MaterialRegistry = materialRegistry,
+  registry: AudioMaterialRegistry = audioMaterialRegistry,
 ): MappedPluginSlot {
   if (!plugin) return { bound: false, kind: 'skip', reason: 'empty' };
 
@@ -51,7 +51,7 @@ export function mapPluginSlot(
       preset = entry.decodePreset(savedPresetData);
       entry.applyPreset?.(material, preset);
     } catch (err) {
-      // A corrupt preset must not lose the slot. The Material stays at its
+      // A corrupt preset must not lose the slot. The AudioMaterial stays at its
       // defaults and the chain still runs, which for an amp means the analog
       // path rather than silence.
       console.warn(`[crate] "${entry.kind}" preset decode failed; defaults only`, err);

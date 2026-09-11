@@ -1,12 +1,12 @@
-# Materials
+# AudioMaterials
 
-A Material is the unit of DSP: **a parameter schema and a signal graph, both
-plain data.**
+An AudioMaterial is the unit of DSP: **a parameter schema and a signal
+graph, both plain data.**
 
 ```ts
-import { Material, param, filter, osc, env } from 'audiocrate';
+import { AudioMaterial, param, filter, osc, env } from 'audiocrate';
 
-const lowpass = new Material({
+const lowpass = new AudioMaterial({
   name: 'Lowpass',
   params: {
     cutoff: param.range(20, 20000, { default: 1000, unit: 'Hz' }),
@@ -31,7 +31,7 @@ An effect reads `input`. An instrument reads `note` and `velocity` and ignores
 rather than of a class hierarchy.
 
 ```ts
-const synth = new Material({
+const synth = new AudioMaterial({
   name: 'Simple Synth',
   params: { cutoff: param.range(100, 12000, { default: 2000, unit: 'Hz' }) },
   polyphony: 8,
@@ -124,9 +124,9 @@ Audiocrate is not a UI library. It ships the model a control panel is built from
 not the panel.
 
 ```ts
-import { describeMaterial } from 'audiocrate';
+import { describeAudioMaterial } from 'audiocrate';
 
-for (const control of describeMaterial(material).controls) {
+for (const control of describeAudioMaterial(material).controls) {
   control.kind;        // 'fader' | 'stepper' | 'menu' | 'switch'
   control.label;       // declared, or derived from the param name
   control.value;       // current
@@ -137,7 +137,7 @@ for (const control of describeMaterial(material).controls) {
 }
 ```
 
-The model is plain data. It does not hold the Material and it does not
+The model is plain data. It does not hold the AudioMaterial and it does not
 update: take a fresh one when values change.
 
 A React inspector, a canvas inspector, and a plugin parameter tree can
@@ -169,7 +169,7 @@ palette kinds, jacks, and param ranges are in
 ## Polyphony
 
 ```ts
-new Material({ name: 'Pad', polyphony: 8, voiceStealing: 'oldest', graph })
+new AudioMaterial({ name: 'Pad', polyphony: 8, voiceStealing: 'oldest', graph })
 ```
 
 `material.noteOn(60, { velocity: 0.8 })` and `material.noteOff(60)` allocate
@@ -178,31 +178,32 @@ one gives way.
 
 ## Channels
 
-By default, a Material that reads live audio is evaluated **once per output
-channel**, with independent state per channel. One `filter.lowpass` in a graph
-is a stereo filter, not two mono filters.
+By default, an AudioMaterial that reads live audio is evaluated **once per
+output channel**, with independent state per channel. One `filter.lowpass`
+in a graph is a stereo filter, not two mono filters.
 
-A Material that reads no audio (a source) is evaluated once and mirrored.
+An AudioMaterial that reads no audio (a source) is evaluated once and mirrored.
 
 Override it:
 
 ```ts
-new Material({ name: 'Meter', channels: 1, graph })   // control signal, mono
+new AudioMaterial({ name: 'Meter', channels: 1, graph })  // control, mono
 ```
 
 Setting `channels: 1` on a control-voltage output skips a second evaluation
 that could not have produced a different answer.
 
-## Plugins: publishing a Material
+## Plugins: publishing an AudioMaterial
 
-A Material on its own covers the common case. A Material that has files, a
-saved preset format, reported latency, or DSP that is not a per-sample
-expression needs a **plugin**: a small object describing those things.
+An AudioMaterial on its own covers the common case. An AudioMaterial that
+has files, a saved preset format, reported latency, or DSP that is not a
+per-sample expression needs a **plugin**: a small object describing those
+things.
 
 ```ts
-import { registerMaterial } from 'audiocrate';
+import { registerAudioMaterial } from 'audiocrate';
 
-registerMaterial({
+registerAudioMaterial({
   kind: 'acme.tape',
   role: 'insert',
   label: 'Acme Tape',
@@ -223,10 +224,10 @@ registerMaterial({
 ```
 
 Every field past `kind`, `role`, and `create` is optional. A plugin
-implementing none of them is a valid plugin: a plain Material with a name.
+implementing none of them is a valid plugin: a plain AudioMaterial with a name.
 
-Audiocrate contains no branch on any Material's identity. If crate needs to
-know something particular about a kind of Material, that is a missing field
+Audiocrate contains no branch on any AudioMaterial's identity. If crate needs to
+know something particular about a kind of AudioMaterial, that is a missing field
 on this contract.
 
 ### Assets
@@ -245,7 +246,7 @@ assetRequests: (preset) => [{
 ```
 
 Audiocrate decodes two shapes, text and audio. Decoded assets land in an open
-string-keyed map on the Material. The plugin that wrote a key is the one
+string-keyed map on the AudioMaterial. The plugin that wrote a key is the one
 that reads it.
 
 `fallbackLibraries` exists because archives drift: the same file ships under
@@ -254,12 +255,13 @@ only knows the current name breaks old projects.
 
 ## Distribution
 
-**A Material whose DSP is expressible in ASL can be published as an ordinary
-package.** A graph is data, so it crosses into the audio thread with no
-build step. Install, register, use.
+**An AudioMaterial whose DSP is expressible in ASL can be published as an
+ordinary package.** A graph is data, so it crosses into the audio thread
+with no build step. Install, register, use.
 
-A Material that needs DSP which is not a per-sample expression has a second
-option, described in [the kernels guide](kernels.md): ship it as a portable
+An AudioMaterial that needs DSP which is not a per-sample expression has a
+second option, described in [the kernels guide](kernels.md): ship it as a
+portable
 module plus a descriptor, which any crate renderer can load from bytes
 without having been built with it.
 
@@ -270,8 +272,8 @@ JavaScript on the audio thread.
 
 - **A published inspector component.** The model is shipped. The component
   that renders it is not, so every host writes its own.
-- **Grouped parameters.** A forty-parameter Material describes forty controls
-  in a flat list. Sections, pages, and dependent controls ("this only applies
-  when that is on") are a host's problem today.
+- **Grouped parameters.** A forty-parameter AudioMaterial describes forty
+  controls in a flat list. Sections, pages, and dependent controls ("this
+  only applies when that is on") are a host's problem today.
 - **Preset management.** Plugins decode and apply presets. Audiocrate has no
   storage, browsing, or organisation for them.

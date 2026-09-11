@@ -1,7 +1,7 @@
 # audiocrate
 
-A scene graph, an extensible Material system, and a serializable DSP graph
-that the same interpreter runs offline and in an AudioWorklet.
+A scene graph, an extensible AudioMaterial system, and a serializable DSP
+graph that the same interpreter runs offline and in an AudioWorklet.
 
 Inspired by how three.js is organized: a scene of objects, materials you
 can write yourself, and loaders. Not an editor. This repo also has
@@ -33,25 +33,25 @@ Audiocrate is the layer underneath that.
 | three.js | Audiocrate |
 |---|---|
 | `Scene` | `AudioScene` |
-| `Mesh` (geometry + material) | `Clip` (buffer + Material) |
-| `Material` / `ShaderMaterial` | `Material` / a Material with an ASL graph |
+| `Mesh` (geometry + material) | `Clip` (buffer + AudioMaterial) |
+| `Material` / `ShaderMaterial` | `AudioMaterial` / one with an ASL graph |
 | `WebGLRenderer` | `WebAudioRenderer` |
 
 The mapping is structural, not a port. `Object3D` is a transform hierarchy;
 `Track` and `Bus` are mixer nodes (volume, pan, mute, inserts). Positions
 live on `scene.spatial`. You do not call `renderer.render(scene)`: live
-playback is on the scene, and `OfflineRenderer` takes a Material graph.
+playback is on the scene, and `OfflineRenderer` takes an AudioMaterial graph.
 
 Audio also needs a transport with one scheduling origin and a tempo map.
 The audio thread is an isolated context with no imports and a hard deadline,
 which is why kernels and measurement work the way they do.
 
-## Materials
+## AudioMaterials
 
 ```ts
-import { Material, param, filter, osc, env } from 'audiocrate';
+import { AudioMaterial, param, filter, osc, env } from 'audiocrate';
 
-const bell = new Material({
+const bell = new AudioMaterial({
   name: 'Bell',
   params: {
     pitch: param.range(50, 2000, { default: 440, unit: 'Hz' }),
@@ -71,11 +71,11 @@ A parameter schema and a signal graph, both plain data. From that:
 - **Real-time playback**, compiled into one AudioWorklet per voice, not one
   `AudioNode` per operation.
 - **Offline rendering** through the same interpreter.
-- **An inspector model.** `describeMaterial(bell)` returns the faders,
+- **An inspector model.** `describeAudioMaterial(bell)` returns the faders,
   ranges, and units. Audiocrate does not draw them.
 - **Serialization.** The graph is JSON.
 
-A new Material does not require a change inside this library.
+A new AudioMaterial does not require a change inside this library.
 
 ## Rendering
 
@@ -174,16 +174,16 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 |---|---|
 | [Philosophy](docs/philosophy.md) | Design rules and scope |
 | [Scenes and time](docs/scene.md) | Scenes, tracks, clips, transport, tempo maps |
-| [Materials](docs/materials.md) | Parameters, graphs, plugins, assets |
+| [AudioMaterials](docs/materials.md) | Parameters, graphs, plugins, assets |
 | [The Audio Shader Language](docs/asl.md) | Nodes, graphs, live inputs, channels, measurement taps |
 | [Kernels](docs/kernels.md) | Block-shaped DSP, portable wasm modules |
-| [Component library](docs/components.md) | Shipped Materials and nodes |
+| [Component library](docs/components.md) | Shipped AudioMaterials and nodes |
 | [Theory](docs/theory.md) | Notes, scales, chords, keys, audio to notes |
 | [Spatial](docs/spatial.md) | Placing sound in 3D, listener rotation, binaural decode |
 | [Collaboration](docs/collab.md) | Session state, discrete edits, the shared clock, and host-local devices |
 | [Hooks](docs/hooks.md) | Extending a host without forking Audiocrate |
 | [Conformance](docs/conformance.md) | How cross-implementation agreement is enforced |
-| [Editor](editor/README.md) | Example Material graph editor (not published) |
+| [Editor](editor/README.md) | Example AudioMaterial graph editor (not published) |
 
 Full docs: **<https://homecrate.app/docs/crate/>**
 

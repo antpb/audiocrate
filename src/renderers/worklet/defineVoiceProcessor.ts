@@ -38,7 +38,7 @@ import { defineCrateFoaEncoder } from '../../spatial/worklet/defineFoaEncoder';
 /**
  * Kernels that belong in every crate worklet. IR is a primitive, not a
  * plugin. `wasm` is the portable kernel: not DSP of its own, but the loader
- * that lets a Material ship DSP this bundle was never built with.
+ * that lets an AudioMaterial ship DSP this bundle was never built with.
  */
 const CORE_KERNELS: KernelFactoryMap = {
   [IR_KERNEL_SLOT]: irKernelFactory,
@@ -130,7 +130,7 @@ export function defineCrateVoiceProcessor(
     private nextAnalysisTime = 0;
     /**
      * Scratch reused by `process`, because `process` runs 375 times a second
-     * per voice and a scene has one of these per Material slot. Two small
+     * per voice and a scene has one of these per AudioMaterial slot. Two small
      * objects per block per voice is not much on its own; forty-nine voices
      * making them is a steady drip of garbage onto the one thread that must
      * never pause.
@@ -227,7 +227,7 @@ export function defineCrateVoiceProcessor(
     private async loadKernel(slot: string, payload: unknown): Promise<void> {
       // A slot this build has no factory for is not automatically an error.
       // If the payload is a portable kernel (`kernels/wasmKernel.ts`) the
-      // module itself is the DSP, and a Material can name its own slot
+      // module itself is the DSP, and an AudioMaterial can name its own slot
       // without anyone rebuilding this worklet. That fallback is the whole
       // point of the portable format.
       const factory = factories[slot] ?? (isWasmKernelPayload(payload) ? wasmKernelFactory : undefined);
@@ -364,9 +364,9 @@ export function defineCrateVoiceProcessor(
       const channel0 = output?.[0];
       if (!channel0) return true;
 
-      // An effect-style Material's graph reads its upstream signal through a
+      // An effect-style AudioMaterial's graph reads its upstream signal through a
       // plain 'input' param node (same mechanism note/velocity use), so an
-      // unconnected input (a synth Material has nothing feeding this node)
+      // unconnected input (a synth AudioMaterial has nothing feeding this node)
       // just leaves it at 0 rather than needing a special-cased signal path.
       const inputChannel = inputs[0]?.[0];
       const inputRight = inputs[0]?.[1];

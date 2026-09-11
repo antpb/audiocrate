@@ -3,11 +3,11 @@ import { bakeTrackInserts } from '../../src/playback/bakeInserts';
 import { Track } from '../../src/graph/Track';
 import { Clip, type AudioBufferLike } from '../../src/graph/Clip';
 import { Time } from '../../src/Time';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import { fuzzPlugin, createFuzzMaterial } from '../../src/testing/testPlugin';
-import type { MaterialPlugin } from '../../src/registry/MaterialPlugin';
+import type { AudioMaterialPlugin } from '../../src/registry/AudioMaterialPlugin';
 
 const SR = 48000;
 
@@ -35,11 +35,11 @@ describe('bakeTrackInserts', () => {
     expect(baked.size).toBe(0);
   });
 
-  it('runs a Material with no registered plugin through its plain ASL graph', async () => {
+  it('runs an AudioMaterial with no registered plugin through its plain ASL graph', async () => {
     // The pure-ASL case: no plugin, no kernels, nothing registered. This has to
-    // keep working, because a Material that is only a graph is the simplest
+    // keep working, because an AudioMaterial that is only a graph is the simplest
     // thing crate supports and needs no registration at all.
-    const gain = new Material({
+    const gain = new AudioMaterial({
       name: 'Unity',
       params: { gain: param.range(0, 4, { default: 2 }) },
       graph: ({ input, params }) => input.mul(params.gain),
@@ -47,18 +47,18 @@ describe('bakeTrackInserts', () => {
     const track = trackWithClip(monoBuffer([0.1, -0.2, 0.3, -0.4]));
     track.materials.add(gain);
 
-    const baked = await bakeTrackInserts([track], { registry: new MaterialRegistry() });
+    const baked = await bakeTrackInserts([track], { registry: new AudioMaterialRegistry() });
     const data = baked.get(track.clips[0]!.clip.id)!.getChannelData(0);
     expect(Array.from(data)).toEqual([0.1, -0.2, 0.3, -0.4].map((s) => expect.closeTo(s * 2, 4)));
   });
 
   it('chains multiple Materials in declared order', async () => {
-    const half = new Material({
+    const half = new AudioMaterial({
       name: 'Half',
       params: { gain: param.range(0, 4, { default: 0.5 }) },
       graph: ({ input, params }) => input.mul(params.gain),
     });
-    const triple = new Material({
+    const triple = new AudioMaterial({
       name: 'Triple',
       params: { gain: param.range(0, 4, { default: 3 }) },
       graph: ({ input, params }) => input.mul(params.gain),
@@ -67,22 +67,22 @@ describe('bakeTrackInserts', () => {
     track.materials.add(half);
     track.materials.add(triple);
 
-    const baked = await bakeTrackInserts([track], { registry: new MaterialRegistry() });
+    const baked = await bakeTrackInserts([track], { registry: new AudioMaterialRegistry() });
     const data = baked.get(track.clips[0]!.clip.id)!.getChannelData(0);
     for (const sample of data) expect(sample).toBeCloseTo(1.5, 4);
   });
 
   it('hands a joint-mode plugin every channel at once, and a per-channel one each separately', async () => {
-    // The distinction crate cannot infer: whether a Material's stereo behavior
+    // The distinction crate cannot infer: whether an AudioMaterial's stereo behavior
     // is one decision (mono-summing, channel linking) or two independent ones.
     const jointCalls: number[] = [];
     const perChannelCalls: number[] = [];
 
-    const joint: MaterialPlugin = {
+    const joint: AudioMaterialPlugin = {
       ...fuzzPlugin,
       kind: 'test.joint',
       bakeMode: 'joint',
-      create: () => new Material({ name: 'Joint', kind: 'test.joint', graph: ({ input }) => input }),
+      create: () => new AudioMaterial({ name: 'Joint', kind: 'test.joint', graph: ({ input }) => input }),
       async bake(_material, channels) {
         jointCalls.push(channels.length);
         // Sum to mono and broadcast, the way a mono-summing amp does.
@@ -90,17 +90,17 @@ describe('bakeTrackInserts', () => {
         return channels.map(() => summed);
       },
     };
-    const perChannel: MaterialPlugin = {
+    const perChannel: AudioMaterialPlugin = {
       ...fuzzPlugin,
       kind: 'test.perChannel',
       bakeMode: 'per-channel',
-      create: () => new Material({ name: 'Per', kind: 'test.perChannel', graph: ({ input }) => input }),
+      create: () => new AudioMaterial({ name: 'Per', kind: 'test.perChannel', graph: ({ input }) => input }),
       async bake(_material, channels) {
         perChannelCalls.push(channels.length);
         return channels.map((c) => Float32Array.from(c, (v) => v * 2));
       },
     };
-    const registry = new MaterialRegistry().registerAll([joint, perChannel]);
+    const registry = new AudioMaterialRegistry().registerAll([joint, perChannel]);
 
     const track = trackWithClip(stereoBuffer([1, 1], [0, 0]));
     track.materials.add(joint.create());
@@ -117,7 +117,7 @@ describe('bakeTrackInserts', () => {
 
   it('forwards the host\'s kernel binaries to the plugin doing the bake', async () => {
     let seen: unknown = null;
-    const probe: MaterialPlugin = {
+    const probe: AudioMaterialPlugin = {
       ...fuzzPlugin,
       kind: 'test.probe',
       bakeMode: 'joint',
@@ -127,9 +127,9 @@ describe('bakeTrackInserts', () => {
         return [...channels];
       },
     };
-    // The Material's kind is what the registry matches, so register the probe
+    // The AudioMaterial's kind is what the registry matches, so register the probe
     // under the kind `createFuzzMaterial` actually stamps.
-    const registry = new MaterialRegistry().register({ ...probe, kind: 'test.fuzz' });
+    const registry = new AudioMaterialRegistry().register({ ...probe, kind: 'test.fuzz' });
     const track = trackWithClip(monoBuffer([1]));
     track.materials.add(createFuzzMaterial());
 
@@ -140,17 +140,17 @@ describe('bakeTrackInserts', () => {
 
   it('reuses a host-cached buffer and remembers a freshly baked one', async () => {
     let bakeCalls = 0;
-    const probe: MaterialPlugin = {
+    const probe: AudioMaterialPlugin = {
       ...fuzzPlugin,
       kind: 'test.cache',
       bakeMode: 'joint',
-      create: () => new Material({ name: 'Cache', kind: 'test.cache', graph: ({ input }) => input }),
+      create: () => new AudioMaterial({ name: 'Cache', kind: 'test.cache', graph: ({ input }) => input }),
       async bake(_m, channels) {
         bakeCalls += 1;
         return channels.map((c) => Float32Array.from(c, (v) => v * 3));
       },
     };
-    const registry = new MaterialRegistry().register(probe);
+    const registry = new AudioMaterialRegistry().register(probe);
     const track = trackWithClip(monoBuffer([1, 2]));
     track.materials.add(probe.create());
     const remembered: AudioBufferLike[] = [];
@@ -184,17 +184,17 @@ describe('bakeTrackInserts', () => {
 
   it('skipUncached leaves a miss dry instead of baking on this thread', async () => {
     let bakeCalls = 0;
-    const probe: MaterialPlugin = {
+    const probe: AudioMaterialPlugin = {
       ...fuzzPlugin,
       kind: 'test.skip',
       bakeMode: 'joint',
-      create: () => new Material({ name: 'Skip', kind: 'test.skip', graph: ({ input }) => input }),
+      create: () => new AudioMaterial({ name: 'Skip', kind: 'test.skip', graph: ({ input }) => input }),
       async bake(_m, channels) {
         bakeCalls += 1;
         return channels.map((c) => Float32Array.from(c, (v) => v * 9));
       },
     };
-    const registry = new MaterialRegistry().register(probe);
+    const registry = new AudioMaterialRegistry().register(probe);
     const track = trackWithClip(monoBuffer([1]));
     track.materials.add(probe.create());
 

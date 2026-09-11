@@ -1,6 +1,6 @@
 import { listPluginSlots, resolveProjectAssetPath } from '../host/pluginSlots';
 import { mapPluginSlot } from '../host/mapPluginSlot';
-import type { MaterialRegistry } from '../registry/MaterialRegistry';
+import type { AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
 import {
   resolveAudioPath,
   type ProjectFileData,
@@ -33,12 +33,12 @@ export interface ExportProjectOptions {
   appVersion?: string;
   exportedAt?: string;
   /**
-   * Which Material plugins to consult when deciding what files a slot
+   * Which AudioMaterial plugins to consult when deciding what files a slot
    * references. Defaults to the shared registry. A plugin that is not
    * registered contributes no assets, and its slot is still copied verbatim
    * into the exported project.
    */
-  registry?: MaterialRegistry;
+  registry?: AudioMaterialRegistry;
 }
 
 export interface ExportProjectResult {
@@ -93,7 +93,7 @@ async function readFirst(
 
 type StagedAsset = { dest: string; kind: string; filename: string; candidates: string[] };
 
-function collectPluginAssets(project: ProjectFileData, registry?: MaterialRegistry): StagedAsset[] {
+function collectPluginAssets(project: ProjectFileData, registry?: AudioMaterialRegistry): StagedAsset[] {
   const seen = new Set<string>();
   const out: StagedAsset[] = [];
   const push = (dest: string, kind: string, filename: string, extra: string[]) => {

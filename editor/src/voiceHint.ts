@@ -1,9 +1,9 @@
 import { isKeyboardKind, stealLabel } from './analogKeyboard';
 import { isNoteInlet } from './controlInputs';
 import type { PatchEditor } from './editor';
-import type { Material } from '../../src/index';
+import type { AudioMaterial } from '../../src/index';
 
-export function firstNoteTarget(editor: PatchEditor): Material | null {
+export function firstNoteTarget(editor: PatchEditor): AudioMaterial | null {
   for (const conn of editor.editor.getConnections()) {
     if (!isKeyboardKind(editor.kinds.get(conn.source) ?? '')) continue;
     if (!isNoteInlet(conn.targetInput)) continue;

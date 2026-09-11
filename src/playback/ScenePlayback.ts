@@ -3,7 +3,7 @@ import { applyClipGainAndFades } from '../clip/fades';
 import type { AudioBufferLike } from '../graph/Clip';
 import type { Bus } from '../graph/Bus';
 import type { Track } from '../graph/Track';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 import { PDC_SCHEDULE_AHEAD_SEC, pdcAudibleOriginSec } from '../host/pdc';
 import type { PlaybackPlan, PlannedClipJob } from './plan';
 import type { MidiVoiceTarget } from './MidiPlayback';
@@ -194,7 +194,7 @@ export class ScenePlayback {
         this.nodes.push(gain, panner);
         trackFaders.set(trackId, { gain: gain.gain, pan: panner.pan });
         // Post-insert, post-volume, pre-pan: the point a send would tap. Kept
-        // so a Material on another track can key off this one.
+        // so an AudioMaterial on another track can key off this one.
         trackTaps.set(trackId, gain);
         trackMixNodes.set(trackId, gain);
 
@@ -231,13 +231,13 @@ export class ScenePlayback {
       }
 
       // Second audio inputs, once every chain that could be a source exists.
-      // A Material declares where its sidechain comes from (`Material.
+      // An AudioMaterial declares where its sidechain comes from (`AudioMaterial.
       // setAudioSource`); this is the only place that knows what node that
       // actually is. Done in its own pass because the source track may sit
-      // later in the list than the Material keying off it, and may have no
+      // later in the list than the AudioMaterial keying off it, and may have no
       // clips of its own at all.
       if (liveVoices) {
-        const wireAux = (material: Material, voice: VoiceHandle): void => {
+        const wireAux = (material: AudioMaterial, voice: VoiceHandle): void => {
           for (const [port, source] of material.audioSources) {
             let tap: unknown;
             if (source.kind === 'master') {
@@ -252,7 +252,7 @@ export class ScenePlayback {
             try {
               index = voice.inputIndexFor(port);
             } catch {
-              // The Material declares a source for a port its graph does not
+              // The AudioMaterial declares a source for a port its graph does not
               // read. Skipping is right: connecting to input 0 would mix the
               // key signal into the audio.
               continue;

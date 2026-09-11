@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { env, filter, osc, uniform } from '../asl/builders';
 import { OSC_WAVE_NAMES } from './sources';
@@ -7,7 +7,7 @@ import { OSC_WAVE_NAMES } from './sources';
  * A playable subtractive voice: wave, unison, filter with envelope amount,
  * and a live amp ADSR. The full AUv3 synth stays on the `synth` kernel.
  */
-export const synthVoiceMaterial = new Material({
+export const synthVoiceMaterial = new AudioMaterial({
   name: 'SynthVoice',
   kind: 'SynthVoice',
   params: {

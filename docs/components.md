@@ -5,41 +5,41 @@ Two libraries.
 **Nodes** are the operations you write inside a graph. They compose into an
 expression and fuse into a single unit of work. See [the ASL guide](asl.md).
 
-**Materials** are complete, named, parameterised units built out of those
+**AudioMaterials** are complete, named, parameterised units built out of those
 nodes. They drop onto a track.
 
 ```ts
 import { lowpassMaterial, filter } from 'audiocrate';
 
-track.materials.add(lowpassMaterial);               // the Material
+track.materials.add(lowpassMaterial);               // the AudioMaterial
 graph: ({ input }) => filter.lowpass(input, { cutoff: 800 });   // the node
 ```
 
-Almost every Material in this document is a few lines of ASL. User-defined
-Materials sit alongside them.
+Almost every AudioMaterial in this document is a few lines of ASL. User-defined
+AudioMaterials sit alongside them.
 
 The editor palette (every `kind`, jack, range, default, and file slot) is in
 [the materials catalog](../editor/docs/materials.md). That file is generated
 from the catalog. This page is the library overview and the ASL node list.
 
-## Materials
+## AudioMaterials
 
-Every Material below is exported by name. A Material carries a `kind`, a
-parameter schema, and a graph. Pure-ASL Materials need no registration:
-adding one to a track is enough. Only Materials with files, presets,
-reported latency, or bound DSP need to be registered, and only one core
-Material has any of those.
+Every AudioMaterial below is exported by name. An AudioMaterial carries a
+`kind`, a parameter schema, and a graph. Pure-ASL AudioMaterials need no
+registration: adding one to a track is enough. Only AudioMaterials with
+files, presets, reported latency, or bound DSP need to be registered, and
+only one core AudioMaterial has any of those.
 
-Parameters listed empty means the Material has no controls. Each parameter
+Parameters listed empty means the AudioMaterial has no controls. Each parameter
 also declares what kind of control it wants, which a host reads through
-`describeMaterial`; the tables below mark the ones that are not plain
+`describeAudioMaterial`; the tables below mark the ones that are not plain
 faders.
 
 ### Sources
 
 Note-driven or free-running. These read no input.
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `oscillatorMaterial` | `type`, `width`, `octave`, `detune`, `gain` | Polyphonic note-driven oscillator with an amplitude envelope |
 | `toneMaterial` | `freq`, `gain` | Free-running sine. Sounds on Play without a gate |
@@ -51,7 +51,7 @@ Note-driven or free-running. These read no input.
 
 ### Filters
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `lowpassMaterial` | `cutoff`, `q` | |
 | `highpassMaterial` | `cutoff`, `q` | |
@@ -78,7 +78,7 @@ lowpass and a static lowpass use different implementations.
 
 ### Nonlinear
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `softClipMaterial` | `drive` | Smooth saturation |
 | `hardClipMaterial` | `drive` | Abrupt ceiling |
@@ -92,7 +92,7 @@ lowpass and a static lowpass use different implementations.
 
 ### Dynamics
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `compressorMaterial` | `threshold`, `ratio`, `attack`, `release`, `makeup`, `mix` | Mix at 0 is dry |
 | `limiterMaterial` | `threshold`, `attack`, `release` | |
@@ -103,7 +103,7 @@ lowpass and a static lowpass use different implementations.
 
 ### Time
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `delayMaterial` | `timeSec`, `feedback`, `mix` | Mix at 0 is dry |
 | `reverbMaterial` | `size`, `decay`, `damp`, `mix` | Comb tank. Mix at 0 is dry |
@@ -114,14 +114,15 @@ lowpass and a static lowpass use different implementations.
 | `syncedDelayMaterial` | `division` (menu), `feedback`, `mix` | Delay time is a note length, so it survives a tempo change |
 | `irMaterial` | `mix`, `gain` | Convolution. `createIrMaterial`, `setIrAsset`, `irLatencySamples` |
 
-`irMaterial` is the one core Material with a plugin (`irPlugin`), because it
-loads a file and reports latency. `registerCoreMaterials()` registers it.
+`irMaterial` is the one core AudioMaterial with a plugin (`irPlugin`),
+because it loads a file and reports latency. `registerCoreMaterials()`
+registers it.
 
 ### Control
 
 None of these produce audio. They produce numbers that drive things that do.
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `controlMaterial` | `value` | A constant, so an automation lane has something to write to |
 | `offsetMaterial` | `amount` | Adds a constant |
@@ -173,7 +174,7 @@ or `widthSec`, whichever is later.
 
 ### Routing
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `gainMaterial` | `gain` | |
 | `invertMaterial` | | Flips sign |
@@ -187,7 +188,7 @@ or `widthSec`, whichever is later.
 
 Each of these is one expression over the two channel values.
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `monoSumMaterial` | | Fold to mono, at the level a correlated pair started at |
 | `monoLeftMaterial` | | Left to both sides |
@@ -207,7 +208,7 @@ Each of these is one expression over the two channel values.
 These read a second live input. Declare where it comes from with
 `material.setAudioSource('sidechain', ...)`; see [the ASL guide](asl.md).
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `sidechainCompressorMaterial` | `threshold`, `ratio`, `attack`, `release` | Compresses one signal by another's level |
 | `duckerMaterial` | `amount`, `attack`, `release` | One control |
@@ -218,14 +219,14 @@ These read a second live input. Declare where it comes from with
 | `inputSelectMaterial` | `which` (switch) | Hard switch between two live inputs |
 
 Each has a factory (`createDuckerMaterial` and so on) because a sidechain
-Material holds a routing declaration, and two duckers on two tracks need two
-instances rather than one shared object.
+AudioMaterial holds a routing declaration, and two duckers on two tracks
+need two instances rather than one shared object.
 
 ### Measurement
 
 These pass audio through unchanged and report what went by.
 
-| Material | Parameters | |
+| AudioMaterial | Parameters | |
 |---|---|---|
 | `meterMaterial` | | Peak and level, also as CV (`peak`, `rms`). `createMeterMaterial`, `METER_TAP` |
 | `scopeMaterial` | | A window of samples, plus `peak` / `rms` CV. `createScopeMaterial`, `SCOPE_TAP` |
@@ -381,7 +382,7 @@ transport.division(index, { divisions })
 `beatUnit`. `barBeats` / `normalizeBeatUnit` are that conversion.
 `SYNC_DIVISIONS` names note lengths in quarter-note beats;
 `COMMON_DIVISION_NAMES` and `COMMON_DIVISION_BEATS` are the menu and lookup
-table a synced Material pairs. See [the ASL guide](asl.md).
+table a synced AudioMaterial pairs. See [the ASL guide](asl.md).
 
 ### Measurement and kernels
 
@@ -398,14 +399,14 @@ slots.
 ## What is missing
 
 - **A tempo-synced reverb, chorus or phaser.** The transport nodes exist and
-  the four synced Materials are examples rather than a complete set. There
+  the four synced AudioMaterials are examples rather than a complete set. There
   is a free-running `reverbMaterial` and a Space Reverb kernel.
-- **A published inspector.** Every Material here describes its own controls
-  through `describeMaterial`. Audiocrate does not yet ship the component that
-  draws them.
+- **A published inspector.** Every AudioMaterial here describes its own
+  controls through `describeAudioMaterial`. Audiocrate does not yet ship the
+  component that draws them.
 - **Parameter kinds are declared but not everywhere they could be.** The
   core library uses menus, switches, and steppers where those match the
   control. A plugin package's forty-parameter tree is still mostly ranges.
-- **Multi-output.** A Material has one output, so a splitter is a graph
+- **Multi-output.** An AudioMaterial has one output, so a splitter is a graph
   shape rather than a node. `stereoMergeMaterial` shows the merge direction
   works.

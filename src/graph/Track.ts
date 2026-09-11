@@ -1,6 +1,6 @@
 import { AudioNode3, type AudioNode3Options } from './AudioNode3';
 import type { Clip } from './Clip';
-import type { Material } from './Material';
+import type { AudioMaterial } from './AudioMaterial';
 import type { MidiClip } from './MidiClip';
 import type { Time } from '../Time';
 
@@ -19,13 +19,13 @@ export type TrackOptions = AudioNode3Options;
 
 export class Track extends AudioNode3 {
   /**
-   * A note-driven source Material, distinct from `materials` (the ordered
+   * A note-driven source AudioMaterial, distinct from `materials` (the ordered
    * insert chain, which processes `input`). An instrument ignores `input`
    * and generates its own signal from MIDI. Chaining one into `materials`
    * would be structurally wrong: nothing upstream feeds it audio. One
    * instrument per track.
    */
-  instrument: Material | null = null;
+  instrument: AudioMaterial | null = null;
 
   /**
    * This track's index in the hosted project it was loaded from, set by

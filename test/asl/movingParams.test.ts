@@ -21,7 +21,7 @@
 import { describe, expect, it } from 'vitest';
 import { compileVoice } from '../../src/asl/compile';
 import { combMaterial, delayMaterial } from '../../src/materials';
-import type { Material } from '../../src/graph/Material';
+import type { AudioMaterial } from '../../src/graph/AudioMaterial';
 
 const SR = 48000;
 /** The worklet's render quantum. Params land between blocks, never mid-block. */
@@ -36,7 +36,7 @@ const BLOCKS_PER_STEP = Math.round(SR / BLOCK / 60);
  */
 const CLICK = 0.05;
 
-function render(material: Material, param: string, from: number, to: number, move: boolean): Float32Array {
+function render(material: AudioMaterial, param: string, from: number, to: number, move: boolean): Float32Array {
   const voice = compileVoice(material.graph);
   const state = voice.createState();
   for (const [key, value] of Object.entries(material.snapshotParams())) state.params[key] = value;

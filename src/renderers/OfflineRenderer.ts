@@ -14,7 +14,7 @@ export interface OfflineRenderOptions {
   /** Seconds into the render to call noteOff; omit to hold the note for the whole duration. */
   noteOffAt?: number;
   /**
-   * Per-sample input signal for an effect Material's `input` param node,
+   * Per-sample input signal for an effect AudioMaterial's `input` param node,
    * mirroring how the real-time worklet feeds a connected AudioNode's input
    * per sample (renderers/worklet/crate-voice-processor.ts). Ignored by
    * graphs that never read `input`.

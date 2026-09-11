@@ -48,8 +48,8 @@ try {
   writeFileSync(
     join(workspace, 'consumer.mjs'),
     `import {
-  AudioScene, Track, Material, param, filter, osc, env, Time,
-  OfflineRenderer, describeMaterial, crateWorkletUrls, CRATE_WORKLET_SOURCE,
+  AudioScene, Track, AudioMaterial, param, filter, osc, env, Time,
+  OfflineRenderer, describeAudioMaterial, crateWorkletUrls, CRATE_WORKLET_SOURCE,
 } from 'audiocrate';
 import { detectChord, noteName } from 'audiocrate/theory';
 import { encodeWavFloat32 } from 'audiocrate/testing';
@@ -57,7 +57,7 @@ import { encodeWavFloat32 } from 'audiocrate/testing';
 let bad = 0;
 const check = (pass, msg) => { console.log(\`   \${pass ? 'ok  ' : 'FAIL'} \${msg}\`); if (!pass) bad++; };
 
-const bell = new Material({
+const bell = new AudioMaterial({
   name: 'Bell',
   params: {
     pitch: param.range(50, 2000, { default: 440, unit: 'Hz' }),
@@ -70,11 +70,11 @@ const bell = new Material({
       { cutoff: params.cutoff },
     ),
 });
-console.log('1. a Material defined entirely in userland');
+console.log('1. an AudioMaterial defined entirely in userland');
 check(bell.name === 'Bell', \`"\${bell.name}" with params [\${Object.keys(bell.snapshotParams())}]\`);
 
 console.log('2. it describes its own control panel');
-const panel = describeMaterial(bell);
+const panel = describeAudioMaterial(bell);
 check(panel.controls.length === 2, panel.controls.map((c) => \`\${c.label} (\${c.kind})\`).join(', '));
 
 console.log('3. it renders real audio offline');
@@ -117,8 +117,8 @@ process.exit(bad ? 1 : 0);
   process.stdout.write('\nbundling a consumer app with esbuild (no plugins)\n');
   writeFileSync(
     join(workspace, 'app.mjs'),
-    "import { WebAudioRenderer, Material, osc } from 'audiocrate';\n" +
-      "export const m = new Material({ name: 'x', params: {}, graph: () => osc({ freq: 440, type: 'saw' }) });\n" +
+    "import { WebAudioRenderer, AudioMaterial, osc } from 'audiocrate';\n" +
+      "export const m = new AudioMaterial({ name: 'x', params: {}, graph: () => osc({ freq: 440, type: 'saw' }) });\n" +
       'export const make = (ctx) => new WebAudioRenderer(ctx);\n',
   );
   run('npx', ['--yes', 'esbuild@0.25.12', 'app.mjs', '--bundle', '--format=esm',

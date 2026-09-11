@@ -1,4 +1,4 @@
-import { irAsset, sampleAsset, wavetableAsset, type AudioAssetData, type Material } from '../../src/index';
+import { irAsset, sampleAsset, wavetableAsset, type AudioAssetData, type AudioMaterial } from '../../src/index';
 import { ampNamAsset, ampNamAssetR } from './host/ampAssets';
 import {
   applyIr,
@@ -109,7 +109,7 @@ function unpackIr(stored: StoredIr): AudioAssetData {
   };
 }
 
-export async function persistNodeAssets(nodeId: string, material: Material, kind: string): Promise<void> {
+export async function persistNodeAssets(nodeId: string, material: AudioMaterial, kind: string): Promise<void> {
   const nam = namFilename(material);
   const namR = namFilenameR(material);
   const irName = irFilename(material, kind);

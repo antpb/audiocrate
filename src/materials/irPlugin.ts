@@ -1,6 +1,6 @@
 import type { AssetRequest } from '../graph/assets';
-import type { Material } from '../graph/Material';
-import type { MaterialPlugin } from '../registry/MaterialPlugin';
+import type { AudioMaterial } from '../graph/AudioMaterial';
+import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
 import { createIrMaterial, irAsset, irLatencySamples, IR_ASSET } from './ir';
 import { IR_KERNEL_SLOT, type IrKernelMessage, type IrKernelPayload } from '../renderers/kernels/irKernel';
@@ -16,10 +16,10 @@ export function setLiveIrPartitionSize(frames: number): void {
 /**
  * Standalone convolution. Space simulation is a general audio operation,
  * not an amp feature. The kernel is JS (no WASM) and ships in every crate
- * worklet. A hop-aligned process is causal, so this Material reports no
+ * worklet. A hop-aligned process is causal, so this AudioMaterial reports no
  * extra mix delay. The amp cabinet still reports 512 from its WASM.
  */
-export const irPlugin: MaterialPlugin<{ filename?: string }> = {
+export const irPlugin: AudioMaterialPlugin<{ filename?: string }> = {
   kind: 'ir',
   label: 'IR',
   role: 'insert',
@@ -34,7 +34,7 @@ export const irPlugin: MaterialPlugin<{ filename?: string }> = {
 
   latencySamples: irLatencySamples,
 
-  async bindLiveVoice(voice: VoiceHandle, material: Material) {
+  async bindLiveVoice(voice: VoiceHandle, material: AudioMaterial) {
     const ir = irAsset(material);
     const payload: IrKernelPayload = ir ? { samples: ir.samples, partSize: livePartSize } : {};
     await voice.loadKernel(IR_KERNEL_SLOT, payload);

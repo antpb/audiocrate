@@ -23,7 +23,7 @@ function toNode(value: ASLValueLike): ASLNode {
  * Note lengths in beats, where one beat is a quarter note. Dotted is one and
  * a half, a triplet is two thirds.
  *
- * Exported because a Material's division menu and the table its graph looks
+ * Exported because an AudioMaterial's division menu and the table its graph looks
  * up have to agree, and the way to guarantee that is for both to come from
  * here rather than from two hand-typed lists.
  */

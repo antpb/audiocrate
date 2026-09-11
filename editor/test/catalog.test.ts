@@ -112,11 +112,11 @@ import {
   tunerMaterial,
   waveshapeMaterial,
   wavetableMaterial,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import { catalog, catalogEntry, categories, coreProtos } from '../src/catalog';
 
-const ASL_PROTOS: Material[] = [
+const ASL_PROTOS: AudioMaterial[] = [
   oscillatorMaterial,
   toneMaterial,
   noiseMaterial,

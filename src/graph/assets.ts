@@ -1,5 +1,5 @@
 /**
- * What a Material carries besides its graph and its params: the files a
+ * What an AudioMaterial carries besides its graph and its params: the files a
  * preset references, already decoded.
  *
  * Crate core knows two decoded shapes, text and audio: those are the two
@@ -55,7 +55,7 @@ export type AssetDecodeKind = 'text' | 'audio';
  * host's path resolver.
  */
 export interface AssetRequest {
-  /** Key to store the decoded asset under on the Material. */
+  /** Key to store the decoded asset under on the AudioMaterial. */
   key: string;
   library: string;
   /**

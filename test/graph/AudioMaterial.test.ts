@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
 import { compileVoice } from '../../src/asl/compile';
 import { uniform } from '../../src/asl/builders';
@@ -30,11 +30,11 @@ describe('param.range', () => {
   });
 });
 
-describe('Material param schema', () => {
+describe('AudioMaterial param schema', () => {
   it('rejects an automatable entry that references an undeclared param', () => {
     expect(
       () =>
-        new Material({
+        new AudioMaterial({
           name: 'Bad',
           params: { gain: param.range(0, 1, { default: 0.5 }) },
           automatable: ['gain', 'nope'],
@@ -44,7 +44,7 @@ describe('Material param schema', () => {
   });
 
   it('seeds param values from each descriptor default', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Gain',
       params: { gain: param.range(0, 2, { default: 1 }) },
       graph: ({ params }) => params.gain,
@@ -53,7 +53,7 @@ describe('Material param schema', () => {
   });
 
   it('setParam validates against the param range', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Gain',
       params: { gain: param.range(0, 2, { default: 1 }) },
       graph: ({ params }) => params.gain,
@@ -65,12 +65,12 @@ describe('Material param schema', () => {
   });
 
   it('getParam/setParam reject an undeclared param name', () => {
-    const material = new Material({ name: 'Empty', graph: () => uniform(0) });
+    const material = new AudioMaterial({ name: 'Empty', graph: () => uniform(0) });
     expect(() => material.getParam('missing')).toThrow(RangeError);
   });
 
   it('snapshotParams returns a plain, independent copy', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Gain',
       params: { gain: param.range(0, 2, { default: 1 }) },
       graph: ({ params }) => params.gain,
@@ -82,13 +82,13 @@ describe('Material param schema', () => {
   });
 
   it('rejects a graph builder that does not return an ASLValue', () => {
-    expect(() => new Material({ name: 'Bad', graph: () => 5 as never })).toThrow(TypeError);
+    expect(() => new AudioMaterial({ name: 'Bad', graph: () => 5 as never })).toThrow(TypeError);
   });
 });
 
-describe('Material graph wiring', () => {
+describe('AudioMaterial graph wiring', () => {
   it('every declared param resolves to a real, independently-addressable node', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Sum',
       params: {
         a: param.range(0, 10, { default: 2 }),
@@ -104,7 +104,7 @@ describe('Material graph wiring', () => {
   });
 
   it('a graph that never reads a declared param still compiles (param exists, just unused)', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Ignoring',
       params: { unused: param.range(0, 1, { default: 0.5 }) },
       graph: () => uniform(42),
@@ -116,7 +116,7 @@ describe('Material graph wiring', () => {
   });
 
   it('duplicate() is a separate instance that keeps param values', () => {
-    const material = new Material({
+    const material = new AudioMaterial({
       name: 'Gain',
       kind: 'gain',
       params: { gain: param.range(0, 4, { default: 1 }) },

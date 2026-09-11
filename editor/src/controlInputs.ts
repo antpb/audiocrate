@@ -5,7 +5,7 @@ import {
   isAnalysisKind,
   isLooperKind,
   isTransportKind,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import { isControlJack } from './analogKeyboard';
 
@@ -21,7 +21,7 @@ const CONTROL_PARAMS = new Set(['note', 'gate', 'velocity']);
 const MAX_CV_JACKS = 10;
 
 /** note/gate/velocity on instrument graphs, plus automatable params as CV. */
-export function controlInputs(material: Material): string[] {
+export function controlInputs(material: AudioMaterial): string[] {
   const names = new Set<string>();
   walk(material.graph.output as WalkNode, names, new Set());
   if (material.polyphony > 1 || material.kind === 'synth' || material.kind === 'grain') {
@@ -32,19 +32,19 @@ export function controlInputs(material: Material): string[] {
   return ['note', 'gate', 'velocity'].filter((name) => names.has(name));
 }
 
-export function cvInputs(material: Material): string[] {
+export function cvInputs(material: AudioMaterial): string[] {
   const taken = new Set([...material.audioInputs, ...controlInputs(material)]);
   return material.automatable.filter((name) => !taken.has(name)).slice(0, MAX_CV_JACKS);
 }
 
-export function nodeInputs(material: Material): string[] {
+export function nodeInputs(material: AudioMaterial): string[] {
   const audio = [...material.audioInputs];
   const extra = [...controlInputs(material), ...cvInputs(material)].filter((name) => !audio.includes(name));
   return [...audio, ...extra];
 }
 
 /** Modulators show a cv jack so cutoff cables are not mistaken for audio mix. */
-export function nodeOutputs(material: Material): string[] {
+export function nodeOutputs(material: AudioMaterial): string[] {
   if (isTransportKind(material.kind)) return [...TRANSPORT_OUTPUTS];
   if (isAnalysisKind(material.kind)) return [...analysisOutputs(material.kind)];
   if (isLooperKind(material.kind)) return [...LOOPER_OUTPUTS];
@@ -52,7 +52,7 @@ export function nodeOutputs(material: Material): string[] {
 }
 
 /** Analyser keys for a live node. Always include `audio` so scopes and old cables still resolve. */
-export function tapOutputNames(material: Material | undefined): string[] {
+export function tapOutputNames(material: AudioMaterial | undefined): string[] {
   if (material && isTransportKind(material.kind)) return [...TRANSPORT_OUTPUTS];
   if (material && isAnalysisKind(material.kind)) return [...analysisOutputs(material.kind)];
   if (material && isLooperKind(material.kind)) return [...LOOPER_OUTPUTS];
@@ -61,7 +61,7 @@ export function tapOutputNames(material: Material | undefined): string[] {
   return [...names];
 }
 
-export function isAudioInlet(material: Material, name: string): boolean {
+export function isAudioInlet(material: AudioMaterial, name: string): boolean {
   return material.audioInputs.includes(name);
 }
 
@@ -69,7 +69,7 @@ export function isNoteInlet(name: string): boolean {
   return isControlJack(name) && (name === 'note' || name === 'gate' || name === 'velocity' || name === 'trig');
 }
 
-export function isCvInlet(material: Material, name: string): boolean {
+export function isCvInlet(material: AudioMaterial, name: string): boolean {
   return material.automatable.includes(name) && !isAudioInlet(material, name) && !isNoteInlet(name);
 }
 

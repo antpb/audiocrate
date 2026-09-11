@@ -19,7 +19,7 @@ import {
   sidechainGateMaterial,
 } from '../../src/materials/sidechain';
 import { compileVoice } from '../../src/asl/compile';
-import type { Material } from '../../src/graph/Material';
+import type { AudioMaterial } from '../../src/graph/AudioMaterial';
 
 const SR = 48000;
 
@@ -30,8 +30,8 @@ interface RenderOptions {
   params?: Record<string, number>;
 }
 
-/** Renders a Material as a stereo insert, the way a track actually runs one. */
-function renderStereo(material: Material, options: RenderOptions): { left: Float32Array; right: Float32Array } {
+/** Renders an AudioMaterial as a stereo insert, the way a track actually runs one. */
+function renderStereo(material: AudioMaterial, options: RenderOptions): { left: Float32Array; right: Float32Array } {
   const voice = compileVoice(material.graph);
   const state = voice.createState();
   voice.noteOn(state, { ...material.snapshotParams(), ...options.params });

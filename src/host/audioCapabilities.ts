@@ -19,7 +19,7 @@
  * ## The offline path always works
  *
  * `OfflineRenderer` runs the same interpreter with no `AudioContext` at all,
- * so rendering a Material to samples is available on every runtime including
+ * so rendering an AudioMaterial to samples is available on every runtime including
  * ones with no audio output. That is why `offlineRender` is not a probe
  * result: it is a constant, and saying so is the point.
  */
@@ -47,7 +47,7 @@ export interface AudioCapabilities {
 }
 
 export interface CrateFeatureSupport {
-  /** `WebAudioRenderer`: one worklet voice per Material. */
+  /** `WebAudioRenderer`: one worklet voice per AudioMaterial. */
   realtimeVoices: boolean;
   /** `SpatialBus` with `decode: 'binaural'`. */
   spatialBinaural: boolean;

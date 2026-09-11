@@ -38,7 +38,7 @@ export class ASLValue {
    * Only valid on an `env.adsr()` node: binds the velocity that scales the
    * envelope's peak. The envelope's own attack/release timing is driven by
    * the voice's gate (`CompiledVoice.noteOn`/`noteOff`, compile.ts), not by
-   * this call, matching the spec's "a Material declares its own polyphony"
+   * this call, matching the spec's "an AudioMaterial declares its own polyphony"
    * framing, where gating is a voice-runtime concern, not a graph-authoring one.
    */
   trigger(velocity: ASLValueLike): ASLValue {

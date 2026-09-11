@@ -1,6 +1,6 @@
 /**
  * `param.range(-18, 18, { default: 0, unit: 'dB' })`.
- * Declared data, not a value itself, so a Material's inspector model
+ * Declared data, not a value itself, so an AudioMaterial's inspector model
  * can be generated from it rather than hand-built.
  *
  * **Every parameter is one number.** An enumeration is an index, a toggle is

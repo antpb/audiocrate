@@ -68,7 +68,7 @@ export function asPresetFilename(value: unknown): string | undefined {
 
 /**
  * Maps a decoded preset's `param_<address>` entries onto named params, using
- * the addresses a Material declared via `param.range(..., { address })`.
+ * the addresses an AudioMaterial declared via `param.range(..., { address })`.
  *
  * This is the whole reason `address` is on a param descriptor: an AU or VST
  * saves state by numeric address, and a plugin should not need a second

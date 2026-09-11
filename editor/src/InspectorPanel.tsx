@@ -2,10 +2,10 @@ import {
   LOOPER_LENGTH_PRESETS,
   TIME_SIG_PRESETS,
   denormalizeParam,
-  describeMaterial,
+  describeAudioMaterial,
   isTransportKind,
   noteName,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import { AnalysisView } from './AnalysisView';
 import { isAnalysisKind } from './analysisKinds';
@@ -31,7 +31,7 @@ import { ControlGroups } from './ControlGroups';
 import { WAVESHAPE_HINTS } from './waveshapeCurves';
 
 interface InspectorPanelProps {
-  material: Material | null;
+  material: AudioMaterial | null;
   kind: string | null;
   snapshot: AnalogSnapshot;
   masterMonitor: boolean;
@@ -175,7 +175,7 @@ export function InspectorPanel({
         </header>
         <p className="hint">
           Analog jacks (cv, gate, trig, velocity) are last-note, one CV and one gate. note/gate cables into a
-          Material allocate voices: one slot per held key, up to that Material&apos;s polyphony, stealing{' '}
+          AudioMaterial allocate voices: one slot per held key, up to that AudioMaterial&apos;s polyphony, stealing{' '}
           {snapshot.steal}.
         </p>
         <VoiceStrip snapshot={snapshot} />
@@ -194,7 +194,7 @@ export function InspectorPanel({
       </aside>
     );
   }
-  const model = describeMaterial(material);
+  const model = describeAudioMaterial(material);
   const analysisKind = kind != null && isAnalysisKind(kind);
   return (
     <aside className="inspector">

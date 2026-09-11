@@ -1283,7 +1283,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         }
         const input = evalNode(node.inputs.input!, state, sampleRate);
         // No bound kernel, or a kernel with no per-sample path: pass through
-        // rather than emit silence, so a Material whose asset never loaded
+        // rather than emit silence, so an AudioMaterial whose asset never loaded
         // still sounds like the rest of its graph.
         result = processor?.processSeamSample ? processor.processSeamSample(input) : input;
         break;

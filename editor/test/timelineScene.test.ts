@@ -366,7 +366,7 @@ describe('fillTimelineScene builds from the document', () => {
       expect(track.muted).toBe(planned.muted);
       // The placement and the region, from the document, on the scene's own
       // clips. Every field asserted here is one the scene could otherwise have
-      // reached around the plan for, since the editor still has the Material.
+      // reached around the plan for, since the editor still has the AudioMaterial.
       expect(track.clips.map((entry) => entry.at.toSeconds({ bpm: plan.transport.bpm, ppqn: 960 }))).toEqual(
         planned.clips.map((clip) => clip.offsetSec),
       );

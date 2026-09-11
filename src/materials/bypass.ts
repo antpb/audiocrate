@@ -1,6 +1,6 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 
-export const bypassMaterial = new Material({
+export const bypassMaterial = new AudioMaterial({
   name: 'Bypass',
   kind: 'bypass',
   graph: ({ input }) => input,

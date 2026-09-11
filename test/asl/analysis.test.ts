@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { compileVoice } from '../../src/asl/compile';
 import { tap } from '../../src/asl/analysis';
 import { kernel } from '../../src/asl/builders';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { fftMagnitude } from '../../src/dsp/fft';
 import { yinPitch } from '../../src/dsp/yin';
 import type { KernelProcessor } from '../../src/renderers/kernel';
@@ -20,7 +20,7 @@ function sine(frames: number, hz: number, amplitude = 1): Float32Array {
   return out;
 }
 
-const metered = new Material({
+const metered = new AudioMaterial({
   name: 'Metered',
   kind: 'metered',
   params: {},
@@ -73,7 +73,7 @@ describe('tap.meter', () => {
     // A seam graph walks the whole tree twice per sample, once to collect
     // and once to apply. A tap that recorded on both would report an RMS
     // that is correct only by accident.
-    const seamed = new Material({
+    const seamed = new AudioMaterial({
       name: 'Seamed',
       kind: 'seamed',
       params: {},
@@ -95,7 +95,7 @@ describe('tap.meter', () => {
   it('records the left channel once on a stereo graph', () => {
     // Recording on both lanes would make a meter mean something different
     // depending on whether the graph happened to be stereo.
-    const stereo = new Material({
+    const stereo = new AudioMaterial({
       name: 'StereoMetered',
       kind: 'stereometered',
       params: {},
@@ -115,7 +115,7 @@ describe('tap.meter', () => {
 });
 
 describe('tap.capture', () => {
-  const captured = new Material({
+  const captured = new AudioMaterial({
     name: 'Captured',
     kind: 'captured',
     params: {},
@@ -151,7 +151,7 @@ describe('tap.capture', () => {
     // The point of capturing rather than analysing on the audio thread: YIN
     // over a 2048 window is tens of millions of operations a second at
     // display rates, and the audio thread is the one place that cannot.
-    const scope = new Material({
+    const scope = new AudioMaterial({
       name: 'Scope',
       kind: 'scopetest',
       params: {},
@@ -185,7 +185,7 @@ describe('tap.capture', () => {
 
 describe('a graph with no taps', () => {
   it('reports nothing at all rather than an empty frame', () => {
-    const plain = new Material({
+    const plain = new AudioMaterial({
       name: 'Plain',
       kind: 'plain',
       params: {},
@@ -197,7 +197,7 @@ describe('a graph with no taps', () => {
   });
 
   it('lists the tap ids a graph does record under', () => {
-    const both = new Material({
+    const both = new AudioMaterial({
       name: 'Both',
       kind: 'both',
       params: {},

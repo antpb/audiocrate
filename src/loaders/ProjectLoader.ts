@@ -9,9 +9,9 @@ import { decodeAudioFile } from './AudioLoader';
 import { listPluginSlots, resolveProjectAssetPath } from '../host/pluginSlots';
 import { mapPluginSlot } from '../host/mapPluginSlot';
 import { HOSTED_MASTER_TRACK_INDEX } from '../automation/hosted';
-import { materialRegistry, type MaterialRegistry } from '../registry/MaterialRegistry';
+import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
 import type { AssetRequest, AudioAssetData, TextAssetData } from '../graph/assets';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 
 /**
  * Reads a homecrate project archive. Every interface here is a partial
@@ -259,7 +259,7 @@ export function resolveAudioPath(uri: string): string {
  * There used to be one of these per plugin, hand-written, in this file. There
  * is now one, and it does not know what a `.nam` file is. A plugin declares
  * its files through `assetRequests(preset)` and gets them back on the
- * Material; crate's only opinion is where an archive keeps them
+ * AudioMaterial; crate's only opinion is where an archive keeps them
  * (`assets/<library>/<basename>`) and how to turn bytes into text or audio.
  *
  * A required asset missing from the export throws, same as a clip's missing
@@ -267,7 +267,7 @@ export function resolveAudioPath(uri: string): string {
  * request that is missing is skipped.
  */
 async function hydratePluginAssets(
-  material: Material,
+  material: AudioMaterial,
   requests: readonly AssetRequest[],
   readFile: (relativePath: string) => Promise<Uint8Array>,
 ): Promise<void> {
@@ -341,12 +341,12 @@ export interface LoadProjectSceneOptions {
   /** Injectable `AudioScene` factory, matching this package's usual DI pattern (`AudioContextLike`, `OfflineRenderer`). */
   createScene?: () => AudioScene;
   /**
-   * Which Material plugins this load knows about. Defaults to the shared
+   * Which AudioMaterial plugins this load knows about. Defaults to the shared
    * registry. A project referencing a plugin that is not registered keeps
    * every byte of that slot on `parsed.project`; it simply does not enter the
    * graph, which is the same treatment any unknown AUv3 has always had.
    */
-  registry?: MaterialRegistry;
+  registry?: AudioMaterialRegistry;
 }
 
 /**
@@ -356,10 +356,10 @@ export interface LoadProjectSceneOptions {
  * way it is a mixer channel with its own volume/pan/mute) with a
  * decoded `Clip` per audio-bearing clip when `readFile` is supplied.
  *
- * Plugin slots are mapped through the Material registry: a slot whose native
- * plugin a registered `MaterialPlugin` claims becomes that plugin's Material,
+ * Plugin slots are mapped through the AudioMaterial registry: a slot whose native
+ * plugin a registered `AudioMaterialPlugin` claims becomes that plugin's AudioMaterial,
  * with its preset params applied and, when `readFile` is supplied, every file
- * it declares hydrated onto the Material. An `instrument`-role plugin lands on
+ * it declares hydrated onto the AudioMaterial. An `instrument`-role plugin lands on
  * `track.instrument`; an `insert` lands on the ordered `materials` chain.
  * Which plugins those are is the application's decision, not this loader's.
  * Still passthrough: unregistered plugins, automation lanes, key/scale,
@@ -371,10 +371,10 @@ export interface LoadProjectSceneOptions {
 export async function loadProjectScene(parsed: ParsedProject, options: LoadProjectSceneOptions = {}): Promise<AudioScene> {
   const scene = (options.createScene ?? (() => new AudioScene()))();
   const { project } = parsed;
-  const registry = options.registry ?? materialRegistry;
+  const registry = options.registry ?? audioMaterialRegistry;
 
   /**
-   * One slot, whichever plugin owns it. Returns the Material so the caller
+   * One slot, whichever plugin owns it. Returns the AudioMaterial so the caller
    * can decide where it belongs (a bus has no `instrument` slot).
    *
    * Latency is read here, before hydration, on purpose: a plugin reports it
@@ -386,7 +386,7 @@ export async function loadProjectScene(parsed: ParsedProject, options: LoadProje
     slot: { plugin?: unknown; savedPresetData?: string | null } | null | undefined,
     trackIndex: number,
     slotIndex: number,
-  ): Promise<{ material: Material; role: 'insert' | 'instrument'; latency: number } | null> => {
+  ): Promise<{ material: AudioMaterial; role: 'insert' | 'instrument'; latency: number } | null> => {
     const mapped = mapPluginSlot(
       slot?.plugin as Parameters<typeof mapPluginSlot>[0],
       slot?.savedPresetData,

@@ -8,7 +8,7 @@ import {
   paramNameForAddress,
   quantizeParam,
 } from '../../src/graph/param';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { uniform } from '../../src/asl/builders';
 
 describe('param.range', () => {
@@ -169,8 +169,8 @@ describe('paramNameForAddress', () => {
   });
 });
 
-describe('Material with non-range params', () => {
-  const material = new Material({
+describe('AudioMaterial with non-range params', () => {
+  const material = new AudioMaterial({
     name: 'Shaper',
     params: {
       shape: param.enum(['sine', 'saw', 'square'], { default: 'saw' }),

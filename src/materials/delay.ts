@@ -1,8 +1,8 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { delay } from '../asl/builders';
 
-export const delayMaterial = new Material({
+export const delayMaterial = new AudioMaterial({
   name: 'Delay',
   kind: 'delay',
   params: {

@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { delay, rectify, uniform } from '../asl/builders';
 import {
@@ -12,13 +12,13 @@ import {
  *
  * These exist as much to demonstrate the shape as to be used: a division
  * `enum` parameter, a `transport.division` lookup that turns its index into
- * beats, and a `transport` node that turns beats into whatever the Material
+ * beats, and a `transport` node that turns beats into whatever the AudioMaterial
  * needs. Every tempo-synced effect anyone writes will be that same three-step
  * chain, and the menu and the lookup table come from one place so they cannot
  * disagree.
  */
 
-/** The division menu every Material here shares. */
+/** The division menu every AudioMaterial here shares. */
 const divisionParam = (defaultName: (typeof COMMON_DIVISION_NAMES)[number]) =>
   param.enum(COMMON_DIVISION_NAMES, { default: defaultName, label: 'Division' });
 
@@ -26,7 +26,7 @@ const divisionParam = (defaultName: (typeof COMMON_DIVISION_NAMES)[number]) =>
  * A delay whose time is a note length rather than a number of seconds, so it
  * stays in time through a tempo change instead of needing to be reset.
  */
-export const syncedDelayMaterial = new Material({
+export const syncedDelayMaterial = new AudioMaterial({
   name: 'SyncedDelay',
   kind: 'synceddelay',
   params: {
@@ -56,7 +56,7 @@ export const syncedDelayMaterial = new Material({
  * `channels: 1` because the output is a control voltage, and a second
  * evaluation pass could not produce a different answer.
  */
-export const syncedRampMaterial = new Material({
+export const syncedRampMaterial = new AudioMaterial({
   name: 'SyncedRamp',
   kind: 'syncedramp',
   channels: 1,
@@ -77,7 +77,7 @@ export const syncedRampMaterial = new Material({
  * sequencer, euclidean and clock-divider Materials already take, except
  * locked to the song rather than free-running.
  */
-export const syncedClockMaterial = new Material({
+export const syncedClockMaterial = new AudioMaterial({
   name: 'SyncedClock',
   kind: 'syncedclock',
   channels: 1,
@@ -94,7 +94,7 @@ export const syncedClockMaterial = new Material({
  * A tremolo that lines up with the beat. One expression: a grid-locked ramp
  * folded into a triangle, scaled by depth, applied to the input.
  */
-export const syncedTremoloMaterial = new Material({
+export const syncedTremoloMaterial = new AudioMaterial({
   name: 'SyncedTremolo',
   kind: 'syncedtremolo',
   params: {

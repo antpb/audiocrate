@@ -13,8 +13,8 @@
  * AudioContext.currentTime per track (after each await) is how layers
  * pick up different start points.
  */
-import { materialRegistry, type MaterialRegistry } from '../registry/MaterialRegistry';
-import type { Material } from '../graph/Material';
+import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 
 /** Schedule-ahead window. Keeps start() in the future. */
 export const PDC_SCHEDULE_AHEAD_SEC = 0.01;
@@ -41,17 +41,17 @@ export function pdcAudibleOriginSec(
 }
 
 /**
- * Total latency a Material chain contributes, by asking each Material's own
+ * Total latency an AudioMaterial chain contributes, by asking each AudioMaterial's own
  * plugin. A plugin that reports none (or is not registered) contributes 0,
- * which is the right answer for a pure ASL Material: the interpreter is
+ * which is the right answer for a pure ASL AudioMaterial: the interpreter is
  * sample-for-sample.
  *
  * Crate used to hardcode the amp's 512-sample convolver here. It cannot, and
  * should not, know that number.
  */
 export function chainLatencySamples(
-  materials: Iterable<Material>,
-  registry: MaterialRegistry = materialRegistry,
+  materials: Iterable<AudioMaterial>,
+  registry: AudioMaterialRegistry = audioMaterialRegistry,
 ): number {
   let total = 0;
   for (const material of materials) {

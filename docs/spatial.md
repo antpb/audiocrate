@@ -220,4 +220,4 @@ modulation path.
 
 - [`scene.md`](scene.md) for `scene.spatial`, the offline side: sources with
   automation lanes, and `export.toAmbisonics()`.
-- [`materials.md`](materials.md) for the two node kinds as Materials.
+- [`materials.md`](materials.md) for the two node kinds as AudioMaterials.

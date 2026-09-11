@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { exportProject } from '../../src/loaders/ProjectExporter';
 import { loadProjectScene, parseProject, type ProjectFileData } from '../../src/loaders/ProjectLoader';
 import { AU_TYPE_EFFECT } from '../../src/host/pluginSlots';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import { FUZZ_ASSET_KEY, FUZZ_SUBTYPE, TEST_MANUFACTURER, fuzzPlugin } from '../../src/testing/testPlugin';
 import type { AudioAssetData } from '../../src/graph/assets';
 
@@ -29,7 +29,7 @@ const inkPlugin = {
       : [],
 };
 
-const registry = new MaterialRegistry().registerAll([fuzzPlugin, inkPlugin]);
+const registry = new AudioMaterialRegistry().registerAll([fuzzPlugin, inkPlugin]);
 
 function jsonBlob(obj: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');

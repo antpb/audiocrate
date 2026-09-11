@@ -8,19 +8,19 @@ import {
   cratePluginDocument,
   detectPatchRole,
   flattenPatch,
-  materialRegistry,
+  audioMaterialRegistry,
   pluginFromDocument,
-  registerMaterial,
+  registerAudioMaterial,
   type CratePluginDocument,
-  type Material,
+  type AudioMaterial,
 } from '../../src/index';
 import { addCatalogEntry, catalogEntry } from './catalog';
 import type { CratePatch } from './patch';
 
-export function resolveKind(kind: string): Material | null {
+export function resolveKind(kind: string): AudioMaterial | null {
   const entry = catalogEntry(kind);
   if (entry?.create) return entry.create();
-  const plugin = materialRegistry.get(kind);
+  const plugin = audioMaterialRegistry.get(kind);
   return plugin ? plugin.create() : null;
 }
 
@@ -30,7 +30,7 @@ export function suggestedRole(patch: CratePatch): 'insert' | 'instrument' {
 
 /**
  * Flatten here so a missing Master cable or a kernel node fails at export.
- * The flattened Material is stored as `compiled` for hosts that cannot run
+ * The flattened AudioMaterial is stored as `compiled` for hosts that cannot run
  * the patcher (Swift AUv3).
  */
 export function buildPluginDocument(
@@ -45,13 +45,13 @@ export function buildPluginDocument(
 
 /** Registers the plugin and puts it in the palette under Plugins. */
 export function registerPluginDocument(doc: CratePluginDocument): void {
-  registerMaterial(pluginFromDocument(doc, { resolve: resolveKind }));
+  registerAudioMaterial(pluginFromDocument(doc, { resolve: resolveKind }));
   addCatalogEntry({
     kind: doc.id,
     label: doc.label,
     category: 'Plugins',
     create: () => {
-      const plugin = materialRegistry.get(doc.id);
+      const plugin = audioMaterialRegistry.get(doc.id);
       if (!plugin) throw new Error(`No plugin registered for kind "${doc.id}"`);
       return plugin.create();
     },

@@ -47,14 +47,14 @@ globalThis.out = [midiFromName('A4'), midiToFrequency(69), scaleNotes, chordNote
   {
     label: 'Scene graph plus offline rendering',
     note: 'bounce and analysis, never plays live',
-    source: `import { AudioScene, OfflineRenderer, osc, env, Material } from 'audiocrate';
-globalThis.out = [AudioScene, OfflineRenderer, osc, env, Material];`,
+    source: `import { AudioScene, OfflineRenderer, osc, env, AudioMaterial } from 'audiocrate';
+globalThis.out = [AudioScene, OfflineRenderer, osc, env, AudioMaterial];`,
   },
   {
     label: 'Everything including real-time audio',
     note: 'a full player: voices, worklet, spatial',
-    source: `import { AudioScene, WebAudioRenderer, SpatialBus, crateWorkletUrls, osc, env, Material } from 'audiocrate';
-globalThis.out = [AudioScene, WebAudioRenderer, SpatialBus, crateWorkletUrls, osc, env, Material];`,
+    source: `import { AudioScene, WebAudioRenderer, SpatialBus, crateWorkletUrls, osc, env, AudioMaterial } from 'audiocrate';
+globalThis.out = [AudioScene, WebAudioRenderer, SpatialBus, crateWorkletUrls, osc, env, AudioMaterial];`,
   },
 ];
 

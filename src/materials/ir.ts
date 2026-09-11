@@ -1,4 +1,4 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { kernel, mix, uniform } from '../asl/builders';
 import type { AudioAssetData } from '../graph/assets';
@@ -7,8 +7,8 @@ import { IR_KERNEL_SLOT } from '../renderers/kernels/irKernel';
 export const IR_ASSET = 'ir';
 export const IR_ASSET_REF = 'ir.ref';
 
-export function createIrMaterial(): Material {
-  return new Material({
+export function createIrMaterial(): AudioMaterial {
+  return new AudioMaterial({
     name: 'IR',
     kind: 'ir',
     params: {
@@ -26,15 +26,15 @@ export function createIrMaterial(): Material {
 
 export const irMaterial = createIrMaterial();
 
-export function setIrAsset(material: Material, asset: AudioAssetData): void {
+export function setIrAsset(material: AudioMaterial, asset: AudioAssetData): void {
   material.setAsset(IR_ASSET, asset);
   material.setAsset(IR_ASSET_REF, asset.filename);
 }
 
-export function irAsset(material: Material): AudioAssetData | undefined {
+export function irAsset(material: AudioMaterial): AudioAssetData | undefined {
   return material.getAsset<AudioAssetData>(IR_ASSET);
 }
 
-export function irLatencySamples(_material: Material): number {
+export function irLatencySamples(_material: AudioMaterial): number {
   return 0;
 }

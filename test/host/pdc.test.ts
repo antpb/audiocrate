@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import { FUZZ_CURVE_LATENCY_SAMPLES, FUZZ_ASSET_KEY, fuzzPlugin } from '../../src/testing/testPlugin';
 import { parametricEqMaterial } from '../../src/materials/parametricEq';
 import {
@@ -32,9 +32,9 @@ describe('pdcAudibleOriginSec', () => {
 });
 
 describe('chainLatencySamples', () => {
-  const registry = new MaterialRegistry().register(fuzzPlugin);
+  const registry = new AudioMaterialRegistry().register(fuzzPlugin);
 
-  it('asks each Material\'s own plugin rather than knowing any latency itself', () => {
+  it('asks each AudioMaterial\'s own plugin rather than knowing any latency itself', () => {
     const quiet = fuzzPlugin.create();
     const latent = fuzzPlugin.create();
     latent.setAsset(FUZZ_ASSET_KEY, { filename: 'c.wav', samples: new Float32Array(1), sampleRate: SR });
@@ -44,7 +44,7 @@ describe('chainLatencySamples', () => {
     expect(chainLatencySamples([latent, latent], registry)).toBe(FUZZ_CURVE_LATENCY_SAMPLES * 2);
   });
 
-  it('reports zero for a pure ASL Material, which is sample-for-sample', () => {
+  it('reports zero for a pure ASL AudioMaterial, which is sample-for-sample', () => {
     expect(chainLatencySamples([parametricEqMaterial], registry)).toBe(0);
   });
 });

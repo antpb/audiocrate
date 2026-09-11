@@ -1,5 +1,5 @@
-import type { Material } from '../graph/Material';
-import type { HostPluginIdentity, MaterialPlugin } from './MaterialPlugin';
+import type { AudioMaterial } from '../graph/AudioMaterial';
+import type { HostPluginIdentity, AudioMaterialPlugin } from './AudioMaterialPlugin';
 
 /** Reserved by `mapPluginSlot` to mean "nothing bound here". */
 const RESERVED_KINDS = new Set(['skip']);
@@ -9,7 +9,7 @@ function hasManufacturer(n: number | undefined): n is number {
 }
 
 /**
- * The set of Material types a given application knows about.
+ * The set of AudioMaterial types a given application knows about.
  *
  * Registration is explicit and per-application, not global-by-import-side-
  * effect, so an app that wants an amp says so and an app that does not never
@@ -19,8 +19,8 @@ function hasManufacturer(n: number | undefined): n is number {
  * build its own registry with one fake plugin instead of inheriting whatever
  * the app happened to register.
  */
-export class MaterialRegistry {
-  private readonly byKind = new Map<string, MaterialPlugin>();
+export class AudioMaterialRegistry {
+  private readonly byKind = new Map<string, AudioMaterialPlugin>();
 
   /**
    * Adds a plugin. Re-registering the same kind replaces it, which is what a
@@ -28,18 +28,18 @@ export class MaterialRegistry {
    * that is already taken is a mistake worth throwing on, since the loser
    * would silently never be used.
    */
-  register(plugin: MaterialPlugin): this {
+  register(plugin: AudioMaterialPlugin): this {
     if (RESERVED_KINDS.has(plugin.kind)) {
-      throw new RangeError(`MaterialRegistry: "${plugin.kind}" is a reserved kind`);
+      throw new RangeError(`AudioMaterialRegistry: "${plugin.kind}" is a reserved kind`);
     }
     if (!plugin.kind) {
-      throw new RangeError('MaterialRegistry: a plugin needs a non-empty kind');
+      throw new RangeError('AudioMaterialRegistry: a plugin needs a non-empty kind');
     }
     this.byKind.set(plugin.kind, plugin);
     return this;
   }
 
-  registerAll(plugins: Iterable<MaterialPlugin>): this {
+  registerAll(plugins: Iterable<AudioMaterialPlugin>): this {
     for (const plugin of plugins) this.register(plugin);
     return this;
   }
@@ -48,12 +48,12 @@ export class MaterialRegistry {
     return this.byKind.delete(kind);
   }
 
-  get(kind: string): MaterialPlugin | undefined {
+  get(kind: string): AudioMaterialPlugin | undefined {
     return this.byKind.get(kind);
   }
 
-  /** The plugin that created this Material, by its `kind`. */
-  forMaterial(material: Material): MaterialPlugin | undefined {
+  /** The plugin that created this AudioMaterial, by its `kind`. */
+  forMaterial(material: AudioMaterial): AudioMaterialPlugin | undefined {
     return this.byKind.get(material.kind);
   }
 
@@ -67,7 +67,7 @@ export class MaterialRegistry {
    * subtype alone. A host may know less about a slot than the plugin
    * declares.
    */
-  matchHost(identity: HostPluginIdentity | null | undefined): MaterialPlugin | undefined {
+  matchHost(identity: HostPluginIdentity | null | undefined): AudioMaterialPlugin | undefined {
     if (!identity) return undefined;
     for (const plugin of this.byKind.values()) {
       const claim = plugin.host;
@@ -81,7 +81,7 @@ export class MaterialRegistry {
     return undefined;
   }
 
-  list(): readonly MaterialPlugin[] {
+  list(): readonly AudioMaterialPlugin[] {
     return [...this.byKind.values()];
   }
 
@@ -105,9 +105,9 @@ export class MaterialRegistry {
  * registry, so the default is a convenience and never a hidden dependency a
  * test cannot escape.
  */
-export const materialRegistry = new MaterialRegistry();
+export const audioMaterialRegistry = new AudioMaterialRegistry();
 
-/** Shorthand for `materialRegistry.register(plugin)`. */
-export function registerMaterial(plugin: MaterialPlugin): void {
-  materialRegistry.register(plugin);
+/** Shorthand for `audioMaterialRegistry.register(plugin)`. */
+export function registerAudioMaterial(plugin: AudioMaterialPlugin): void {
+  audioMaterialRegistry.register(plugin);
 }

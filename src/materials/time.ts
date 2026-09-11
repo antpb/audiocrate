@@ -1,11 +1,11 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { createLooperBox, grain, looper, pitchShift, reverse } from '../asl/builders';
 import { tap } from '../asl/analysis';
 import type { SampleBox } from '../asl/types';
 import type { AudioAssetData } from '../graph/assets';
 
-export const reverseMaterial = new Material({
+export const reverseMaterial = new AudioMaterial({
   name: 'Reverse',
   kind: 'reverse',
   params: {
@@ -30,7 +30,7 @@ export function isLooperPulseOutput(output: string): boolean {
   return output === 'start' || output === 'end';
 }
 
-export const looperMaterial = new Material({
+export const looperMaterial = new AudioMaterial({
   name: 'Looper',
   kind: 'looper',
   params: {
@@ -70,7 +70,7 @@ export const looperMaterial = new Material({
   },
 });
 
-export const pitchShiftMaterial = new Material({
+export const pitchShiftMaterial = new AudioMaterial({
   name: 'PitchShift',
   kind: 'pitchshift',
   params: {
@@ -84,11 +84,11 @@ export const pitchShiftMaterial = new Material({
   },
 });
 
-const grainBoxes = new WeakMap<Material, SampleBox>();
+const grainBoxes = new WeakMap<AudioMaterial, SampleBox>();
 
-export function createGrainMaterial(): Material {
+export function createGrainMaterial(): AudioMaterial {
   const box: SampleBox = { samples: new Float32Array(0), sampleRate: 48000 };
-  const material = new Material({
+  const material = new AudioMaterial({
     name: 'Grain',
     kind: 'grain',
     params: {
@@ -111,7 +111,7 @@ export function createGrainMaterial(): Material {
 
 export const grainMaterial = createGrainMaterial();
 
-export function setGrainAsset(material: Material, asset: AudioAssetData): void {
+export function setGrainAsset(material: AudioMaterial, asset: AudioAssetData): void {
   const box = grainBoxes.get(material);
   if (box) {
     box.samples = asset.samples;

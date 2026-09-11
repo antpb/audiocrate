@@ -371,7 +371,7 @@ describe('filter shelves and kernel seams', () => {
   });
 
   it('an unbound kernel seam passes through rather than emitting silence', () => {
-    // A Material whose engine failed to load must still sound like the rest of
+    // An AudioMaterial whose engine failed to load must still sound like the rest of
     // its graph. Silence here would be indistinguishable from a broken chain.
     const graph = ASL.node(() => kernel.seam('anything', uniform(0.25)));
     const voice = compileVoice(graph);

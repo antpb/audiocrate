@@ -1,14 +1,14 @@
-import type { Material } from './Material';
+import type { AudioMaterial } from './AudioMaterial';
 import { formatParam, normalizeParam, type ParamCurve, type ParamDescriptor } from './param';
 
 /**
  * Crate is not a UI library. This is the model a control panel is built
- * from, not the panel. A Material already carries everything needed; this
+ * from, not the panel. An AudioMaterial already carries everything needed; this
  * turns it into the shape a host wants, once, so a React inspector, a
  * canvas inspector, and a plugin parameter tree are three views of one
  * description rather than three readings of `material.params`.
  *
- * The model is plain data. It does not hold the Material, and it does not
+ * The model is plain data. It does not hold the AudioMaterial, and it does not
  * update: take a fresh one when values change, or read `material.getParam`
  * directly and use the model only for layout. A model that subscribed would
  * be a state library.
@@ -57,11 +57,11 @@ export interface InspectorModel {
   /** Live inputs beyond the main one: a host has to route these. */
   readonly auxInputs: readonly string[];
   readonly polyphony: number;
-  /** Asset keys the Material is currently holding. */
+  /** Asset keys the AudioMaterial is currently holding. */
   readonly assets: readonly string[];
 }
 
-export function describeMaterial(material: Material): InspectorModel {
+export function describeAudioMaterial(material: AudioMaterial): InspectorModel {
   const automatable = new Set(material.automatable);
   const controls = Object.entries(material.params).map(([name, descriptor]) =>
     describeControl(name, descriptor, material.getParam(name), automatable.has(name)),
@@ -119,7 +119,7 @@ function controlKindFor(descriptor: ParamDescriptor): ControlKind {
 /**
  * `cutoff` to "Cutoff", `gainDb` to "Gain Db". The second one is wrong, which
  * is exactly why `label` exists: this is a decent fallback, not a correct
- * answer, and a Material that cares should say what it means.
+ * answer, and an AudioMaterial that cares should say what it means.
  */
 export function humanizeParamName(name: string): string {
   const spaced = name

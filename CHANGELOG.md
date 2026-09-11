@@ -48,8 +48,8 @@ same node as before, and the golden audio snapshot and Swift conformance
 fixture are untouched.
 
 `env.adsr` still defaults its trigger to 0 and renders silence until a
-velocity is bound with `.trigger(v)`. A default of 1 would let a Material
-ignore velocity with no signal that it had.
+velocity is bound with `.trigger(v)`. A default of 1 would let an
+AudioMaterial ignore velocity with no signal that it had.
 
 ### Collaboration
 

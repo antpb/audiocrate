@@ -17,14 +17,14 @@
  * Any host that has an audio output but no `AudioWorkletProcessor`. React
  * Native is the case that prompted it: `react-native-audio-api` has an audio
  * graph and a buffer queue but no spec worklet, so the only way to play a
- * crate Material continuously is to render ahead on the JS thread and feed
+ * crate AudioMaterial continuously is to render ahead on the JS thread and feed
  * the queue. Node and Electron are in the same position for different
  * reasons.
  *
  * It is not a real-time path. Rendering happens on whatever thread calls
  * `render`, so a host has to stay ahead of the queue, and the latency is
  * however far ahead it chooses to be. What it buys is continuity, which is
- * the difference between a Material that plays and one that stutters.
+ * the difference between an AudioMaterial that plays and one that stutters.
  */
 import { compileVoice, type CompiledVoice, type VoiceRuntimeState } from '../asl/compile';
 import type { ASLGraphDescriptor } from '../asl/graph';

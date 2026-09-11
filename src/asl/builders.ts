@@ -28,14 +28,14 @@ export function uniform(x: ASLValueLike): ASLValue {
 /**
  * Internal: a named per-voice input, created lazily by the input proxy
  * (graph.ts's `createTrackedInputProxy`). Not `param` (that name is reserved
- * for the public `param.range(...)` Material schema builder, graph/param.ts,
+ * for the public `param.range(...)` AudioMaterial schema builder, graph/param.ts,
  * a different concept the spec happens to also call "param").
  */
 export function paramNode(name: string): ASLValue {
   return new ASLValue(makeNode('param', {}, { name }));
 }
 
-/** The port every insert Material reads without asking for it. */
+/** The port every insert AudioMaterial reads without asking for it. */
 export const MAIN_PORT = 'input';
 
 /**
@@ -190,7 +190,7 @@ export const env = {
 
   /**
    * Delay / attack / hold / decay / sustain / release. Times are live graph
-   * inputs so a Material can expose them. Gate defaults to the voice gate;
+   * inputs so an AudioMaterial can expose them. Gate defaults to the voice gate;
    * pass `gate` to drive it from a signal instead.
    */
   dahdsr(

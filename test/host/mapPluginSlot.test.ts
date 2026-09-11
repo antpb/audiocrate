@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import {
   FUZZ_SUBTYPE,
   TEST_MANUFACTURER,
@@ -17,10 +17,10 @@ function jsonBlob(obj: Record<string, unknown>): string {
 
 // Deliberately a private registry with plugins crate does not ship. If these
 // pass, the mapping path has no hidden knowledge of any particular plugin.
-let registry: MaterialRegistry;
+let registry: AudioMaterialRegistry;
 
 beforeEach(() => {
-  registry = new MaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
+  registry = new AudioMaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
 });
 
 describe('mapPluginSlot', () => {

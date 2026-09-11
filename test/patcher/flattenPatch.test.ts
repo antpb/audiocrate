@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
 import { kernel, uniform } from '../../src/asl/builders';
 import { Track } from '../../src/graph/Track';
 import { Clip, type AudioBufferLike } from '../../src/graph/Clip';
 import { Time } from '../../src/Time';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import { bakeTrackInserts } from '../../src/playback/bakeInserts';
 import { OfflineRenderer } from '../../src/renderers/OfflineRenderer';
 import { mapPluginSlot } from '../../src/host/mapPluginSlot';
@@ -24,7 +24,7 @@ import {
 
 const SR = 48000;
 
-const gainProto = new Material({
+const gainProto = new AudioMaterial({
   name: 'Gain',
   kind: 'test.gain',
   params: { gain: param.range(0, 4, { default: 1 }) },
@@ -32,26 +32,26 @@ const gainProto = new Material({
   graph: ({ input, params }) => input.mul(params.gain),
 });
 
-const oneProto = new Material({
+const oneProto = new AudioMaterial({
   name: 'One',
   kind: 'test.one',
   graph: () => uniform(1),
 });
 
-const quietProto = new Material({
+const quietProto = new AudioMaterial({
   name: 'Quiet',
   kind: 'test.quiet',
   cvPolarity: 'unipolar',
   graph: () => uniform(0),
 });
 
-const seamProto = new Material({
+const seamProto = new AudioMaterial({
   name: 'Seamed',
   kind: 'test.seamed',
   graph: ({ input }) => kernel.seam('test.slot', input),
 });
 
-function resolve(kind: string): Material | null {
+function resolve(kind: string): AudioMaterial | null {
   if (kind === 'test.gain') return gainProto;
   if (kind === 'test.one') return oneProto;
   if (kind === 'test.quiet') return quietProto;
@@ -65,7 +65,7 @@ function monoBuffer(samples: number[]): AudioBufferLike {
   return { sampleRate: SR, length: data.length, numberOfChannels: 1, getChannelData: () => data };
 }
 
-function trackWith(materials: Material[], samples: number[]): Track {
+function trackWith(materials: AudioMaterial[], samples: number[]): Track {
   const track = new Track({ name: 'T' });
   track.addClip(new Clip({ buffer: monoBuffer(samples) }), { at: Time.seconds(0) });
   for (const material of materials) track.materials.add(material);
@@ -73,7 +73,7 @@ function trackWith(materials: Material[], samples: number[]): Track {
 }
 
 async function bakeOne(track: Track): Promise<Float32Array> {
-  const baked = await bakeTrackInserts([track], { registry: new MaterialRegistry() });
+  const baked = await bakeTrackInserts([track], { registry: new AudioMaterialRegistry() });
   return baked.get(track.clips[0]!.clip.id)!.getChannelData(0) as Float32Array;
 }
 
@@ -370,7 +370,7 @@ describe('flattenPatch', () => {
     expect(fields).toContain('playing');
   });
 
-  it('refuses a Material that names a kernel slot', () => {
+  it('refuses an AudioMaterial that names a kernel slot', () => {
     const patch: PatchDocument = {
       nodes: [
         { id: 'k', kind: 'test.seamed' },
@@ -425,7 +425,7 @@ describe('crate.plugin document', () => {
   it('registers, maps a project slot, and applies a JSON preset', () => {
     const doc = cratePluginDocument({ label: 'My Chain', role: 'insert', patch: seriesPatch });
     const plugin = pluginFromDocument(doc, { resolve });
-    const registry = new MaterialRegistry().register(plugin);
+    const registry = new AudioMaterialRegistry().register(plugin);
 
     const mapped = mapPluginSlot(
       {

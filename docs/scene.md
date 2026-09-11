@@ -9,12 +9,12 @@ AudioScene
 └── tracks: Track[]
     ├── clips            audio placed on the timeline
     ├── midiClips        notes placed on the timeline
-    ├── instrument       a note-driven source Material, at most one
+    ├── instrument       a note-driven source AudioMaterial, at most one
     └── materials        an ordered insert chain
 ```
 
 A `Track` and a `Bus` are both nodes with a volume, a pan, a mute, and a
-Material chain. The difference is that a track holds content and a bus does
+AudioMaterial chain. The difference is that a track holds content and a bus does
 not.
 
 ```ts
@@ -197,7 +197,7 @@ The rule: build everything, await everything, then read the clock once.
 ### The musical position reaches the graph
 
 Play, pause, seek, and tempo all publish an anchor to every live voice, so a
-Material's graph can read where the song is. See [the transport
+AudioMaterial's graph can read where the song is. See [the transport
 nodes](asl.md#the-transport).
 
 ```ts
@@ -282,7 +282,7 @@ smooth. Two behaviours:
 
 ## Rendering offline
 
-The same scene and the same Materials render without an audio context:
+The same scene and the same AudioMaterials render without an audio context:
 
 ```ts
 import { OfflineRenderer } from 'audiocrate/testing';
@@ -303,7 +303,7 @@ compare it against a stored reference, fail if it moved.
 | Loader | Handles |
 |---|---|
 | `AudioLoader` | Uncompressed audio files, integer and floating point |
-| `IRLoader` | Impulse responses, returning them ready for the convolution Material |
+| `IRLoader` | Impulse responses, returning them ready for the convolution AudioMaterial |
 | `MidiLoader` | Standard MIDI files, type 0 and type 1 |
 | `ProjectLoader` | A project directory into a live scene |
 | `ProjectExporter` | A scene back out to a project directory |
@@ -321,7 +321,7 @@ writes those onto `scene.transport` as `bpm`, `beatsPerBar`, and
 - **Compressed audio formats.** Uncompressed decoding is built. Compressed
   formats are not.
 - **A published inspector component.** Audiocrate ships the model a control panel
-  is built from (`describeMaterial`). It does not ship the component.
-- **Stereo clips through the Material chain are mono-summed at the insert
-  input.** Stereo processing inside a Material works; the clip-to-insert
+  is built from (`describeAudioMaterial`). It does not ship the component.
+- **Stereo clips through the AudioMaterial chain are mono-summed at the insert
+  input.** Stereo processing inside an AudioMaterial works; the clip-to-insert
   path still needs finishing.

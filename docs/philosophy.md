@@ -17,8 +17,8 @@ Audiocrate uses that split:
 | three.js | crate |
 |---|---|
 | `Scene` | `AudioScene` |
-| `Mesh` (geometry + material) | `Clip` (buffer + Material) |
-| `Material` / `ShaderMaterial` | `Material` / a Material with an ASL graph |
+| `Mesh` (geometry + material) | `Clip` (buffer + AudioMaterial) |
+| `Material` / `ShaderMaterial` | `AudioMaterial` / an AudioMaterial with an ASL graph |
 | `WebGLRenderer` | `WebAudioRenderer` (browser worklet), `OfflineRenderer` (Node), CrateASL (Swift), Android Hermes worklet |
 
 The mapping stops where audio is not graphics.
@@ -32,7 +32,7 @@ three.js loaders mostly live in addons. Audiocrate's loaders (`AudioLoader`,
 
 You do not pass an `AudioScene` to a renderer the way you pass a `Scene` to
 `WebGLRenderer`. Live playback is a method on the scene. `OfflineRenderer`
-takes a Material graph. What is shared is the graph and the interpreter,
+takes an AudioMaterial graph. What is shared is the graph and the interpreter,
 not a `render(scene)` signature.
 
 ## What is different about audio
@@ -67,15 +67,16 @@ Only one belongs in core.
 
 ### The extension point is a plugin, not a branch
 
-If crate needs to know something specific about a kind of Material, that is a
-missing field on the plugin contract, not a conditional inside crate. The
+If crate needs to know something specific about a kind of AudioMaterial,
+that is a missing field on the plugin contract, not a conditional inside
+crate. The
 library contains no name of any particular instrument or effect.
 
 ### A graph is data, not a running process
 
 An ASL graph is a plain object. It can be serialised, sent to another thread,
 diffed, stored in a project file, and rendered offline. Nothing in it holds
-an audio context or a buffer. That is how the same Material works in real
+an audio context or a buffer. That is how the same AudioMaterial works in real
 time and offline without a second implementation.
 
 ### Dependencies are injected
@@ -86,7 +87,7 @@ substitute its own. There is no cloud inside the library.
 
 ### Failures degrade
 
-- An asset that will not load leaves a Material at its defaults. The chain
+- An asset that will not load leaves an AudioMaterial at its defaults. The chain
   still runs.
 - An unbound effect passes audio through. An unbound instrument is silent.
 - A malformed packet on a peer-to-peer link is dropped.

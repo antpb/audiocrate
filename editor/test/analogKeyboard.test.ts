@@ -37,7 +37,7 @@ describe('AnalogKeyboard', () => {
     expect(lamps.every((lamp) => lamp.held)).toBe(true);
   });
 
-  it('sizes lamps from the wired Material, not the analog last-note', () => {
+  it('sizes lamps from the wired AudioMaterial, not the analog last-note', () => {
     const keys = new AnalogKeyboard();
     keys.setVoiceView({ polyphony: 8, steal: 'oldest', targetName: 'Oscillator' });
     keys.press(60, 0.5);

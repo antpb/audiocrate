@@ -1,7 +1,7 @@
 import { OfflineRenderer } from '../renderers/OfflineRenderer';
-import { materialRegistry, type MaterialRegistry } from '../registry/MaterialRegistry';
+import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
 import type { AudioBufferLike, Clip } from '../graph/Clip';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 import type { Track } from '../graph/Track';
 import type { KernelBinaryMap } from '../renderers/kernel';
 
@@ -9,7 +9,7 @@ export interface BakeTrackInsertsOptions {
   /** Bulk payloads (WASM binaries) by kernel slot, forwarded to each plugin's own `bake`. */
   binaries?: KernelBinaryMap;
   /** Plugin set to consult. Defaults to the shared registry. */
-  registry?: MaterialRegistry;
+  registry?: AudioMaterialRegistry;
   /** Return a previously baked buffer to skip this clip. */
   reuse?: (track: Track, clip: Clip) => AudioBufferLike | undefined;
   /** Store a freshly baked buffer so a later play can `reuse` it. */
@@ -22,7 +22,7 @@ export interface BakeTrackInsertsOptions {
 
 /** The generic path: independent per-channel `OfflineRenderer.render`, no attached kernels. */
 async function renderGenericChannel(
-  material: Material,
+  material: AudioMaterial,
   channelData: Float32Array,
   sampleRate: number,
 ): Promise<Float32Array> {
@@ -36,13 +36,13 @@ async function renderGenericChannel(
 }
 
 /**
- * Renders every clip on tracks that have a bound Material chain through that
+ * Renders every clip on tracks that have a bound AudioMaterial chain through that
  * chain. Must run *before* `transport.play()`: `play()` and
  * `AudioScene.beginPlayback` stay fully synchronous, so WASM setup cannot
  * happen inside them.
  *
  * Materials chain in declared order, each stage's output feeding the next.
- * How a given Material consumes channels is the plugin's own declaration
+ * How a given AudioMaterial consumes channels is the plugin's own declaration
  * (`bakeMode`), not something crate infers: `per-channel` runs each channel
  * independently, `joint` hands the plugin every channel at once because its
  * stereo behavior is one decision rather than two (mono-summing, channel
@@ -58,7 +58,7 @@ export async function bakeTrackInserts(
   tracks: readonly Track[],
   options: BakeTrackInsertsOptions = {},
 ): Promise<Map<number, AudioBufferLike>> {
-  const registry = options.registry ?? materialRegistry;
+  const registry = options.registry ?? audioMaterialRegistry;
   const binaries = options.binaries ?? {};
   const baked = new Map<number, AudioBufferLike>();
   let total = 0;

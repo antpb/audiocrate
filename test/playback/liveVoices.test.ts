@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { prepareLiveVoices, disposeLiveVoices, type LiveVoiceRenderer } from '../../src/playback/liveVoices';
 import { Track } from '../../src/graph/Track';
 import { Bus } from '../../src/graph/Bus';
-import { Material } from '../../src/graph/Material';
+import { AudioMaterial } from '../../src/graph/AudioMaterial';
 import { param } from '../../src/graph/param';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import {
   FUZZ_ASSET_KEY,
   FUZZ_KERNEL_SLOT,
@@ -44,7 +44,7 @@ function fakeRenderer(): { renderer: LiveVoiceRenderer; calls: VoiceCalls[] } {
   return { renderer, calls };
 }
 
-const registry = new MaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
+const registry = new AudioMaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
 
 describe('prepareLiveVoices', () => {
   it('creates one voice per insert and hands each to its own plugin to bind', async () => {
@@ -54,7 +54,7 @@ describe('prepareLiveVoices', () => {
       samples: Float32Array.from([1, 0]),
       sampleRate: 48000,
     });
-    const plain = new Material({
+    const plain = new AudioMaterial({
       name: 'Plain',
       params: { gain: param.range(0, 2, { default: 1 }) },
       graph: ({ input, params }) => input.mul(params.gain),
@@ -80,7 +80,7 @@ describe('prepareLiveVoices', () => {
       message: { type: 'setCurve', samples: Float32Array.from([1, 0]) },
     });
 
-    // A Material with no registered plugin is a complete Material. It gets a
+    // An AudioMaterial with no registered plugin is a complete AudioMaterial. It gets a
     // working voice running its ASL graph and nothing else happens to it.
     expect(calls[1]!.noteOnParams).toEqual(plain.snapshotParams());
     expect(calls[1]!.kernels).toEqual([]);

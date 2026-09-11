@@ -1,9 +1,9 @@
-import { Material } from '../graph/Material';
+import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
 import { envFollow } from '../asl/builders';
 
 /** Analysis insert: replaces the signal with its amplitude envelope. */
-export const envelopeFollowerMaterial = new Material({
+export const envelopeFollowerMaterial = new AudioMaterial({
   name: 'EnvelopeFollower',
   kind: 'envfollow',
   params: {

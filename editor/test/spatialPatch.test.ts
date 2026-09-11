@@ -46,7 +46,7 @@ describe('the spatial starter patch', () => {
     }
   });
 
-  it('sets only params the Material declares', () => {
+  it('sets only params the AudioMaterial declares', () => {
     // A renamed param would silently do nothing, which on a spatial source
     // means every position quietly reads as the default.
     for (const node of patch.nodes) {

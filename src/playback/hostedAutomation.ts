@@ -1,7 +1,7 @@
 import { evaluateHostedAutomation, type HostedAutomationTrack, type HostedAutomationWrite } from '../automation/hosted';
 import { paramNameForAddress } from '../graph/param';
 import type { Bus } from '../graph/Bus';
-import type { Material } from '../graph/Material';
+import type { AudioMaterial } from '../graph/AudioMaterial';
 import type { Track } from '../graph/Track';
 import type { LiveSceneVoices } from './liveVoices';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
@@ -13,7 +13,7 @@ export interface ClipGainTarget {
 
 export interface HostedAutomationBinding {
   voice: VoiceHandle;
-  material: Material;
+  material: AudioMaterial;
 }
 
 /**
@@ -44,15 +44,15 @@ export class HostedAutomationBridge {
 
   /**
    * Indexes live voices by the hosted `(trackIndex, slotIndex)` pair each
-   * Material carries (`Material.hostedSlot`, stamped by `ProjectLoader`).
-   * Materials without one are skipped: a Material built by hand has no
+   * AudioMaterial carries (`AudioMaterial.hostedSlot`, stamped by `ProjectLoader`).
+   * Materials without one are skipped: an AudioMaterial built by hand has no
    * hosted address, so no hosted lane can target it.
    */
   bind(voices: LiveSceneVoices, tracks: readonly Track[], master: Bus): void {
     this.bindings.clear();
     this.lastWrites.clear();
 
-    const indexChain = (materials: readonly Material[], handles: VoiceHandle[]) => {
+    const indexChain = (materials: readonly AudioMaterial[], handles: VoiceHandle[]) => {
       materials.forEach((material, i) => {
         const handle = handles[i];
         const slot = material.hostedSlot;

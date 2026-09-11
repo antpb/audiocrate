@@ -4,7 +4,7 @@
  *
  * An AudioWorklet has no dynamic `import()`, so **the kernels a worklet can
  * run are fixed when it is bundled**. That is the platform, not a crate
- * choice. Installing a Material package gets you the main-thread half (param
+ * choice. Installing an AudioMaterial package gets you the main-thread half (param
  * schema, preset decoder, registration). The audio-thread half has to have
  * been compiled into a bundle before the page loaded.
  *
@@ -12,7 +12,7 @@
  * *bytes* it is handed. A portable kernel is a freestanding WASM module plus
  * a plain-data descriptor. The glue lives in crate's shipped worklet. The
  * cost is that a portable kernel cannot be arbitrary JS, which also means
- * installing a Material does not run its author's code on the audio thread.
+ * installing an AudioMaterial does not run its author's code on the audio thread.
  *
  * Anything expressible as ASL nodes needs no kernel at all, because a graph
  * is data and data crosses the boundary. The richer ASL is, the fewer
@@ -20,7 +20,7 @@
  *
  * ## Loading one
  *
- * A Material's graph names its own slot, `kernel.seam('acme.tapedelay')`, and
+ * An AudioMaterial's graph names its own slot, `kernel.seam('acme.tapedelay')`, and
  * its plugin calls `voice.loadKernel('acme.tapedelay', { binary, descriptor
  * })`. The worklet has no factory registered under that name, sees a WASM
  * payload, and uses this one. Nothing was rebuilt.
@@ -62,9 +62,9 @@
 import type { KernelFactory, KernelProcessor } from '../kernel';
 
 /**
- * The slot crate's own worklets register this under. A third-party Material
+ * The slot crate's own worklets register this under. A third-party AudioMaterial
  * does not need it: any slot with no registered factory falls through to
- * this kernel when the payload carries a descriptor. It exists so a Material
+ * this kernel when the payload carries a descriptor. It exists so an AudioMaterial
  * can also name the generic slot outright.
  */
 export const WASM_KERNEL_SLOT = 'wasm';
@@ -88,7 +88,7 @@ export interface WasmKernelDescriptor {
   /** Channels the module handles itself. Only meaningful for `source`. */
   channels?: 1 | 2;
   /**
-   * Material param name to the integer id `crate_set_param` expects. Ids
+   * AudioMaterial param name to the integer id `crate_set_param` expects. Ids
    * rather than names because a name would have to be written into the
    * module's memory, and an integer is something every toolchain can take.
    * Params not listed here are simply not forwarded.

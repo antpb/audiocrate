@@ -14,7 +14,7 @@ import {
   Track,
   sampleAsset,
   type AudioBufferLike,
-  type Material,
+  type AudioMaterial,
   buildScenePlan,
   type ScenePlan,
   type PlanBuildClip,
@@ -36,7 +36,7 @@ export interface TimelineLink {
 
 export interface TimelineSource {
   kinds: Map<string, string>;
-  materials: Map<string, Material>;
+  materials: Map<string, AudioMaterial>;
   nodeIds: readonly string[];
   connections: readonly TimelineLink[];
   transport: PatchTransport | null;
@@ -225,7 +225,7 @@ export function overlaySpread(
 }
 
 export function clipPlacementFromPlayer(
-  material: Material,
+  material: AudioMaterial,
   data: Record<string, unknown> | undefined,
 ): {
   buffer: AudioBufferLike;
@@ -415,7 +415,7 @@ export function fillTimelineScene(
   return { tracks: lanes.length, clips, midi, bindings };
 }
 
-function isInstrumentNode(kind: string, material: Material | undefined): boolean {
+function isInstrumentNode(kind: string, material: AudioMaterial | undefined): boolean {
   if (kind === 'synth') return true;
   return Boolean(material && material.audioInputs.length === 0 && (kind === 'grain' || material.polyphony > 1));
 }

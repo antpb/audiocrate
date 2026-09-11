@@ -3,7 +3,7 @@ import { loadProjectScene, parseProject, resolveAudioPath, type ParsedProject } 
 import { decodeWav } from '../../src/loaders/AudioLoader';
 import { AudioScene } from '../../src/AudioScene';
 import { AU_TYPE_EFFECT, AU_TYPE_INSTRUMENT } from '../../src/host/pluginSlots';
-import { MaterialRegistry } from '../../src/registry/MaterialRegistry';
+import { AudioMaterialRegistry } from '../../src/registry/AudioMaterialRegistry';
 import {
   FUZZ_ASSET_KEY,
   FUZZ_CURVE_LATENCY_SAMPLES,
@@ -18,7 +18,7 @@ import type { AudioAssetData } from '../../src/graph/assets';
 
 // Plugins crate does not ship, so nothing here can pass by accident on
 // knowledge the loader secretly has about homecrate's own Materials.
-const registry = new MaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
+const registry = new AudioMaterialRegistry().registerAll([fuzzPlugin, tonePlugin]);
 import { HOSTED_MASTER_TRACK_INDEX } from '../../src/automation/hosted';
 
 function jsonBlob(obj: Record<string, unknown>): string {
@@ -363,7 +363,7 @@ describe('loadProjectScene', () => {
     // folder name depending on the version that wrote it.
     const project = JSON.parse(PROJECT_JSON) as Record<string, unknown>;
     const tracks = project.tracks as Array<Record<string, unknown>>;
-    const withFallback = new MaterialRegistry().register({
+    const withFallback = new AudioMaterialRegistry().register({
       ...fuzzPlugin,
       assetRequests: (preset: DecodedFuzzPreset) =>
         preset.curveFilename

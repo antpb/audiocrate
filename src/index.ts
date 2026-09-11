@@ -32,7 +32,7 @@ export {
   type MonitorStart,
 } from './playback/InputMonitor';
 export { MidiPlayback, type MidiVoiceTarget, type MidiPlaybackStart } from './playback/MidiPlayback';
-export { SceneNotStartedError, MaterialNotBoundError } from './errors';
+export { SceneNotStartedError, AudioMaterialNotBoundError } from './errors';
 export {
   HookSystem,
   createHookSystem,
@@ -96,16 +96,16 @@ export {
   PDC_SCHEDULE_AHEAD_SEC,
 } from './host/pdc';
 export {
-  Material,
-  MaterialChain,
-  type MaterialOptions,
-  type MaterialGraphBuilder,
-  type MaterialGraphContext,
+  AudioMaterial,
+  AudioMaterialChain,
+  type AudioMaterialOptions,
+  type AudioMaterialGraphBuilder,
+  type AudioMaterialGraphContext,
   type VoiceStealingPolicy,
   type VoiceSnapshot,
   type AudioSourceRef,
   type CvPolarity,
-} from './graph/Material';
+} from './graph/AudioMaterial';
 export type {
   TextAssetData,
   AudioAssetData,
@@ -113,8 +113,8 @@ export type {
   AssetRequest,
   AssetDecodeKind,
 } from './graph/assets';
-export { MaterialRegistry, materialRegistry, registerMaterial } from './registry';
-export type { MaterialPlugin, HostPluginIdentity } from './registry';
+export { AudioMaterialRegistry, audioMaterialRegistry, registerAudioMaterial } from './registry';
+export type { AudioMaterialPlugin, HostPluginIdentity } from './registry';
 export { bakeTrackInserts, type BakeTrackInsertsOptions } from './playback/bakeInserts';
 export {
   BlockRenderer,
@@ -174,7 +174,7 @@ export {
   type ToggleParamOptions,
 } from './graph/param';
 export {
-  describeMaterial,
+  describeAudioMaterial,
   describeControl,
   humanizeParamName,
   type InspectorModel,
@@ -237,11 +237,11 @@ export { audioPortNames, auxAudioPorts } from './asl/ports';
 /**
  * The graph itself, as a type and as a builder.
  *
- * `Material.graph` is public and is an `ASLGraphDescriptor`, so a consumer
+ * `AudioMaterial.graph` is public and is an `ASLGraphDescriptor`, so a consumer
  * that could not name the type could not write a function taking one: a host
- * adapter wanting to accept "a Material or a bare graph" had to describe the
+ * adapter wanting to accept "an AudioMaterial or a bare graph" had to describe the
  * shape structurally and hope. `ASL.node` is the matching builder for a graph
- * authored without a Material around it.
+ * authored without an AudioMaterial around it.
  */
 export { ASL } from './asl/graph';
 export type { ASLGraphDescriptor } from './asl/graph';
