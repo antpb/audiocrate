@@ -38,11 +38,15 @@ AudioMaterial instead.
 | `src/plugin.ts` | `crate-stones`: a hillside of stones, built on the bridge |
 
 ```bash
-npm run build     # -> dist/crate-stones-xr-publisher-plugin.umd.js  (147 kB, 34 kB gzipped)
+npm run build     # -> dist/crate-stones-xr-publisher-plugin.umd.js
+npm run demo      # builds the plugin, then a local XR Publisher world
 npx vitest run    # the bridge and the DSP
 node scripts/check-plugin.mjs      # the shipped bundle, in a browser
 node scripts/render-preview.mjs out.wav   # offline render, no browser
 ```
+
+From the audiocrate package root, `npm run example:xr` is the same as
+`npm run demo` here. Open http://localhost:5176. See [`demo/`](demo/).
 
 ## Using the bridge
 

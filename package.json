@@ -81,12 +81,14 @@
     "verify:package": "node scripts/verify-package.mjs",
     "editor": "vite --config editor/vite.config.ts",
     "editor:build": "vite build --config editor/vite.config.ts",
+    "example:xr": "vite build --config examples/xr/vite.config.ts && vite --config examples/xr/demo/vite.config.ts",
     "test:editor": "vitest run --config editor/vitest.config.ts",
     "test:examples": "vitest run --config examples/amp/vitest.config.ts --dir examples/amp && vitest run --config examples/grain/vitest.config.ts --dir examples/grain && vitest run --config examples/synth/vitest.config.ts --dir examples/synth && vitest run --config examples/space-reverb/vitest.config.ts --dir examples/space-reverb && vitest run --config examples/xr/vitest.config.ts --dir examples/xr",
     "test:swift": "/usr/bin/swift test --package-path examples/CrateASL",
     "prepublishOnly": "npm run test && npm run build && npm run verify:package"
   },
   "devDependencies": {
+    "@antpb/xr-publisher": "^0.2.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.3.4",

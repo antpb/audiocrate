@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>audiocrate · crate-stones</title>
+  <style>
+    body { margin: 0; background: #191919; color: #fff; font-family: sans-serif; }
+    #world-view { width: 100vw; height: 100vh; }
+    #caption {
+      position: fixed; top: 12px; right: 12px; left: auto; max-width: 360px;
+      padding: 10px 14px; background: rgba(0, 0, 0, 0.6); border-radius: 8px;
+      font-size: 13px; line-height: 1.4; z-index: 10; pointer-events: none;
+    }
+    #caption b { color: #9fe870; }
+    .xr-publisher-load-world-button {
+      background: #8000ab !important;
+      color: #fff !important;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    .xr-publisher-load-world-button:hover {
+      background: #9b1ac9 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="caption">
+    <b>crate-stones</b><br>
+    Resonant stones on procedural terrain. Each one is a crate AudioMaterial
+    on a <code>THREE.PositionalAudio</code>, not a file. WASD to walk, click
+    to look, E to strike a nearby stone.
+  </div>
+  <div id="world-view">
+    <three-environment-block
+      class="wp-block-xr-publisher-environment alignfull"
+      devicetarget="vr"
+      threeobjecturl=""
+      threepreviewimage="/assets/preview.jpg"
+      scale="1"
+      positiony="-1"
+      rotationy="0"
+      animations=""
+      camcollisions="1"
+    >
+      <three-spawn-point-block
+        class="wp-block-xr-publisher-spawn-point-block"
+        positionx="125"
+        positiony="8"
+        positionz="-90"
+        rotationx="0"
+        rotationy="0"
+        rotationz="0"
+      ></three-spawn-point-block>
+      <three-light-block
+        class="wp-block-xr-publisher-light-block"
+        type="directional"
+        color="#ffffff"
+        intensity="1"
+        positionx="10"
+        positiony="20"
+        positionz="10"
+        castshadow="false"
+      ></three-light-block>
+      <three-terrain-block
+        width="100"
+        height="100"
+        segments="100"
+        scale="0.5"
+        heightscale="50"
+        seed="rideable-demo-seed"
+        color="#4a7c59"
+        roughness="0.8"
+        metalness="0.2"
+        noiseoctaves="6"
+        noisepersistence="0.5"
+        noiselacunarity="2"
+        skycolor="#87CEEB"
+        horizoncolor="#E0F7FF"
+        cloudcolor="#ffffff"
+        clouddensity="0.5"
+        cloudscale="1"
+        cloudspeed="1"
+        cloudheight="100"
+        cloudlayers="3"
+        timeofday="12"
+        timecycleduration="0"
+        positionx="0"
+        positiony="-10"
+        positionz="0"
+      ></three-terrain-block>
+    </three-environment-block>
+  </div>
+
+  <script src="/xr-publisher.umd.js"></script>
+  <script src="/crate-stones-xr-publisher-plugin.umd.js"></script>
+</body>
+</html>

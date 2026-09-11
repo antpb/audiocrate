@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "vite build",
+    "demo": "npm run example:xr --prefix ../..",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   }
