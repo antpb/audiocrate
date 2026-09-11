@@ -19,6 +19,7 @@ import { useAnalysis } from './useAnalysis';
 import { VoiceStrip } from './VoiceStrip';
 import { AssetSlot } from './AssetSlot';
 import { LineDeviceSelect } from './LineDeviceSelect';
+import { lineMonitorOn } from './lineInput';
 import { hasFileSlots } from './nodeAssets';
 import { WavePicker } from './WavePicker';
 import { OSC_WAVE_HINTS, shapeLabelForWave } from './oscillatorWaves';
@@ -33,10 +34,8 @@ interface InspectorPanelProps {
   material: Material | null;
   kind: string | null;
   snapshot: AnalogSnapshot;
-  lineMonitor: boolean;
   masterMonitor: boolean;
   lineDeviceId: string | null;
-  onLineMonitor: (on: boolean) => void;
   onMasterMonitor: (on: boolean) => void;
   onLineDevice: (id: string | null) => Promise<void>;
   onParam: (name: string, value: number) => void;
@@ -66,10 +65,8 @@ export function InspectorPanel({
   material,
   kind,
   snapshot,
-  lineMonitor,
   masterMonitor,
   lineDeviceId,
-  onLineMonitor,
   onMasterMonitor,
   onLineDevice,
   onParam,
@@ -137,9 +134,13 @@ export function InspectorPanel({
         <LineDeviceSelect deviceId={lineDeviceId} onChange={onLineDevice} />
         <label className="param row">
           <span>Monitor</span>
-          <input type="checkbox" checked={lineMonitor} onChange={(event) => onLineMonitor(event.target.checked)} />
+          <input
+            type="checkbox"
+            checked={lineMonitorOn(nodeData)}
+            onChange={(event) => onNodeData?.({ monitor: event.target.checked ? 1 : 0 })}
+          />
         </label>
-        <p className="hint">On sends the live input down the cables. Off keeps it armed but silent.</p>
+        <p className="hint">Off until you turn it on. On sends the live input down the cables. Off keeps it armed but silent.</p>
       </aside>
     );
   }

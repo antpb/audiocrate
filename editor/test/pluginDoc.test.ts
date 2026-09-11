@@ -1,12 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { materialRegistry, parseCratePlugin, stringifyCratePlugin } from '../../src/index';
 import { catalogEntry } from '../src/catalog';
-import { starterPatch } from '../src/patch';
+import { PATCH_KIND, PATCH_VERSION, type CratePatch } from '../src/patch';
 import { buildPluginDocument, registerPluginDocument, suggestedRole } from '../src/pluginDoc';
 
+/** Flattenable subtractive voice. Amp in the editor starter cannot flatten. */
+function instrumentPatch(): CratePatch {
+  return {
+    version: PATCH_VERSION,
+    kind: PATCH_KIND,
+    transport: { bpm: 120, beatsPerBar: 4, beatUnit: 4 },
+    nodes: [
+      { id: 'transport', kind: 'transport', x: 36, y: 36, params: { bpm: 120, beatsPerBar: 4, beatUnit: 4 } },
+      { id: 'keys', kind: 'keyboard', x: 36, y: 340, params: {} },
+      { id: 'osc', kind: 'oscillator', x: 280, y: 36, params: { gain: 0.35, width: 0.5 } },
+      { id: 'adsr', kind: 'adsr', x: 280, y: 280, params: { attack: 0.02, decay: 0.22, sustain: 0.28, release: 0.45, amount: 0.85 } },
+      { id: 'lfo', kind: 'lfo', x: 280, y: 520, params: { rate: 0.55, amount: 0.4 } },
+      { id: 'lp', kind: 'lowpass', x: 560, y: 160, params: { cutoff: 800, q: 0.9 } },
+      { id: 'delay', kind: 'delay', x: 800, y: 160, params: { timeSec: 0.22, feedback: 0.28, mix: 0.22 } },
+      { id: 'master', kind: 'master', x: 1040, y: 160, params: {} },
+    ],
+    connections: [
+      { source: 'keys', sourceOutput: 'cv', target: 'osc', targetInput: 'note' },
+      { source: 'keys', sourceOutput: 'gate', target: 'osc', targetInput: 'gate' },
+      { source: 'keys', sourceOutput: 'cv', target: 'adsr', targetInput: 'note' },
+      { source: 'keys', sourceOutput: 'gate', target: 'adsr', targetInput: 'gate' },
+      { source: 'osc', sourceOutput: 'audio', target: 'lp', targetInput: 'input' },
+      { source: 'adsr', sourceOutput: 'cv', target: 'lp', targetInput: 'cutoff' },
+      { source: 'lfo', sourceOutput: 'cv', target: 'osc', targetInput: 'width' },
+      { source: 'lp', sourceOutput: 'audio', target: 'delay', targetInput: 'input' },
+      { source: 'delay', sourceOutput: 'audio', target: 'master', targetInput: 'input' },
+    ],
+  };
+}
+
 describe('patch to plugin', () => {
-  it('exports the starter patch as a polyphonic instrument and re-registers it', () => {
-    const patch = starterPatch();
+  it('exports a subtractive instrument as a polyphonic plugin and re-registers it', () => {
+    const patch = instrumentPatch();
     expect(suggestedRole(patch)).toBe('instrument');
 
     const doc = buildPluginDocument(patch, 'Starter Synth', 'instrument');
@@ -40,7 +70,7 @@ describe('patch to plugin', () => {
     // `flattenPatch` in JavaScript. A Swift AUv3 has no patcher in it, so
     // export writes the flattened result alongside the patch. Without this
     // the AUv3 importer has nothing to import.
-    const doc = buildPluginDocument(starterPatch(), 'Starter Synth', 'instrument');
+    const doc = buildPluginDocument(instrumentPatch(), 'Starter Synth', 'instrument');
     const compiled = doc.compiled;
     expect(compiled).toBeDefined();
     expect(compiled!.role).toBe('instrument');
@@ -60,7 +90,7 @@ describe('patch to plugin', () => {
   });
 
   it('refuses to export a patch whose output is unwired', () => {
-    const patch = starterPatch();
+    const patch = instrumentPatch();
     patch.connections = patch.connections.filter((conn) => conn.target !== 'master');
     expect(() => buildPluginDocument(patch, 'Broken', 'instrument')).toThrow(/master/);
   });

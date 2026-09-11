@@ -82,6 +82,7 @@ import { normalizeLineDeviceId } from './storage';
 import { placeMidiClip } from './midiClipData';
 import { createNativeGain, createNativeStereoPan } from './nativeMixer';
 import { prepareClipBuffer } from './resampleAudio';
+import { lineMonitorOn } from './lineInput';
 import { isLineKind, isMasterKind, isMidiClipKind, isMidiInKind, isMidiOutKind } from './tools';
 import {
   createSpatialMaster,
@@ -186,7 +187,6 @@ export class PatchAudio {
   private taps = new Map<string, Tap>();
   private master: GainNode | null = null;
   private speaker: GainNode | null = null;
-  lineMonitor = true;
   masterMonitor = true;
   lineDeviceId: string | null = null;
   private editor: PatchEditor | null = null;
@@ -433,7 +433,7 @@ export class PatchAudio {
 
   private async attachLines(ctx: AudioContext, ids: readonly string[], token: number): Promise<void> {
     for (const id of ids) {
-      const source = await this.lineSource(ctx);
+      const source = await this.lineSource(ctx, id);
       if (token !== this.armToken) return;
       if (source) this.lines.set(id, source);
     }
@@ -635,10 +635,9 @@ export class PatchAudio {
     this.publishVoices();
   }
 
-  setLineMonitor(on: boolean): void {
-    this.lineMonitor = on;
-    const gain = on ? 1 : 0;
-    for (const line of this.lines.values()) line.gain.gain.value = gain;
+  setLineMonitor(nodeId: string, on: boolean): void {
+    const line = this.lines.get(nodeId);
+    if (line) line.gain.gain.value = on ? 1 : 0;
   }
 
   /**
@@ -1056,11 +1055,11 @@ export class PatchAudio {
     }
   }
 
-  private async lineSource(ctx: AudioContext): Promise<{ source: AudioNode; gain: GainNode } | null> {
+  private async lineSource(ctx: AudioContext, nodeId: string): Promise<{ source: AudioNode; gain: GainNode } | null> {
     const opened = await this.ensureLineOpen(ctx);
     if (!opened) return null;
     const gain = ctx.createGain();
-    gain.gain.value = this.lineMonitor ? 1 : 0;
+    gain.gain.value = lineMonitorOn(this.editor?.nodeData(nodeId)) ? 1 : 0;
     opened.node.connect(gain);
     return { source: opened.node, gain };
   }

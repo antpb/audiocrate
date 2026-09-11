@@ -15,11 +15,20 @@ describe('crate.patch', () => {
       'lowpass',
       'delay',
       'master',
+      'line',
+      'amp',
+      'tuner',
+      'analyzer',
+      'looper',
+      'reverb',
     ]);
     expect(parsed.transport).toEqual({ bpm: 120, beatsPerBar: 4, beatUnit: 4 });
-    expect(parsed.connections).toHaveLength(9);
+    expect(parsed.connections).toHaveLength(16);
     expect(parsed.connections.some((conn) => conn.source === 'adsr' && conn.targetInput === 'cutoff')).toBe(true);
     expect(parsed.connections.some((conn) => conn.source === 'lfo' && conn.targetInput === 'width')).toBe(true);
+    expect(parsed.connections.some((conn) => conn.source === 'delay' && conn.target === 'b7f4d682191904ef')).toBe(true);
+    expect(parsed.connections.some((conn) => conn.source === 'bb96c8f71601af7a' && conn.target === 'f92a8eee75a6112c')).toBe(true);
+    expect(parsed.nodes.find((node) => node.kind === 'line')?.data).toEqual({ monitor: 0 });
     expect(isCratePatch(parsed)).toBe(true);
   });
 

@@ -2,6 +2,12 @@ import { listInputs, type AudioInputPort } from './host/crateAudioInput';
 
 export type { AudioInputPort };
 
+/** Line monitor is opt-in. Missing, 0, or false stays silent. */
+export function lineMonitorOn(data?: Record<string, unknown> | null): boolean {
+  const value = data?.monitor;
+  return value === true || value === 1;
+}
+
 /**
  * Capture devices for the Line inspector. Asks for mic permission once if
  * labels are still blank.

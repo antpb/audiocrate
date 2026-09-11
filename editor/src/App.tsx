@@ -16,7 +16,9 @@ import {
   type CratePluginDocument,
 } from '../../src/index';
 import { applyImportedAssets, importProjectBytes, isZipBytes, looksLikeZip } from './importProject';
-import { parsePatch, stringifyPatch, starterPatch, spatialPatch, type CratePatch } from './patch';
+import { lineMonitorOn } from './lineInput';
+import { parsePatch, stringifyPatch, starterPatch, spatialPatch, emptyPatch, type CratePatch } from './patch';
+import { isLineKind } from './tools';
 import { buildPluginDocument, registerPluginDocument, suggestedRole } from './pluginDoc';
 import { loadLineDeviceId, loadStoredPatch, saveLineDeviceId, saveStoredPatch } from './storage';
 import { PatchAudio } from './audio';
@@ -89,7 +91,6 @@ export function App() {
   const [keys, setKeys] = useState(analogRef.current.snapshot);
   const [exportForm, setExportForm] = useState<{ label: string; role: 'insert' | 'instrument' } | null>(null);
   const [sheet, setSheet] = useState<'none' | 'palette' | 'inspector'>('none');
-  const [lineMonitor, setLineMonitor] = useState(true);
   const [lineDeviceId, setLineDeviceId] = useState<string | null>(() => loadLineDeviceId());
   const [masterMonitor, setMasterMonitor] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -551,6 +552,10 @@ export function App() {
     await loadPreset(starterPatch(), 'New patch.');
   }
 
+  async function newBlankPatch() {
+    await loadPreset(emptyPatch(), 'Blank patch.');
+  }
+
   async function newSpatialPatch() {
     await loadPreset(spatialPatch(), 'Spatial patch. Play, then turn the master yaw.');
   }
@@ -698,6 +703,15 @@ export function App() {
                   type="button"
                   onClick={() => {
                     setMoreOpen(false);
+                    void newBlankPatch();
+                  }}
+                >
+                  New blank
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
                     void newSpatialPatch();
                   }}
                 >
@@ -838,13 +852,8 @@ export function App() {
           material={material}
           kind={selectedKind}
           snapshot={keys}
-          lineMonitor={lineMonitor}
           masterMonitor={masterMonitor}
           lineDeviceId={lineDeviceId}
-          onLineMonitor={(on) => {
-            audioRef.current.setLineMonitor(on);
-            setLineMonitor(on);
-          }}
           onLineDevice={async (id) => {
             const used = await audioRef.current.setLineDevice(id);
             saveLineDeviceId(used);
@@ -874,6 +883,9 @@ export function App() {
             setTick((n) => n + 1);
             queuePublishRef.current(true);
             if (isMidiIoKind(selectedKind ?? '')) void audioRef.current.syncMidiIo(selectedId);
+            if (isLineKind(selectedKind ?? '') && 'monitor' in patch) {
+              audioRef.current.setLineMonitor(selectedId, lineMonitorOn(patch));
+            }
           }}
           nodeId={selectedId}
           namFilename={material && selectedKind === 'amp' ? namFilename(material) : null}

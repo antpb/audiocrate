@@ -240,7 +240,7 @@ async function buildImportedProject(
     return keysId;
   };
   const ensureLine = () => {
-    if (!lineId) lineId = addNode('line', LINE_KIND, 36, 400);
+    if (!lineId) lineId = addNode('line', LINE_KIND, 36, 400, {}, { monitor: 0 });
     return lineId;
   };
 

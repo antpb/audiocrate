@@ -31,7 +31,7 @@ export function loadStoredPatch(): CratePatch {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return starterPatch();
     const parsed = JSON.parse(raw) as unknown;
-    if (isCratePatch(parsed) && parsed.nodes.length > 0) return parsed;
+    if (isCratePatch(parsed)) return parsed;
   } catch {
     /* ignore a corrupt slot */
   }

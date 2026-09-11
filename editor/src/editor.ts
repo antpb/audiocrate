@@ -15,7 +15,7 @@ import { catalogEntry, createMaterial, isToolEntry } from './catalog';
 import { nodeInputs, nodeOutputs } from './controlInputs';
 import { emptyPatch, type CratePatch, type PatchTransport } from './patch';
 import { passthroughLinks, type GraphLink } from './passthrough';
-import { isMidiClipKind, isMidiIoKind } from './tools';
+import { isLineKind, isMidiClipKind, isMidiIoKind } from './tools';
 import { isBformatPort } from './spatialNodes';
 import { bindSocket } from './render/bindSocket';
 import { PatchConnection } from './render/PatchConnection';
@@ -183,6 +183,7 @@ export class PatchEditor {
     let node: PatchNode;
     if (isToolEntry(entry)) {
       node = new PatchNode(entry.kind, entry.label, entry.inputs ?? [], entry.outputs ?? []);
+      if (isLineKind(entry.kind)) node.nodeData = { monitor: 0 };
     } else {
       const material = entry.create!();
       if (isTransportKind(entry.kind) && this.transport) {
@@ -341,7 +342,8 @@ export class PatchEditor {
         node = new PatchNode(material.kind, entry.label, nodeInputs(material), nodeOutputs(material));
         this.materials.set(saved.id, material);
       }
-      if (saved.data) node.nodeData = saved.data;
+      if (isLineKind(saved.kind)) node.nodeData = { monitor: 0, ...(saved.data ?? {}) };
+      else if (saved.data) node.nodeData = saved.data;
       (node as { id: string }).id = saved.id;
       await this.editor.addNode(node);
       this.kinds.set(node.id, saved.kind);
