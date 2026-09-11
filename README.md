@@ -1,8 +1,8 @@
 # audiocrate
 
-A Web Audio scene graph, an extensible AudioMaterial system, and a
+A Web Audio scene graph, extendable AudioMaterial system, and a
 serializable DSP graph that the same interpreter runs offline and in an
-AudioWorklet.
+AudioWorklet. One graph. Multi render. Multi player.
 
 Inspired by how three.js is organized: a scene of objects, materials you
 can write yourself, and loaders. Not an editor. This repo also has
