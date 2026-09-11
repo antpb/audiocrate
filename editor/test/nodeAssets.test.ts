@@ -17,12 +17,14 @@ import {
   applyNamR,
   applySample,
   applyWavetable,
+  attachFactoryNamToBareAmps,
   clearIr,
   clearNam,
   clearNamR,
   clearSample,
   clearWavetable,
   decodeIrBytes,
+  FACTORY_NAM_NAME,
   hasFileSlots,
   irFilename,
   namFilename,
@@ -43,6 +45,37 @@ describe('nodeAssets', () => {
     expect(() => parseNamText('not json', 'bad.nam')).toThrow(/not valid JSON/);
     expect(() => parseNamText('[]', 'list.nam')).toThrow(/not a NAM profile/);
     expect(() => parseNamText('4', 'n.nam')).toThrow(/not a NAM profile/);
+  });
+
+  it.skipIf(!HAS_AMP)('fills a bare starter Amp with the factory profile, and leaves a loaded one', async () => {
+    const bare = createAmpMaterial();
+    const loaded = createAmpMaterial();
+    applyNam(loaded, { filename: 'custom.nam', json: '{"custom":true}' });
+    const editor = {
+      materials: new Map([
+        ['amp-a', bare],
+        ['amp-b', loaded],
+        ['lp', createAmpMaterial()],
+      ]),
+      kinds: new Map([
+        ['amp-a', 'amp'],
+        ['amp-b', 'amp'],
+        ['lp', 'lowpass'],
+      ]),
+    };
+    const persisted: string[] = [];
+    const ids = await attachFactoryNamToBareAmps(
+      editor,
+      async (id) => {
+        persisted.push(id);
+      },
+      async () => ({ filename: FACTORY_NAM_NAME, json: '{"factory":true}' }),
+    );
+    expect(ids).toEqual(['amp-a']);
+    expect(persisted).toEqual(['amp-a']);
+    expect(namFilename(bare)).toBe(FACTORY_NAM_NAME);
+    expect(namFilename(loaded)).toBe('custom.nam');
+    expect(namFilename(editor.materials.get('lp')!)).toBeNull();
   });
 
   it.skipIf(!HAS_AMP)('attaches and clears an amp profile, and ignores a cabinet on Amp', () => {

@@ -91,6 +91,31 @@ export function wavetableFilename(material: AudioMaterial): string | null {
   return wavetableAsset(material)?.filename ?? null;
 }
 
+export async function attachFactoryNamToBareAmps(
+  editor: {
+    materials: Map<string, AudioMaterial>;
+    kinds: Map<string, string>;
+  },
+  persist?: (nodeId: string, material: AudioMaterial) => Promise<void>,
+  loadNam: () => Promise<NamAssetData> = loadFactoryNam,
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const [id, material] of editor.materials) {
+    if (editor.kinds.get(id) !== 'amp') continue;
+    if (namFilename(material)) continue;
+    ids.push(id);
+  }
+  if (ids.length === 0) return [];
+  const nam = await loadNam();
+  for (const id of ids) {
+    const material = editor.materials.get(id);
+    if (!material) continue;
+    applyNam(material, nam);
+    if (persist) await persist(id, material);
+  }
+  return ids;
+}
+
 export function applyNam(material: AudioMaterial, asset: NamAssetData): void {
   setAmpNamAsset(material, asset);
 }

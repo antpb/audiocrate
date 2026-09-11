@@ -20,7 +20,7 @@ import { lineMonitorOn } from './lineInput';
 import { parsePatch, stringifyPatch, starterPatch, spatialPatch, emptyPatch, type CratePatch } from './patch';
 import { isLineKind } from './tools';
 import { buildPluginDocument, registerPluginDocument, suggestedRole } from './pluginDoc';
-import { loadLineDeviceId, loadStoredPatch, saveLineDeviceId, saveStoredPatch } from './storage';
+import { STORAGE_KEY, loadLineDeviceId, loadStoredPatch, saveLineDeviceId, saveStoredPatch } from './storage';
 import { PatchAudio } from './audio';
 import { applyVoiceHint } from './voiceHint';
 import { onNodeMenuRequest } from './nodeMenu';
@@ -33,6 +33,7 @@ import {
   applyNamR,
   applySample,
   applyWavetable,
+  attachFactoryNamToBareAmps,
   clearIr,
   clearNam,
   clearNamR,
@@ -181,8 +182,12 @@ export function App() {
     window.addEventListener('blur', onBlur);
     void (async () => {
       try {
+        const firstVisit = !localStorage.getItem(STORAGE_KEY);
         await editor.loadPatch(loadStoredPatch());
         await hydratePatchAssets(editor);
+        if (firstVisit) {
+          await attachFactoryNamToBareAmps(editor, (id, material) => persistNodeAssets(id, material, 'amp'));
+        }
         applyVoiceHint(editor, analog);
         setKeys(analog.snapshot);
         setStatus('Patch restored. Press Play, then use the keybed.');
@@ -537,19 +542,23 @@ export function App() {
     }
   }
 
-  async function loadPreset(patch: CratePatch, status: string) {
+  async function loadPreset(patch: CratePatch, status: string, factoryNam = false) {
     const editor = editorRef.current;
     if (!editor) return;
     await editor.loadPatch(patch);
     await hydratePatchAssets(editor);
+    if (factoryNam) {
+      await attachFactoryNamToBareAmps(editor, (id, material) => persistShare(id, material, 'amp'));
+    }
     applyVoiceHint(editor, analogRef.current);
     setKeys(analogRef.current.snapshot);
     saveStoredPatch(patch);
+    setTick((n) => n + 1);
     setStatus(status);
   }
 
   async function newPatch() {
-    await loadPreset(starterPatch(), 'New patch.');
+    await loadPreset(starterPatch(), 'New patch.', true);
   }
 
   async function newBlankPatch() {
