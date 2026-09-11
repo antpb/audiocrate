@@ -189,7 +189,7 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 | [Hooks](docs/hooks.md) | Extending a host without forking Audiocrate |
 | [Conformance](docs/conformance.md) | How cross-implementation agreement is enforced |
 | [Editor](editor/README.md) | Example AudioMaterial graph editor (not published) |
-| [Examples](examples/README.md) | Custom-kernel plugins the editor plays, and the Swift interpreter |
+| [Examples](examples/README.md) | Custom-kernel plugins, the XR host adapter, and the Swift interpreter |
 
 ## What Audiocrate is not
 

@@ -10,6 +10,7 @@ Not in the npm package.
 | [`synth/`](synth/) | Wavetable / IR synth |
 | [`space-reverb/`](space-reverb/) | Costello room |
 | [`homecrate/`](homecrate/) | Registers the four kernels and ships the matching AudioWorklet entry |
+| [`xr/`](xr/) | Crate as a `THREE.Audio` source, plus an XR Publisher plugin |
 | [`CrateASL/`](CrateASL/) | Swift interpreter. The conformance twin. |
 
 Core crate does not import these. The editor calls

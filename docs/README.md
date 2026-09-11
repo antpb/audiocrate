@@ -26,4 +26,4 @@ Not in this folder:
 | | |
 |---|---|
 | [Editor](../editor/README.md) | Example AudioMaterial graph editor. Not in the npm package. |
-| [Examples](../examples/README.md) | Custom-kernel plugins the editor plays, and the Swift interpreter. |
+| [Examples](../examples/README.md) | Custom-kernel plugins, the XR host adapter, and the Swift interpreter. |

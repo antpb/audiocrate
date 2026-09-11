@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>crate iOS audio probe v2</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px 14px 80px; background: #101116; color: #e8e8ee;
+         font: 15px/1.45 -apple-system, system-ui, sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 14px; color: #9aa0b0; font-size: 13px; }
+  button { width: 100%; padding: 18px; font-size: 17px; font-weight: 600; border: 0;
+           border-radius: 12px; background: #2f6df0; color: #fff; margin-bottom: 14px; }
+  button:disabled { background: #333747; color: #777f92; }
+  .step { border: 1px solid #262a36; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+          background: #171923; }
+  .step h2 { font-size: 14px; margin: 0 0 3px; font-weight: 600; }
+  .step .r { font-size: 12px; color: #9aa0b0; white-space: pre-wrap; word-break: break-word; }
+  .pass { border-left: 4px solid #35c48a; }
+  .fail { border-left: 4px solid #f0574f; }
+  .warn { border-left: 4px solid #e8b23a; }
+  .ask { background: #1d2333; border: 1px solid #2f6df0; border-radius: 10px;
+         padding: 14px; margin: 12px 0; font-size: 15px; }
+  .ask b { color: #7aa5ff; display: block; margin-bottom: 6px; font-size: 16px; }
+  .yn button { width: 48%; display: inline-block; margin: 8px 1% 0; padding: 14px; font-size: 16px; }
+  .no { background: #55304a; }
+  #summary { position: fixed; left: 0; right: 0; bottom: 0; background: #0b0c11;
+             border-top: 1px solid #262a36; padding: 10px 14px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>crate iOS audio probe v2</h1>
+<p class="sub">Two separate questions: does ANY web audio reach your speaker, and can Safari
+load crate's worklet. Runs both to the end regardless of failures. Volume up, no headphones.</p>
+
+<button id="go">Tap to run</button>
+<div id="out"></div>
+<div id="summary">ready</div>
+
+<script src="./crate-stones-xr-publisher-plugin.umd.js"></script>
+<script>
+const out = document.getElementById('out');
+const summary = document.getElementById('summary');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const heard = {};
+
+function step(title, cls, detail) {
+  const d = document.createElement('div');
+  d.className = 'step ' + cls;
+  d.innerHTML = '<h2></h2><div class="r"></div>';
+  d.querySelector('h2').textContent = title;
+  d.querySelector('.r').textContent = detail;
+  out.appendChild(d);
+  window.scrollTo(0, document.body.scrollHeight);
+  return d;
+}
+
+// Safari's error.stack does not include the message, which is the only part
+// that says WHY. Always build the string by hand.
+function errText(e) {
+  if (!e) return 'unknown';
+  return (e.name || 'Error') + ': ' + (e.message || String(e));
+}
+
+// Ask rather than assume. "Did you hear it" is the only measurement that
+// matters here and no API reports it.
+function ask(key, question) {
+  return new Promise((resolve) => {
+    const d = document.createElement('div');
+    d.className = 'ask';
+    d.innerHTML = '<b></b><div class="yn"><button class="yes">I heard it</button>' +
+                  '<button class="no">Silent</button></div>';
+    d.querySelector('b').textContent = question;
+    out.appendChild(d);
+    window.scrollTo(0, document.body.scrollHeight);
+    d.querySelector('.yes').onclick = () => { heard[key] = true;  d.innerHTML = '<b>' + question + '</b>HEARD'; resolve(true); };
+    d.querySelector('.no').onclick  = () => { heard[key] = false; d.innerHTML = '<b>' + question + '</b>SILENT'; resolve(false); };
+  });
+}
+
+/** A 1.5s beep on a given destination node. */
+function beep(ctx, dest, freq) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = freq; g.gain.value = 0.3;
+  o.connect(g); g.connect(dest); o.start();
+  return () => { try { o.stop(); g.disconnect(); } catch (e) {} };
+}
+
+function makeThree(ctx) {
+  class A {
+    constructor(_l, positional) {
+      this.gain = ctx.createGain();
+      this.panner = positional ? ctx.createPanner() : null;
+      if (this.panner) { this.panner.panningModel = 'HRTF'; this.panner.connect(this.gain); }
+      this.gain.connect(ctx.destination);
+      this._c = false;
+    }
+    getOutput() { return this.panner || this.gain; }
+    setNodeSource(n) { this.source = n; n.connect(this.getOutput()); this._c = true; return this; }
+    setVolume(v) { this.gain.gain.value = v; return this; }
+    setRefDistance(v) { if (this.panner) this.panner.refDistance = v; return this; }
+    setRolloffFactor(v) { if (this.panner) this.panner.rolloffFactor = v; return this; }
+    setMaxDistance(v) { if (this.panner) this.panner.maxDistance = v; return this; }
+    setDistanceModel(v) { if (this.panner) this.panner.distanceModel = v; return this; }
+    disconnect() { if (this._c) { this.source.disconnect(this.getOutput()); this._c = false; } return this; }
+  }
+  return { Audio: class extends A { constructor(l){super(l,false);} },
+           PositionalAudio: class extends A { constructor(l){super(l,true);} } };
+}
+
+document.getElementById('go').onclick = async function () {
+  this.disabled = true; this.textContent = 'running...';
+  out.innerHTML = ''; summary.textContent = 'running';
+
+  step('device', '', navigator.userAgent);
+
+  // Everything in this tap's turn, before any await: after the first await
+  // iOS stops treating resume() as a user gesture.
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  ctx.resume();
+  try {
+    const b = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const s = ctx.createBufferSource();
+    s.buffer = b; s.connect(ctx.destination); s.start(0);
+  } catch (e) {}
+
+  // The media-route sink, armed in the gesture turn too. iOS ignores
+  // ctx.destination entirely when the Ring/Silent switch is on Silent; a
+  // MediaStreamDestination played by an <audio> element uses the media
+  // route and stays audible. Arming it here, not later, because play()
+  // outside a gesture is refused.
+  const sink = ctx.createMediaStreamDestination();
+  const el = new Audio();
+  el.setAttribute('playsinline', 'true');
+  el.autoplay = true;
+  el.srcObject = sink.stream;
+  el.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.01;pointer-events:none';
+  document.body.appendChild(el);
+  const elPlay = el.play().then(() => 'playing', (e) => 'refused: ' + errText(e));
+
+  await sleep(250);
+  step('1. AudioContext', ctx.state === 'running' ? 'pass' : 'fail',
+    'state=' + ctx.state + '  sampleRate=' + ctx.sampleRate);
+
+  // ================= QUESTION ONE: does audio reach the speaker at all =====
+  // No crate anywhere in this half. If destination is silent and the media
+  // route is audible, the ringer switch is the answer and the fix belongs in
+  // the engine, once, for every plugin.
+
+  let stop = beep(ctx, ctx.destination, 440);
+  await ask('destination', 'A: plain beep on ctx.destination. Hear it?');
+  stop();
+
+  const playState = await elPlay;
+  step('2. <audio> media route element', playState === 'playing' ? 'pass' : 'fail', playState);
+
+  stop = beep(ctx, sink, 660);
+  await ask('mediaRoute', 'B: same beep through the <audio> media route. Hear it?');
+  stop();
+
+  // ================= QUESTION TWO: can Safari load the worklet =============
+  // Four ways to hand the same module to addModule. The real file is the
+  // control: if that works and the others do not, the fix is to stop
+  // inlining the worklet and ship it as a file.
+  const src = await fetch('./crate-voice-processor.js').then(r => r.text()).catch(() => null);
+  if (!src) {
+    step('3. worklet source', 'fail', 'could not fetch ./crate-voice-processor.js');
+  } else {
+    const strategies = [
+      ['blob: URL (what ships today)', () => URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))],
+      ['data: base64', () => 'data:text/javascript;base64,' + btoa(unescape(encodeURIComponent(src)))],
+      ['data: percent-encoded', () => 'data:text/javascript,' + encodeURIComponent(src)],
+      ['real same-origin file', () => './crate-voice-processor.js'],
+    ];
+    for (const [label, makeUrl] of strategies) {
+      // A fresh context per attempt: a processor name can only be registered
+      // once per context, so a success would poison the next test.
+      const c = new (window.AudioContext || window.webkitAudioContext)();
+      try {
+        await c.audioWorklet.addModule(makeUrl());
+        step('addModule: ' + label, 'pass', 'accepted');
+        window.__workletOk = label;
+      } catch (e) {
+        step('addModule: ' + label, 'fail', errText(e));
+      }
+      try { await c.close(); } catch (e) {}
+    }
+  }
+
+  // ================= crate, using whatever worked =========================
+  let peak = 0, built = 'not attempted';
+  if (src) {
+    try {
+      const url = window.__workletOk === 'real same-origin file'
+        ? './crate-voice-processor.js'
+        : undefined;
+      const sound = await window.CrateXR.createCrateAudio(
+        { context: ctx },
+        window.CrateXR.resonantStoneMaterial,
+        { positional: false, volume: 1, params: { wind: 1, pitch: 220, ring: 40 },
+          ...(url ? { workletUrl: url } : {}) },
+        makeThree(ctx),
+      );
+      built = 'built';
+      // Also feed the media route, so this is audible either way.
+      sound.audio.gain.connect(sink);
+      const off = sound.onAnalysis((f) => {
+        peak = Math.max(peak, (f.meters.stone && f.meters.stone.peak) || 0);
+      }, 30);
+      await sleep(2000);
+      sound.strike({ velocity: 1 });
+      await sleep(1500);
+      off();
+      step('4. crate voice', peak > 0.0005 ? 'pass' : 'fail',
+        'meter peak = ' + peak.toFixed(6) + '  (measured on the audio thread inside the graph)');
+      await ask('crate', 'C: crate stone, wind then a strike. Hear it?');
+      sound.dispose();
+    } catch (e) {
+      built = errText(e);
+      step('4. crate voice', 'fail', errText(e));
+    }
+  }
+
+  const line = 'A destination=' + (heard.destination ? 'HEARD' : 'silent') +
+               '  B mediaRoute=' + (heard.mediaRoute ? 'HEARD' : 'silent') +
+               '  C crate=' + (heard.crate ? 'HEARD' : 'silent') +
+               '  worklet=' + (window.__workletOk || 'NONE WORKED');
+  summary.textContent = line;
+  step('SUMMARY', 'warn', line + '\ncrate build: ' + built + '\nmeter peak: ' + peak.toFixed(6));
+
+  this.disabled = false; this.textContent = 'Run again';
+};
+</script>
+</body>
+</html>

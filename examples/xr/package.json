@@ -1,0 +1,14 @@
+{
+  "name": "audiocrate-xr",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Crate as an XR Publisher plugin: a crate AudioMaterial as the source of a THREE.Audio, plus a world of procedurally-voiced stones built on it. Imports crate; crate does not import this.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}

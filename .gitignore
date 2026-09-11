@@ -5,6 +5,7 @@ node_modules/
 # Anchored so examples/*/wasm/dist stays trackable.
 /dist/
 editor/dist/
+examples/xr/dist/
 *.tsbuildinfo
 
 # Tooling caches
