@@ -1,3 +1,5 @@
+![One graph, multi renderer, multi player: browser editor, mobile Safari, native macOS and Android, three.js via XR Publisher](docs/onegraph.jpg)
+
 # audiocrate
 
 A Web Audio scene graph, extendable AudioMaterial system, and a
@@ -7,8 +9,6 @@ AudioWorklet. One graph. Multi render. Multi player.
 Inspired by how three.js is organized: a scene of objects, materials you
 can write yourself, and loaders. Not an editor. This repo also has
 [`editor/`](editor/README.md), an example app that is not in the npm package.
-
-![One graph, multi renderer, multi player: browser editor, mobile Safari, native macOS and Android, three.js via XR Publisher](docs/onegraph.jpg)
 
 ```bash
 npm install audiocrate
