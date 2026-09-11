@@ -172,6 +172,9 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 
 ## Documentation
 
+[docs/](docs/README.md) is the reading order. Hosted copy:
+**<https://homecrate.app/docs/crate/>**.
+
 | | |
 |---|---|
 | [Philosophy](docs/philosophy.md) | Design rules and scope |
@@ -187,8 +190,6 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 | [Conformance](docs/conformance.md) | How cross-implementation agreement is enforced |
 | [Editor](editor/README.md) | Example AudioMaterial graph editor (not published) |
 | [Examples](examples/README.md) | Custom-kernel plugins the editor plays, and the Swift interpreter |
-
-Full docs: **<https://homecrate.app/docs/crate/>**
 
 ## What Audiocrate is not
 
