@@ -199,6 +199,7 @@ export class PatchAudio {
   private speaker: GainNode | null = null;
   masterMonitor = true;
   lineDeviceId: string | null = null;
+  lineOpenError: string | null = null;
   private editor: PatchEditor | null = null;
   private analog: AnalogKeyboard | null = null;
   private unsub: (() => void) | null = null;
@@ -218,6 +219,9 @@ export class PatchAudio {
   private playTimers: number[] = [];
   private wireSig = '';
   private timelinePlaying = false;
+  /** Node ids present when Play armed. Drops after that are attached live. */
+  private knownGraphIds = new Set<string>();
+  private syncChain: Promise<void> = Promise.resolve();
   private meterSink: GainNode | null = null;
   private meterFast = false;
   private meterQuietMs = 0;
@@ -412,6 +416,7 @@ export class PatchAudio {
     this.publishVoices();
     this.startMeter();
     this.playing = true;
+    this.markKnownGraph(editor);
     const monitoredLines = pendingLines.filter((id) => lineMonitorOn(editor.nodeData(id)));
     void this.attachLines(ctx, monitoredLines, token);
     void this.attachMidiIo(pendingMidiIn, pendingMidiOut, token);
@@ -666,26 +671,45 @@ export class PatchAudio {
     if (attached && masterFader) masterFader.gain.value = 0;
     this.armMidiClips(editor, ctx, 'drum');
     this.playing = true;
+    this.markKnownGraph(editor);
     this.startMeter();
     console.info(
       `[crate-patcher] timeline play tracks=${stats.tracks} clips=${stats.clips} midi=${stats.midi} from ${startSec.toFixed(1)}s at ${scene.transport.bpm} bpm`,
     );
   }
 
+  /**
+   * Picks up nodes and cables added while Play is running.
+   *
+   * A drop used to sit on the canvas until Stop and Play, because arming
+   * only builds voices once. Attach the new node, then rewire. No full
+   * reinit: that would reopen the mic and restart the timeline.
+   */
   sync(editor: PatchEditor): void {
-    if (!this.playing) return;
     this.editor = editor;
-    if (this.timelinePlaying) {
-      this.ensureTimelineMixerLives();
-      this.rewire(false);
-      return;
-    }
-    void this.adoptNewlyAudible(editor);
-    if (!this.rewire(false)) return;
-    // An edit can move a cable or retarget a jack, so what was last sent for
-    // a parameter is no longer evidence about what that parameter now holds.
+    if (!this.playing) return;
+    this.syncChain = this.syncChain
+      .then(() => this.syncGraph())
+      .catch((err) => {
+        console.warn('[crate-patcher] graph sync failed', err);
+      });
+  }
+
+  private async syncGraph(): Promise<void> {
+    const editor = this.editor;
+    if (!editor || !this.playing) return;
+    const removed = this.forgetRemovedNodes(editor);
+    const added = await this.adoptAddedNodes(editor);
+    const audible = await this.adoptNewlyAudible(editor);
+    if (this.timelinePlaying) this.ensureTimelineMixerLives();
+    if (!this.rewire(removed || added || audible) && !removed && !added && !audible) return;
     this.lastCv.clear();
     this.publishVoices();
+  }
+
+  private markKnownGraph(editor: PatchEditor): void {
+    this.knownGraphIds.clear();
+    for (const node of editor.editor.getNodes()) this.knownGraphIds.add(node.id);
   }
 
   /**
@@ -702,10 +726,10 @@ export class PatchAudio {
    * cables move constantly while patching and rebuilding on every
    * disconnection would cost more than the voice does.
    */
-  private async adoptNewlyAudible(editor: PatchEditor): Promise<void> {
+  private async adoptNewlyAudible(editor: PatchEditor): Promise<boolean> {
     const renderer = this.renderer;
     const ctx = this.scene?.audioContext as AudioContext | undefined;
-    if (!renderer || !ctx) return;
+    if (!renderer || !ctx) return false;
     const reachable = liveNodeIds(
       editor.editor.getNodes().map((node) => ({ id: node.id, kind: editor.kinds.get(node.id) ?? '' })),
       editor.editor.getConnections().map((conn) => ({ source: conn.source, target: conn.target })),
@@ -714,18 +738,202 @@ export class PatchAudio {
     for (const id of reachable) {
       if (this.lives.has(id)) continue;
       const kind = editor.kinds.get(id) ?? '';
-      // Keyboards, MIDI I/O, lines and the master have their own setup at arm
-      // time and no voice of their own.
       if (isKeyboardKind(kind) || isMidiInKind(kind) || isMidiOutKind(kind)) continue;
       if (isMidiClipKind(kind) || isMasterKind(kind) || isLineKind(kind) || isTransportKind(kind)) continue;
       const material = editor.materials.get(id);
       if (!material) continue;
       await this.attachLive(ctx, renderer, material, id, kind);
+      this.armNewSource(id);
       added = true;
     }
-    if (added && this.playing) {
-      this.rewire();
-      this.publishVoices();
+    return added;
+  }
+
+  /** Nodes dropped after Play, even before they are cabled to Master. */
+  private async adoptAddedNodes(editor: PatchEditor): Promise<boolean> {
+    let added = false;
+    for (const node of editor.editor.getNodes()) {
+      if (this.knownGraphIds.has(node.id)) continue;
+      const kind = editor.kinds.get(node.id) ?? '';
+      if (!kind) continue;
+      this.knownGraphIds.add(node.id);
+      await this.attachGraphNode(editor, node.id, kind);
+      added = true;
+    }
+    return added;
+  }
+
+  private forgetRemovedNodes(editor: PatchEditor): boolean {
+    const current = new Set(editor.editor.getNodes().map((node) => node.id));
+    let removed = false;
+    for (const id of [...this.knownGraphIds]) {
+      if (current.has(id)) continue;
+      this.knownGraphIds.delete(id);
+      this.disposeGraphNode(id);
+      removed = true;
+    }
+    return removed;
+  }
+
+  private async attachGraphNode(editor: PatchEditor, nodeId: string, kind: string): Promise<void> {
+    const renderer = this.renderer;
+    const ctx = this.scene?.audioContext as AudioContext | undefined;
+    if (!renderer || !ctx) return;
+    if (isMasterKind(kind) || isMidiClipKind(kind)) return;
+    if (isKeyboardKind(kind)) {
+      if (this.jacks.has(nodeId)) return;
+      const bank = createJacks(ctx);
+      writeJacks(bank, this.analog?.snapshot, ctx.currentTime, false);
+      this.jacks.set(nodeId, bank);
+      return;
+    }
+    if (isMidiInKind(kind)) {
+      if (this.midiInJacks.has(nodeId)) return;
+      const bank = createMidiInJacks(ctx);
+      writeMidiInJacks(bank, undefined, ctx.currentTime, false);
+      this.midiInJacks.set(nodeId, bank);
+      this.midiInMonitors.set(nodeId, new MidiInputMonitor());
+      void this.attachMidiIo([nodeId], [], this.armToken);
+      return;
+    }
+    if (isMidiOutKind(kind)) {
+      if (this.midiOuts.has(nodeId)) return;
+      this.midiOuts.set(nodeId, {
+        state: createMidiOutputState(),
+        fields: readMidiIoFields(editor.nodeData(nodeId), DEFAULT_MIDI_OUT_FIELDS),
+        output: null,
+      });
+      void this.attachMidiIo([], [nodeId], this.armToken);
+      return;
+    }
+    if (isLineKind(kind)) {
+      if (this.lines.has(nodeId) || !lineMonitorOn(editor.nodeData(nodeId))) return;
+      void this.attachLines(ctx, [nodeId], this.armToken);
+      return;
+    }
+    if (this.lives.has(nodeId)) return;
+    const material = editor.materials.get(nodeId);
+    if (!material) return;
+    if (isTransportKind(kind)) {
+      try {
+        const live = await this.createLive(ctx, renderer, material, nodeId);
+        this.lives.set(nodeId, live);
+        this.transportJacks.set(nodeId, createTransportJacks(ctx, live.mix));
+      } catch (err) {
+        console.warn(`[crate-patcher] transport ${nodeId} fell back to scalar jacks`, err);
+        const mix = ctx.createGain();
+        mix.gain.value = 1;
+        this.lives.set(nodeId, { mix, handles: [], pool: null, kernelPoly: false });
+        this.transportJacks.set(nodeId, createTransportJacks(ctx, mix));
+      }
+      this.startTransport(editor, ctx);
+      return;
+    }
+    await this.attachLive(ctx, renderer, material, nodeId, kind);
+    this.armNewSource(nodeId);
+  }
+
+  private disposeGraphNode(nodeId: string): void {
+    const live = this.lives.get(nodeId);
+    if (live) {
+      live.pool?.allNotesOff();
+      for (const handle of live.handles) disposeVoiceHandle(handle);
+      try {
+        live.mix.disconnect();
+      } catch {
+        /* already gone */
+      }
+      if (live.input && live.input !== live.mix) {
+        try {
+          live.input.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }
+      live.dispose?.();
+      this.lives.delete(nodeId);
+    }
+    const keys = this.jacks.get(nodeId);
+    if (keys) {
+      for (const node of Object.values(keys)) {
+        try {
+          node.stop();
+          node.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }
+      this.jacks.delete(nodeId);
+    }
+    const midiIn = this.midiInJacks.get(nodeId);
+    if (midiIn) {
+      for (const node of Object.values(midiIn)) {
+        try {
+          node.stop();
+          node.disconnect();
+        } catch {
+          /* already gone */
+        }
+      }
+      this.midiInJacks.delete(nodeId);
+    }
+    this.midiInUnsubs.get(nodeId)?.();
+    this.midiInUnsubs.delete(nodeId);
+    this.midiInMonitors.delete(nodeId);
+    const midiOut = this.midiOuts.get(nodeId);
+    if (midiOut) {
+      if (midiOut.state.sounding != null && midiOut.output) {
+        try {
+          midiOut.output.send(
+            encodeMidiVoiceEvent({ type: 'noteOff', note: midiOut.state.sounding }, midiOut.fields.channel),
+          );
+        } catch {
+          /* port gone */
+        }
+      }
+      this.midiOuts.delete(nodeId);
+    }
+    const line = this.lines.get(nodeId);
+    if (line) {
+      try {
+        line.gain.disconnect();
+        line.source.disconnect();
+      } catch {
+        /* already gone */
+      }
+      this.lines.delete(nodeId);
+      if (this.lines.size === 0) {
+        this.lineOpen?.close();
+        this.lineOpen = null;
+      }
+    }
+    const transport = this.transportJacks.get(nodeId);
+    if (transport) {
+      stopTransportScalars(transport);
+      this.transportJacks.delete(nodeId);
+    }
+    const analysis = this.analysisJacks.get(nodeId);
+    if (analysis) {
+      stopAnalysisScalars(analysis);
+      this.analysisJacks.delete(nodeId);
+    }
+    const looper = this.looperJacks.get(nodeId);
+    if (looper) {
+      stopLooperScalars(looper);
+      this.looperJacks.delete(nodeId);
+    }
+  }
+
+  private armNewSource(id: string): void {
+    const editor = this.editor;
+    if (!editor) return;
+    const live = this.lives.get(id);
+    const material = editor.materials.get(id);
+    if (!live || !material) return;
+    const keyed = new Set([...keyedTargets(editor), ...midiInNoteTargets(editor)]);
+    if (keyed.has(id)) return;
+    if (material.audioInputs.length === 0 && !controlInputs(material).includes('note')) {
+      live.handles[0]?.noteOn({ ...material.snapshotParams(), note: 69, velocity: 0.85 });
     }
   }
 
@@ -751,10 +959,16 @@ export class PatchAudio {
    * while Play is running reopens the stream and rewires; otherwise Play
    * picks it up.
    */
+  get lineOpenedLabel(): string | null {
+    const label = this.lineOpen?.label;
+    return label ? label : null;
+  }
+
   async setLineDevice(deviceId: string | null): Promise<string | null> {
     const next = normalizeLineDeviceId(deviceId);
     const same = next === this.lineDeviceId;
     this.lineDeviceId = next;
+    this.lineOpenError = null;
     if (!this.playing || !this.editor) return this.lineDeviceId;
     if (same && this.lineOpen) return this.lineDeviceId;
     const ctx = this.scene?.audioContext as AudioContext | undefined;
@@ -764,6 +978,12 @@ export class PatchAudio {
     this.teardownLines();
     if (token !== this.armToken) return this.lineDeviceId;
     await this.attachLines(ctx, ids, token);
+    if (ids.length > 0 && this.lineDeviceId && !this.lineOpen) {
+      throw new Error(
+        this.lineOpenError ??
+          'The selected input did not open. Chrome on Android lists USB audio but often still captures the phone microphone.',
+      );
+    }
     return this.lineDeviceId;
   }
 
@@ -835,10 +1055,8 @@ export class PatchAudio {
   triggerNode(nodeId: string, note: number, velocity = 1): boolean {
     const live = this.lives.get(nodeId);
     const material = this.editor?.materials.get(nodeId);
-    // A node only gets a voice when it reaches Master, so no voice here means
-    // the instrument is not cabled to the output. Reported rather than
-    // swallowed: a pad that does nothing and says nothing is the worst
-    // version of this.
+    // A node gets a voice at Play, or when it is dropped while Play is
+    // running. No voice here means arming has not reached it yet.
     if (!live || !material) return false;
     if (material.kind === 'drum') {
       const heard = this.triggerDrumNative(live, material, note, velocity);
@@ -1272,20 +1490,20 @@ export class PatchAudio {
 
   private async ensureLineOpen(ctx: AudioContext): Promise<OpenInputResult | null> {
     if (this.lineOpen) return this.lineOpen;
+    this.lineOpenError = null;
     try {
       this.lineOpen = await openInput(ctx, this.lineDeviceId);
       await this.resumeIfNeeded();
       return this.lineOpen;
-    } catch {
-      if (!this.lineDeviceId) return null;
-      try {
-        this.lineDeviceId = null;
-        this.lineOpen = await openInput(ctx, null);
-        await this.resumeIfNeeded();
-        return this.lineOpen;
-      } catch {
-        return null;
+    } catch (err) {
+      // Do not open the built-in mic after a named device failed. That is how
+      // the picker stayed on "USB audio" while Android Chrome captured the
+      // phone microphone.
+      this.lineOpenError = err instanceof Error ? err.message : String(err);
+      if (this.lineDeviceId) {
+        console.warn('[crate-patcher] selected line input did not open', err);
       }
+      return null;
     }
   }
 
@@ -1677,6 +1895,7 @@ export class PatchAudio {
     }
     this.looperJacks.clear();
     this.lastAnchor = null;
+    this.knownGraphIds.clear();
     this.teardownLines();
     this.clearTaps();
   }

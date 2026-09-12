@@ -49,11 +49,11 @@ public enum CrateGen {
 /// The shortlist the model picks from, filtered against this build's catalog.
 ///
 /// Curated, because "which modules make a good generative source" is an
-/// editorial question the catalog cannot answer: `tone` is a source and
-/// `oscillator` is a keyboard voice that renders silence without a gate, and
-/// nothing in the data says so. Filtered, because an editorial list that
-/// names a module this build cannot compile would put it in front of somebody
-/// as a choice that then fails.
+/// editorial question the catalog cannot answer. A voice still needs a
+/// notes lane and an envelope or it is a keyboard instrument nobody is
+/// playing. Filtered, because an editorial list that names a module this
+/// build cannot compile would put it in front of somebody as a choice that
+/// then fails.
 public struct CrateGenVocabulary: Sendable {
 
     public let role: CrateGen.Role
@@ -79,13 +79,14 @@ public struct CrateGenVocabulary: Sendable {
     }
 
     private static let instrumentSources = ["oscillator", "SynthVoice", "wavetable"]
-    private static let generativeSources = ["tone", "noise", "comb", "impulse"]
+    private static let droneSources = ["tone", "noise", "comb", "impulse"]
     /// The modules the lanes are built out of. Not offered as slots: a lane
     /// is an idiom that expands into several of these, and offering the parts
     /// is what produced a clock sitting on the canvas wired to nothing.
     static let laneModuleKinds = [
-        "clock", "pulse", "euclidean", "lfo", "randomsmooth",
+        "clock", "syncedclock", "pulse", "euclidean", "lfo", "randomsmooth",
         "randomstepped", "syncedramp", "adsr", "envfollow",
+        "samplehold", "sequencer", "quantize",
     ]
     private static let filterKinds = [
         "lowpass", "highpass", "bandpass", "ladder", "svflowpass",
@@ -102,20 +103,24 @@ public struct CrateGenVocabulary: Sendable {
         let usable: ([String]) -> [String] = { kinds in
             kinds.filter { catalog.material($0) != nil && catalog.canCompile($0) }
         }
-        // An instrument's source is a voice with note and gate jacks; a
-        // generative patch's source has to make sound with nobody playing it,
-        // which is the difference between `tone` and `oscillator`. An insert
-        // has no source at all: the host's signal is the source.
+        // An instrument's source is a voice with note and gate jacks. A
+        // generative patch uses the same voices, then Swift cables a notes
+        // lane and an envelope so they play with nobody holding a key. A
+        // free-running tone is a layer, not the lead, because it cannot
+        // take a note. An insert has no source at all: the host's signal
+        // is the source.
         switch role {
         case .instrument:
             sources = usable(Self.instrumentSources)
             layers = [CrateGen.none] + usable(Self.instrumentSources + ["tone", "noise"])
         case .generative:
-            sources = usable(Self.generativeSources)
-            layers = [CrateGen.none] + usable(Self.generativeSources)
+            let voices = usable(Self.instrumentSources)
+            let drones = usable(Self.droneSources)
+            sources = voices.isEmpty ? drones : voices
+            layers = [CrateGen.none] + usable(Self.instrumentSources + Self.droneSources)
         case .insert:
             sources = []
-            layers = [CrateGen.none] + usable(Self.generativeSources)
+            layers = [CrateGen.none] + usable(Self.droneSources)
         }
         filters = usable(Self.filterKinds)
         spaces = [CrateGen.none] + usable(Self.spaceKinds)
@@ -221,6 +226,8 @@ public enum CrateGenLaneKind: String, Sendable, CaseIterable {
     case random
     /// Unpredictable and held. Stepped random.
     case stepped
+    /// Held pitches that jump. Sample-and-hold into a scale quantizer.
+    case notes
     /// A rising ramp locked to the bar.
     case ramp
     /// The sound's own loudness, fed back as control.
@@ -248,6 +255,22 @@ public enum CrateGenLaneKind: String, Sendable, CaseIterable {
         case .random, .stepped, .follower, .pulse, .euclidean, .envelope: return true
         // An LFO carries `amount` and a synced ramp carries `depth`.
         case .drift, .ramp: return false
+        // Sample-and-hold plus quantize is stepped on purpose; the hold
+        // is the depth.
+        case .notes: return false
+        }
+    }
+
+    /// Whether this lane may drive freq, pitch, note, or detune.
+    ///
+    /// Flatten maps a CV cable onto the param's whole declared range.
+    /// An LFO with amount 0.2 still sweeps hundreds of hertz on a tone's
+    /// 20..4000 Hz jack, which is a car alarm. Changing pitch is allowed
+    /// only as held steps through a scale.
+    public var allowsPitch: Bool {
+        switch self {
+        case .notes: return true
+        default: return false
         }
     }
 
@@ -264,9 +287,12 @@ public enum CrateGenLaneKind: String, Sendable, CaseIterable {
         case .pulse, .euclidean, .envelope:
             // Bounded parameters only: these lanes reach full height, and a
             // full-height swing on a frequency jack is the siren of 9.3.
-            return ["gain", "mix", "amount", "resonance", "feedback", "width"]
+            // Velocity and gain are how a voice gets an amp envelope.
+            return ["velocity", "gain", "mix", "amount", "resonance", "feedback", "width"]
         case .drift, .ramp:
-            return ["cutoff", "pan", "width", "mix", "freq", "resonance"]
+            return ["cutoff", "pan", "width", "mix", "resonance"]
+        case .notes:
+            return ["note", "freq", "pitch", "detune"]
         case .random, .stepped:
             return ["mix", "gain", "pan", "width", "amount"]
         case .follower:
@@ -282,6 +308,7 @@ public enum CrateGenLaneKind: String, Sendable, CaseIterable {
         case .drift: return "slow continuous movement"
         case .random: return "smooth unpredictable movement"
         case .stepped: return "unpredictable and held between jumps"
+        case .notes: return "held pitches that jump, not slide"
         case .ramp: return "a rise that resets on the bar"
         case .follower: return "follows how loud the sound is"
         case .envelope: return "a repeating swell"
@@ -328,6 +355,24 @@ public struct CrateGenRoute: Sendable, Equatable {
 
 public enum CrateGenBuilder {
 
+    static let voiceJacks: Set<String> = ["note", "gate", "velocity", "trig", "clock"]
+
+    /// Beat lengths of `COMMON_DIVISION_NAMES` in `transportNodes.ts`.
+    /// At 120 bpm a pulse's rate in Hz is `2 / beats`.
+    private static let songDivisions: [(index: Double, beats: Double)] = [
+        (0, 4), (1, 2), (2, 3), (3, 1), (4, 1.5), (5, 2.0 / 3.0),
+        (6, 0.5), (7, 0.75), (8, 1.0 / 3.0), (9, 0.25), (10, 1.0 / 6.0),
+    ]
+
+    /// The Synced Clock menu index nearest this free-running rate, so a
+    /// lane that asked for "about 4 Hz" lands on 1/8 at 120 bpm.
+    static func songDivision(rateHz: Double) -> Double {
+        let targetBeats = 2 / max(rateHz, 0.05)
+        return songDivisions.min(by: {
+            abs(log($0.beats) - log(targetBeats)) < abs(log($1.beats) - log(targetBeats))
+        })?.index ?? 3
+    }
+
     /// The nodes a plan asks for, with their numbers already applied.
     ///
     /// Ids are the slot names (`source`, `filter`, `space`) rather than
@@ -344,9 +389,10 @@ public enum CrateGenBuilder {
         case .insert:
             nodes.append(CratePatchNode(id: "line", kind: catalog.io.line))
         case .generative:
-            // Neither. A generative patch that grows a keyboard is an
-            // instrument nobody is playing, which is silence.
-            break
+            // Neither a keyboard nor a line. The song clock is here so the
+            // patch can start and stop with Play, instead of free-running
+            // the moment the AU renders.
+            nodes.append(CratePatchNode(id: "song", kind: catalog.io.transport))
         }
 
         if plan.source != CrateGen.none, catalog.material(plan.source) != nil {
@@ -363,6 +409,10 @@ public enum CrateGenBuilder {
         }
         if plan.space != CrateGen.none, catalog.material(plan.space) != nil {
             nodes.append(node("space", plan.space, plan, catalog))
+        }
+        // Play opens this. Without it a tone layer keeps humming after Stop.
+        if plan.role == .generative, catalog.material("gain") != nil {
+            nodes.append(node("run", "gain", plan, catalog))
         }
         // A limiter before the output, always. The web skill asks the model
         // for one and the model sometimes forgets; here it costs nothing and
@@ -451,6 +501,20 @@ public enum CrateGenBuilder {
             return CratePatchNode(id: "\(prefix)\(suffix)", kind: kind, params: bounded)
         }
 
+        // A song-locked tick when this build has Synced Clock, so Play
+        // starts it and Stop silences it. Free-running Hz is the fallback
+        // for a catalog that cannot compile that module.
+        func tick(_ suffix: String) -> CratePatchNode? {
+            if let node = make(suffix, "syncedclock", ["division": Self.songDivision(rateHz: rate)]) {
+                return node
+            }
+            return make(suffix, "clock", ["freq": rate])
+        }
+
+        func tickJack(_ node: CratePatchNode) -> String {
+            catalog.jacks(node.kind)?.outputs.first ?? "cv"
+        }
+
         // Every lane ends in a **continuous** signal, and the event-driven
         // ones shape their own trigger to get there.
         //
@@ -462,12 +526,12 @@ public enum CrateGenBuilder {
         // legitimate destination for a bare trigger outside a lane's own
         // chain, so there was nowhere correct for it to go.
         //
-        // A rhythmic lane is therefore clock into pulse into an envelope,
-        // which is how somebody would patch it by hand: the pulse gives the
-        // trigger a width, and the envelope gives it a shape.
+        // A rhythmic lane is therefore a song clock into pulse into an
+        // envelope, which is how somebody would patch it by hand: the pulse
+        // gives the trigger a width, and the envelope gives it a shape.
         switch lane.kind {
         case .pulse:
-            guard let clock = make("clk", "clock", ["freq": rate]),
+            guard let clock = tick("clk"),
                   let pulse = make("pls", "pulse", ["widthSec": 0.01]),
                   let env = make("env", "dahdsr", [
                       "attack": 0.005, "hold": 0.01, "decay": 0.1,
@@ -477,7 +541,7 @@ public enum CrateGenBuilder {
             return (
                 [clock, pulse, env],
                 [
-                    CratePatchConnection(source: clock.id, sourceOutput: "cv", target: pulse.id, targetInput: "input"),
+                    CratePatchConnection(source: clock.id, sourceOutput: tickJack(clock), target: pulse.id, targetInput: "input"),
                     // Into the envelope's `input`, and the module is a dahdsr
                     // rather than an adsr for a reason that is invisible until
                     // you listen: an adsr is gated by `gate`, which is a voice
@@ -495,7 +559,7 @@ public enum CrateGenBuilder {
             // Sixteen steps with a hit count that is not a divisor of it, so
             // the pattern lands off the grid rather than on every fourth beat.
             let hits = Swift.max(2, Swift.min(11, Int((lane.depth * 9).rounded()) + 3))
-            guard let clock = make("clk", "clock", ["freq": rate]),
+            guard let clock = tick("clk"),
                   let euclid = make("euc", "euclidean", ["steps": 16, "hits": Double(hits), "rotation": 0]),
                   let pulse = make("pls", "pulse", ["widthSec": 0.02]),
                   let env = make("env", "dahdsr", [
@@ -506,8 +570,8 @@ public enum CrateGenBuilder {
             return (
                 [clock, euclid, pulse, env],
                 [
-                    CratePatchConnection(source: clock.id, sourceOutput: "cv", target: euclid.id, targetInput: "input"),
-                    CratePatchConnection(source: euclid.id, sourceOutput: "audio", target: pulse.id, targetInput: "input"),
+                    CratePatchConnection(source: clock.id, sourceOutput: tickJack(clock), target: euclid.id, targetInput: "clock"),
+                    CratePatchConnection(source: euclid.id, sourceOutput: "cv", target: pulse.id, targetInput: "input"),
                     CratePatchConnection(source: pulse.id, sourceOutput: "cv", target: env.id, targetInput: "input"),
                 ],
                 (env.id, "cv")
@@ -515,7 +579,7 @@ public enum CrateGenBuilder {
 
         case .envelope:
             // The same chain with a slower shape: a swell rather than a tick.
-            guard let clock = make("clk", "clock", ["freq": rate]),
+            guard let clock = tick("clk"),
                   let pulse = make("pls", "pulse", ["widthSec": 0.15]),
                   let env = make("env", "dahdsr", [
                       "attack": 0.18, "hold": 0.05, "decay": 0.3,
@@ -525,7 +589,7 @@ public enum CrateGenBuilder {
             return (
                 [clock, pulse, env],
                 [
-                    CratePatchConnection(source: clock.id, sourceOutput: "cv", target: pulse.id, targetInput: "input"),
+                    CratePatchConnection(source: clock.id, sourceOutput: tickJack(clock), target: pulse.id, targetInput: "input"),
                     CratePatchConnection(source: pulse.id, sourceOutput: "cv", target: env.id, targetInput: "input"),
                 ],
                 (env.id, "cv")
@@ -542,6 +606,41 @@ public enum CrateGenBuilder {
         case .stepped:
             guard let node = make("stp", "randomstepped", ["freq": rate]) else { return nil }
             return ([node], [], (node.id, "audio"))
+
+        case .notes:
+            // Held bipolar steps, not a sweep. Flatten maps them onto a
+            // tone's freq, or onto MIDI 48..72 when they land on a voice
+            // `note`. The clock jack is a trigger, not an audio inlet:
+            // cabling Synced Clock into `input` mixed pulses into the
+            // audio path and the sequencer sounded like noise.
+            if let clock = tick("clk"),
+               let seq = make("seq", "sequencer", [:]) {
+                let out = catalog.jacks("sequencer")?.outputs.first ?? "cv"
+                return (
+                    [clock, seq],
+                    [
+                        CratePatchConnection(
+                            source: clock.id, sourceOutput: tickJack(clock),
+                            target: seq.id, targetInput: "clock"
+                        ),
+                    ],
+                    (seq.id, out)
+                )
+            }
+            if let rnd = make("rnd", "randomsmooth", ["freq": rate]),
+               let hold = make("hld", "samplehold", ["freq": rate]) {
+                return (
+                    [rnd, hold],
+                    [
+                        CratePatchConnection(
+                            source: rnd.id, sourceOutput: "audio",
+                            target: hold.id, targetInput: "input"
+                        ),
+                    ],
+                    (hold.id, "audio")
+                )
+            }
+            return nil
 
         case .ramp:
             guard let node = make("rmp", "syncedramp", ["depth": lane.depth]) else { return nil }
@@ -565,6 +664,9 @@ public enum CrateGenBuilder {
     /// Parameters whose whole range is too wide for a signal with no depth
     /// control: moving one across its travel is a siren rather than a sweep.
     static let wideRangeParams: Set<String> = ["freq", "cutoff", "timeSec", "rate", "damp", "pitch"]
+    /// Pitch itself. Continuous movement here is a car alarm even when the
+    /// lane has its own depth: flatten still maps onto the whole Hz span.
+    static let pitchParams: Set<String> = ["freq", "pitch", "note", "detune"]
 
     public static func routingTargets(
         _ nodes: [CratePatchNode],
@@ -585,18 +687,38 @@ public enum CrateGenBuilder {
             // A lane pointed at another lane's clock is a patch nobody can
             // follow, and Master has no parameters at all.
             if node.id.hasPrefix("m") && node.id.dropFirst().first?.isNumber == true { continue }
+            if node.id == "run" { continue }
             guard let material = catalog.material(node.kind) else { continue }
-            for name in material.paramOrder where !material.isAudioInlet(name) {
-                // note, gate and velocity are voice jacks: a cable into one
-                // marks the patch as an instrument, which is a different
-                // patch, not a modulation.
-                if ["note", "gate", "velocity", "trig"].contains(name) { continue }
+            var names = material.paramOrder.filter { !material.isAudioInlet($0) }
+            for jack in material.inputs where Self.voiceJacks.contains(jack) && !names.contains(jack) {
+                names.append(jack)
+            }
+            for name in names {
+                if Self.voiceJacks.contains(name) {
+                    switch lane {
+                    case nil:
+                        break
+                    case .some(.notes) where name == "note":
+                        break
+                    case .some(.pulse) where name == "velocity" || name == "gate" || name == "trig":
+                        break
+                    case .some(.euclidean) where name == "velocity" || name == "gate" || name == "trig":
+                        break
+                    case .some(.envelope) where name == "velocity" || name == "gate" || name == "trig":
+                        break
+                    default:
+                        continue
+                    }
+                }
                 if lane?.swingsFullScale == true, Self.wideRangeParams.contains(name) { continue }
-                // A full-scale envelope on a source's gain replaces the
-                // carrier. Between hits the tone is digital zero, and if
-                // every source is parked that way the patch only ticks, or
-                // is silent on an instrument AU that waits for a note.
-                if lane?.swingsFullScale == true, name == "gain", material.audioInputs.isEmpty { continue }
+                if let lane, !lane.allowsPitch, Self.pitchParams.contains(name) { continue }
+                // A full-scale envelope on a drone's gain replaces the
+                // carrier. A voice's gain is the VCA: silence between
+                // hits is the note.
+                if lane?.swingsFullScale == true, name == "gain",
+                   material.audioInputs.isEmpty, !material.inputs.contains("note") {
+                    continue
+                }
                 let rank = priority.firstIndex(of: name) ?? priority.count
                 scored.append((rank, "\(node.id).\(name)"))
             }
@@ -724,6 +846,13 @@ public enum CrateGenBuilder {
                 notes.append("\(route.lane) swings too wide for \(route.target), so it moves something else")
                 continue
             }
+            if index >= 1, index <= lanes.count,
+               !lanes[index - 1].kind.allowsPitch,
+               let param = route.target.split(separator: ".", maxSplits: 1).last,
+               Self.pitchParams.contains(String(param)) {
+                notes.append("\(route.lane) would sweep pitch on \(route.target), so it moves something else")
+                continue
+            }
             let parts = route.target.split(separator: ".", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { continue }
             let connection = CratePatchConnection(
@@ -755,6 +884,13 @@ public enum CrateGenBuilder {
         }
 
         var patch = CratePatch(nodes: nodes, connections: connections, transport: CratePatchTransport())
+
+        // A voice with nobody holding a key is silence unless a notes lane
+        // writes `note` and an envelope opens the amp. Do this before idle
+        // lanes are pointed, so those drivers are already spoken for.
+        patch = driveVoices(
+            patch, lanes: lanes, laneOutlets: &laneOutlets, catalog: catalog, notes: &notes
+        )
 
         // A lane nothing listens to is a module sitting on the canvas doing
         // nothing, which is exactly the defect this redesign exists to fix.
@@ -883,7 +1019,12 @@ public enum CrateGenBuilder {
         guard let target = patch.node(connection.target),
               let material = catalog.material(target.kind)
         else { return false }
-        return !material.isAudioInlet(connection.targetInput) && material.param(connection.targetInput) != nil
+        return isControlInlet(connection.targetInput, material: material)
+    }
+
+    private static func isControlInlet(_ name: String, material: CatalogMaterialEntry) -> Bool {
+        if material.isAudioInlet(name) { return false }
+        return material.param(name) != nil || Self.voiceJacks.contains(name)
     }
 
     /// Whether anything audible arrives at Master.
@@ -913,7 +1054,7 @@ public enum CrateGenBuilder {
         // A layer is a second source, not a link in the chain: it joins the
         // path further down and leaves the main run alone, which is what
         // makes two stacked sources a chord rather than a series of filters.
-        let order = ["line", "source", "filter", "fx1", "fx2", "fx3", "space", "out", "master"]
+        let order = ["line", "source", "filter", "fx1", "fx2", "fx3", "space", "run", "out", "master"]
         let present = order.compactMap { id in nodes.first { $0.id == id } }
         var chain = [CratePatchConnection]()
 
@@ -943,7 +1084,28 @@ public enum CrateGenBuilder {
             )
         }
         chain.append(contentsOf: voiceCables(nodes, catalog: catalog))
+        chain.append(contentsOf: songGate(nodes, catalog: catalog))
         return chain
+    }
+
+    /// Play opens the generative output. Synced Clock already sits still
+    /// when the song is stopped; this is what also mutes a tone that would
+    /// otherwise keep humming.
+    private static func songGate(
+        _ nodes: [CratePatchNode],
+        catalog: MaterialCatalog
+    ) -> [CratePatchConnection] {
+        guard let song = nodes.first(where: { $0.id == "song" && $0.kind == catalog.io.transport }),
+              let run = nodes.first(where: { $0.id == "run" }),
+              catalog.jacks(song.kind)?.outputs.contains("playing") == true,
+              catalog.material(run.kind)?.param("gain") != nil
+        else { return [] }
+        return [
+            CratePatchConnection(
+                source: song.id, sourceOutput: "playing",
+                target: run.id, targetInput: "gain"
+            )
+        ]
     }
 
     /// Keyboard into every note jack in the patch. Without these an
@@ -967,6 +1129,106 @@ public enum CrateGenBuilder {
         return cables
     }
 
+    /// Notes into `note` and an envelope into a voice's gain, plus a held
+    /// velocity so the inner amp envelope can open. Without this a generated
+    /// oscillator is a keyboard voice nobody is playing.
+    private static func driveVoices(
+        _ patch: CratePatch,
+        lanes: [CrateGenLane],
+        laneOutlets: inout [String: (node: String, jack: String)],
+        catalog: MaterialCatalog,
+        notes: inout [String]
+    ) -> CratePatch {
+        var patch = patch
+        guard !patch.nodes.contains(where: { $0.kind == catalog.io.keyboard }) else { return patch }
+
+        let voices = patch.nodes.filter { node in
+            guard node.id == "source" || node.id == "layer" else { return false }
+            guard let inputs = catalog.jacks(node.kind)?.inputs else { return false }
+            return inputs.contains("note") || inputs.contains("velocity")
+        }
+        guard !voices.isEmpty else { return patch }
+
+        func outlet(for kinds: Set<CrateGenLaneKind>) -> (node: String, jack: String)? {
+            for key in laneOutlets.keys.sorted() {
+                let index = Int(key.dropFirst("lane".count)) ?? 0
+                guard index >= 1, index <= lanes.count, kinds.contains(lanes[index - 1].kind) else {
+                    continue
+                }
+                return laneOutlets[key]
+            }
+            return nil
+        }
+
+        func nextLaneIndex() -> Int {
+            patch.nodes.compactMap { node -> Int? in
+                guard node.id.hasPrefix("m") else { return nil }
+                let digits = node.id.dropFirst().prefix(while: \.isNumber)
+                return Int(digits)
+            }.max() ?? 0
+        }
+
+        func inject(_ kind: CrateGenLaneKind, rateHz: Double) -> (node: String, jack: String)? {
+            let index = nextLaneIndex()
+            guard let built = laneNodes(
+                CrateGenLane(kind: kind, rateHz: rateHz, depth: 0.6),
+                index: index,
+                catalog: catalog
+            ) else { return nil }
+            patch.nodes.append(contentsOf: built.nodes)
+            patch.connections.append(contentsOf: built.cables)
+            laneOutlets["lane\(index + 1)"] = built.outlet
+            notes.append("a \(kind.rawValue) lane was added so the voice can play itself")
+            return built.outlet
+        }
+
+        func already(_ target: String, _ inlet: String) -> Bool {
+            patch.connections.contains { $0.target == target && $0.targetInput == inlet }
+        }
+
+        var pitch = outlet(for: [.notes])
+        if pitch == nil { pitch = inject(.notes, rateHz: 5) }
+        var amp = outlet(for: [.pulse, .euclidean, .envelope])
+        if amp == nil { amp = inject(.envelope, rateHz: 4) }
+
+        for voice in voices {
+            let inputs = catalog.jacks(voice.kind)?.inputs ?? []
+            if inputs.contains("note"), let pitch, !already(voice.id, "note") {
+                patch.connections.append(
+                    CratePatchConnection(
+                        source: pitch.node, sourceOutput: pitch.jack,
+                        target: voice.id, targetInput: "note"
+                    )
+                )
+                notes.append("\(pitch.node) writes notes into \(voice.id)")
+            }
+            if inputs.contains("velocity"), !already(voice.id, "velocity"),
+               catalog.material("control") != nil, catalog.canCompile("control") {
+                let id = "\(voice.id)open"
+                if patch.node(id) == nil {
+                    patch.nodes.append(CratePatchNode(id: id, kind: "control", params: ["value": 1]))
+                }
+                let jack = catalog.jacks("control")?.outputs.first ?? "audio"
+                patch.connections.append(
+                    CratePatchConnection(
+                        source: id, sourceOutput: jack,
+                        target: voice.id, targetInput: "velocity"
+                    )
+                )
+            }
+            if catalog.material(voice.kind)?.param("gain") != nil, let amp, !already(voice.id, "gain") {
+                patch.connections.append(
+                    CratePatchConnection(
+                        source: amp.node, sourceOutput: amp.jack,
+                        target: voice.id, targetInput: "gain"
+                    )
+                )
+                notes.append("\(amp.node) opens \(voice.id) through its gain")
+            }
+        }
+        return patch
+    }
+
     /// The cables worth keeping when the audio path is rebuilt: the ones that
     /// land on a parameter rather than on an audio inlet. Those are the
     /// modulation the wiring pass exists to invent, and they are still valid
@@ -981,8 +1243,7 @@ public enum CrateGenBuilder {
             guard let target = byId[connection.target] else { return false }
             if catalog.isHostTool(target.kind) { return false }
             guard let material = catalog.material(target.kind) else { return false }
-            return !material.isAudioInlet(connection.targetInput)
-                && material.param(connection.targetInput) != nil
+            return isControlInlet(connection.targetInput, material: material)
         }
     }
 

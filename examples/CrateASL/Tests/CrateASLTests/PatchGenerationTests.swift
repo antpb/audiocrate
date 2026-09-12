@@ -54,7 +54,9 @@ final class PatchGenerationTests: XCTestCase {
             let state = voice.makeState()
             state.setParams(ParameterMap(compiled.params).defaults)
             state.gate = true
-            let frames = 4096
+            // A voice waits on an in-graph pulse. 4096 frames is 85 ms and
+            // misses a 4 Hz envelope. One second covers the first hit.
+            let frames = 48_000
             var input = [Float](repeating: 0, count: frames)
             for index in 0..<frames {
                 input[index] = Float(sin(2 * Double.pi * 220 * Double(index) / 48_000) * 0.4)
@@ -63,7 +65,8 @@ final class PatchGenerationTests: XCTestCase {
             var right: [Float]? = nil
             _ = voice.renderBlock(
                 state, sampleRate: 48_000, output: &out,
-                input: role == .insert ? input : nil, outputR: &right
+                input: role == .insert ? input : nil, outputR: &right,
+                transport: TransportSnapshot(playing: true)
             )
             peak = out.reduce(0) { Swift.max($0, Double(abs($1))) }
         }
@@ -96,18 +99,70 @@ final class PatchGenerationTests: XCTestCase {
         }
     }
 
-    /// A generative patch offered `oscillator` would be a patch that renders
-    /// silence: it is a keyboard voice and its gate never opens.
-    func testGenerativeSourcesAreNotKeyboardVoices() throws {
+    /// Generative sources are the same voices an instrument uses. Swift
+    /// cables a notes lane and an envelope so they play without a keyboard.
+    func testGenerativeSourcesAreVoicesThatDriveThemselves() throws {
         let catalog = try catalog()
         let vocabulary = CrateGenVocabulary(role: .generative, catalog: catalog)
-        for kind in vocabulary.sources {
-            let material = try XCTUnwrap(catalog.material(kind))
-            XCTAssertFalse(
-                material.inputs.contains("gate"),
-                "\(kind) needs a gate, so a generative patch built on it is silent"
+        XCTAssertTrue(vocabulary.sources.contains("oscillator") || vocabulary.sources.contains("SynthVoice"))
+        XCTAssertFalse(vocabulary.sources.contains("tone"), "a free-running tone is a layer, not the lead")
+
+        let built = CrateGenBuilder.assemble(
+            plan: plan(.generative, source: "oscillator", filter: "lowpass"),
+            catalog: catalog
+        )
+        XCTAssertFalse(
+            built.patch.nodes.contains { $0.kind == catalog.io.keyboard },
+            "a generative patch must not grow a keyboard"
+        )
+        XCTAssertTrue(
+            built.patch.connections.contains { $0.target == "source" && $0.targetInput == "note" },
+            "a voice has to receive notes or it sits on one pitch, or is silent"
+        )
+        XCTAssertTrue(
+            built.patch.connections.contains { $0.target == "source" && ($0.targetInput == "gain" || $0.targetInput == "velocity") },
+            "an envelope has to open the voice or it is a drone"
+        )
+        let compiled = try CrateFlatten.flatten(built.patch, catalog: catalog, name: "Gen")
+        XCTAssertEqual(compiled.role, "insert", "graph-driven notes must not turn this into an instrument AU")
+        try assertPlays(built.patch, catalog, role: .generative)
+    }
+
+    /// A free-running clock ignores the song. Synced Clock and a Play gate
+    /// do not: Stop has to silence the patch, and Play has to start it.
+    func testAGenerativePatchFollowsTheSongTransport() throws {
+        let catalog = try catalog()
+        let built = CrateGenBuilder.assemble(
+            plan: plan(.generative, source: "oscillator", filter: "lowpass"),
+            catalog: catalog
+        )
+        XCTAssertNotNil(built.patch.nodes.first { $0.kind == catalog.io.transport })
+        XCTAssertTrue(
+            built.patch.connections.contains { $0.sourceOutput == "playing" && $0.targetInput == "gain" },
+            "Play has to open the output or a tone keeps humming after Stop"
+        )
+        XCTAssertTrue(
+            built.patch.nodes.contains { $0.kind == "syncedclock" },
+            "rhythmic lanes have to lock to the song, not a free-running Hz clock"
+        )
+
+        let compiled = try CrateFlatten.flatten(built.patch, catalog: catalog, name: "Gen")
+        let voice = try CompiledVoice(document: compiled.graph)
+        let frames = 48_000
+        func peak(playing: Bool) -> Double {
+            let state = voice.makeState()
+            state.setParams(ParameterMap(compiled.params).defaults)
+            state.gate = true
+            var out = [Float](repeating: 0, count: frames)
+            var right: [Float]? = nil
+            _ = voice.renderBlock(
+                state, sampleRate: 48_000, output: &out, outputR: &right,
+                transport: TransportSnapshot(playing: playing)
             )
+            return out.reduce(0) { Swift.max($0, Double(abs($1))) }
         }
+        XCTAssertEqual(peak(playing: false), 0, "the patch must sit still when the song is stopped")
+        XCTAssertGreaterThan(peak(playing: true), 0, "Play has to start the patch")
     }
 
     // MARK: - The three roles, end to end
@@ -656,11 +711,11 @@ final class PatchCompositionTests: XCTestCase {
         // Each lane's own clock, at its own rate. One shared clock would make
         // the patch repeat on a single bar, which is the thing that makes a
         // generative patch boring.
-        let fast = try XCTUnwrap(built.patch.node("m1clk")?.params["freq"])
+        XCTAssertEqual(built.patch.node("m1clk")?.kind, "syncedclock")
+        let division = try XCTUnwrap(built.patch.node("m1clk")?.params["division"])
+        XCTAssertEqual(division, CrateGenBuilder.songDivision(rateHz: 6), accuracy: 0.001)
         let slow = try XCTUnwrap(built.patch.node("m2lfo")?.params["rate"])
-        XCTAssertEqual(fast, 6, accuracy: 0.001)
         XCTAssertEqual(slow, 0.12, accuracy: 0.001)
-        XCTAssertNotEqual(fast, slow)
     }
 
     /// A lane that is really several modules has to be wired up inside
@@ -699,7 +754,74 @@ final class PatchCompositionTests: XCTestCase {
         XCTAssertTrue(built.patch.connections.contains { $0.source.hasPrefix("m1") })
     }
 
-    /// An LFO carries its own depth, so the same jack is fine for it. Without
+    /// An LFO on frequency is a car alarm: flatten maps even a shallow
+    /// amount onto the whole 20..4000 Hz span. Cutoff is the jack it may
+    /// sweep. Pitch changes belong to the notes lane.
+    func testAContinuousLaneIsKeptOffPitch() throws {
+        let catalog = try catalog()
+        let built = CrateGenBuilder.assemble(
+            plan: plan(),
+            lanes: [CrateGenLane(kind: .drift, rateHz: 0.5, depth: 0.4)],
+            routes: [CrateGenRoute(lane: "lane1", target: "source.freq")],
+            catalog: catalog
+        )
+        XCTAssertFalse(
+            built.patch.connections.contains { $0.source.hasPrefix("m1") && $0.targetInput == "freq" },
+            "an LFO on a tone's freq is a siren"
+        )
+        XCTAssertTrue(built.notes.contains { $0.contains("sweep pitch") })
+        XCTAssertTrue(built.patch.connections.contains { $0.source.hasPrefix("m1") })
+    }
+
+    /// Held steps through a scale are how pitch is allowed to move.
+    func testANotesLaneMayMovePitch() throws {
+        let catalog = try catalog()
+        let built = CrateGenBuilder.assemble(
+            plan: plan(),
+            lanes: [CrateGenLane(kind: .notes, rateHz: 2, depth: 0.6)],
+            routes: [CrateGenRoute(lane: "lane1", target: "source.freq")],
+            catalog: catalog
+        )
+        XCTAssertNotNil(built.patch.nodes.first { $0.kind == "samplehold" || $0.kind == "sequencer" })
+        XCTAssertTrue(
+            built.patch.connections.contains { $0.source.hasPrefix("m1") && $0.targetInput == "freq" },
+            "a notes lane is the one that may change pitch"
+        )
+        if let seq = built.patch.nodes.first(where: { $0.kind == "sequencer" }) {
+            XCTAssertTrue(
+                built.patch.connections.contains {
+                    $0.target == seq.id && $0.targetInput == "clock"
+                },
+                "a sequencer advances on clock, not on an audio inlet"
+            )
+            XCTAssertFalse(
+                built.patch.connections.contains {
+                    $0.target == seq.id && $0.targetInput == "input"
+                }
+            )
+        }
+    }
+
+    /// A notes lane on a voice lands on `note`, which flatten reads as MIDI,
+    /// not as a Hz sweep.
+    func testANotesLaneDrivesAVoiceNote() throws {
+        let catalog = try catalog()
+        let built = CrateGenBuilder.assemble(
+            plan: CrateGenPlan(
+                role: .generative, summary: "test", source: "oscillator",
+                filter: "lowpass"
+            ),
+            lanes: [CrateGenLane(kind: .notes, rateHz: 4, depth: 0.6)],
+            routes: [CrateGenRoute(lane: "lane1", target: "source.note")],
+            catalog: catalog
+        )
+        XCTAssertTrue(
+            built.patch.connections.contains { $0.source.hasPrefix("m1") && $0.targetInput == "note" },
+            "a notes lane on a voice writes MIDI notes, not a tone frequency"
+        )
+    }
+
+    /// An LFO carries its own depth, so a filter cutoff is fine for it. Without
     /// this the rule above would just be "never modulate a filter", which
     /// would take away the best thing in the palette.
     func testALaneWithItsOwnDepthMayMoveAFilter() throws {
@@ -840,7 +962,7 @@ final class PatchSignalTypeTests: XCTestCase {
     func testAClockNeverLeavesItsOwnLane() throws {
         let catalog = try catalog()
         for (kind, patch) in patches(catalog) {
-            let clocks = patch.nodes.filter { $0.kind == "clock" }.map(\.id)
+            let clocks = patch.nodes.filter { $0.kind == "clock" || $0.kind == "syncedclock" }.map(\.id)
             for cable in patch.connections where clocks.contains(cable.source) {
                 XCTAssertTrue(
                     cable.target.hasPrefix("m1"),
@@ -913,7 +1035,10 @@ final class PatchSignalTypeTests: XCTestCase {
             state.gate = true
             var out = [Float](repeating: 0, count: 24_000)
             var right: [Float]? = nil
-            _ = voice.renderBlock(state, sampleRate: 48_000, output: &out, outputR: &right)
+            _ = voice.renderBlock(
+                state, sampleRate: 48_000, output: &out, outputR: &right,
+                transport: TransportSnapshot(playing: true)
+            )
             let peak = out.reduce(0) { Swift.max($0, Double(abs($1))) }
             XCTAssertGreaterThan(peak, 0, "\(kind.rawValue): renders silence over half a second")
         }

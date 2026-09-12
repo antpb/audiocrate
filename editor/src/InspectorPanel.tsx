@@ -37,6 +37,8 @@ interface InspectorPanelProps {
   snapshot: AnalogSnapshot;
   masterMonitor: boolean;
   lineDeviceId: string | null;
+  lineOpenedLabel?: string | null;
+  lineOpenError?: string | null;
   onMasterMonitor: (on: boolean) => void;
   onLineDevice: (id: string | null) => Promise<void>;
   onParam: (name: string, value: number) => void;
@@ -74,6 +76,8 @@ export function InspectorPanel({
   snapshot,
   masterMonitor,
   lineDeviceId,
+  lineOpenedLabel,
+  lineOpenError,
   onMasterMonitor,
   onLineDevice,
   onParam,
@@ -143,7 +147,12 @@ export function InspectorPanel({
           Play captures this input. Patch it into a filter, a meter, or Master. Grant mic permission to see
           device names. The device is this machine&apos;s and is not sent to a session.
         </p>
-        <LineDeviceSelect deviceId={lineDeviceId} onChange={onLineDevice} />
+        <LineDeviceSelect
+          deviceId={lineDeviceId}
+          openedLabel={lineOpenedLabel ?? null}
+          hostError={lineOpenError ?? null}
+          onChange={onLineDevice}
+        />
         <label className="param row">
           <span>Monitor</span>
           <input

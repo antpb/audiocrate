@@ -743,10 +743,11 @@ Fires when the input crosses threshold upward.
 
 Eight stepped values advanced by a clock. Output is CV.
 
-- Jacks: in input(audio), step0(cv), step1(cv), step2(cv), step3(cv), step4(cv), step5(cv), step6(cv), step7(cv) / out audio(cv)
+- Jacks: in clock, step0(cv), step1(cv), step2(cv), step3(cv), step4(cv), step5(cv), step6(cv), step7(cv) / out cv
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
+| `clock` | fader | 0..1 | 0 |  |
 | `step0` | fader | -1..1 | 0 | yes |
 | `step1` | fader | -1..1 | 0.25 | yes |
 | `step2` | fader | -1..1 | 0.5 | yes |
@@ -999,10 +1000,12 @@ Snaps a MIDI-style pitch number to a scale. Root and scale are menus.
 
 Evenly spaced hits across a step count, advanced by a clock.
 
-- Jacks: in input(audio), steps(cv), hits(cv), rotation(cv) / out audio(cv)
+- Jacks: in clock, steps(cv), hits(cv), rotation(cv) / out cv
+- Outlet: unipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
+| `clock` | fader | 0..1 | 0 |  |
 | `steps` | stepper | 1..32 step 1 | 8 | yes |
 | `hits` | stepper | 0..32 step 1 | 3 | yes |
 | `rotation` | stepper | 0..31 step 1 | 0 | yes |

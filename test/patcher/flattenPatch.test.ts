@@ -10,6 +10,8 @@ import { bakeTrackInserts } from '../../src/playback/bakeInserts';
 import { OfflineRenderer } from '../../src/renderers/OfflineRenderer';
 import { mapPluginSlot } from '../../src/host/mapPluginSlot';
 import { oscillatorMaterial } from '../../src/materials/sources';
+import { sequencerMaterial } from '../../src/materials/control';
+import { syncedClockMaterial } from '../../src/materials/synced';
 import { analyzerMaterial } from '../../src/materials/meters';
 import { looperMaterial } from '../../src/materials/time';
 import { detectPatchRole, flattenPatch, type PatchDocument } from '../../src/patcher/flattenPatch';
@@ -57,6 +59,8 @@ function resolve(kind: string): AudioMaterial | null {
   if (kind === 'test.quiet') return quietProto;
   if (kind === 'test.seamed') return seamProto;
   if (kind === 'oscillator') return oscillatorMaterial;
+  if (kind === 'sequencer') return sequencerMaterial;
+  if (kind === 'syncedclock') return syncedClockMaterial;
   return null;
 }
 
@@ -229,6 +233,58 @@ describe('flattenPatch', () => {
     expect(detectPatchRole(patch)).toBe('instrument');
     const flat = flattenPatch(patch, { resolve });
     expect(flat.polyphony).toBe(oscillatorMaterial.polyphony);
+  });
+
+  it('hooks a synced clock into sequencer.clock instead of an audio inlet', () => {
+    const patch: PatchDocument = {
+      nodes: [
+        { id: 'tick', kind: 'syncedclock' },
+        { id: 'seq', kind: 'sequencer' },
+        { id: 'osc', kind: 'oscillator', params: { gain: 0.3 } },
+        { id: 'out', kind: 'master' },
+      ],
+      connections: [
+        { source: 'tick', sourceOutput: 'cv', target: 'seq', targetInput: 'clock' },
+        { source: 'seq', sourceOutput: 'cv', target: 'osc', targetInput: 'note' },
+        { source: 'osc', sourceOutput: 'audio', target: 'out', targetInput: 'input' },
+      ],
+    };
+    expect(detectPatchRole(patch)).toBe('insert');
+    const flat = flattenPatch(patch, { resolve });
+    expect(Object.keys(flat.params)).not.toContain('seq_clock');
+    expect(Object.keys(flat.params)).toContain('seq_step0');
+    const kinds = new Set<string>();
+    const walk = (node: unknown, seen = new Set<unknown>()): void => {
+      if (!node || typeof node !== 'object' || seen.has(node)) return;
+      seen.add(node);
+      const record = node as { kind?: string; inputs?: Record<string, unknown>; list?: readonly unknown[] };
+      if (typeof record.kind === 'string') kinds.add(record.kind);
+      for (const child of Object.values(record.inputs ?? {})) walk(child, seen);
+      for (const child of record.list ?? []) walk(child, seen);
+    };
+    walk(flat.graph.output);
+    expect(kinds.has('sequencer')).toBe(true);
+    expect(kinds.has('port')).toBe(false);
+  });
+
+  it('lets a module cable drive oscillator note without making the patch an instrument', () => {
+    const patch: PatchDocument = {
+      nodes: [
+        { id: 'cv', kind: 'test.one' },
+        { id: 'osc', kind: 'oscillator', params: { gain: 0.4 } },
+        { id: 'out', kind: 'master' },
+      ],
+      connections: [
+        { source: 'cv', sourceOutput: 'audio', target: 'osc', targetInput: 'note' },
+        { source: 'cv', sourceOutput: 'audio', target: 'osc', targetInput: 'velocity' },
+        { source: 'osc', sourceOutput: 'audio', target: 'out', targetInput: 'input' },
+      ],
+    };
+    expect(detectPatchRole(patch)).toBe('insert');
+    const flat = flattenPatch(patch, { resolve });
+    const out = OfflineRenderer.render(flat.graph, { duration: 0.05, params: flat.snapshotParams() });
+    const peak = Math.max(...Array.from(out.samples, Math.abs));
+    expect(peak).toBeGreaterThan(0.01);
   });
 
   it('treats MIDI Out as a sink and still flattens the audio path', () => {

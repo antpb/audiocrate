@@ -22,10 +22,13 @@ import Foundation
 ///  - Every remaining declared param is republished as `{nodeId}_{name}`, so
 ///    two gains in one patch do not collide.
 ///  - Keyboard, Line, Master, Transport and the MIDI tools are host I/O, not
-///    DSP. Master is the output tap, Line is the hosted insert's own input,
-///    and a Keyboard cable into a note jack only marks the patch as an
-///    instrument: the inner graph's `note` and `velocity` params already read
-///    the voice.
+    ///    DSP. Master is the output tap, Line is the hosted insert's own input,
+    ///    and a Keyboard cable into a note jack only marks the patch as an
+    ///    instrument: the inner graph's `note` and `velocity` params already read
+    ///    the voice. A cable from another module into `note`, `velocity`,
+    ///    `gate` or `trig` replaces that inner param with the upstream signal
+    ///    in real units: MIDI 48..72 for `note`, 0..1 for the others. That is
+    ///    how a generative oscillator plays without a keyboard.
 ///
 /// Deliberately ASL-only. A patch naming a kernel slot cannot flatten,
 /// because the flattened graph would need that kernel bound per voice, which
@@ -38,7 +41,7 @@ public enum CrateFlatten {
     }
 
     /// Inlets a keyboard drives per note rather than per sample.
-    private static let noteInputs: Set<String> = ["note", "gate", "velocity", "trig"]
+    private static let noteInputs: Set<String> = ["note", "gate", "velocity", "trig", "clock"]
 
     // MARK: - Role
 
@@ -169,6 +172,18 @@ public enum CrateFlatten {
                 if entry.isAudioInlet(inlet) {
                     let node = sourceKind == io.line ? insertInput(ids: ids) : flattened[connection.source]
                     if let node { push(&audioSources, inlet, node) }
+                    continue
+                }
+
+                if Self.noteInputs.contains(inlet), sourceKind != io.line {
+                    if let node = flattened[connection.source] {
+                        let unipolar = entries[connection.source]?.isUnipolar ?? false
+                        cvAbsolute[inlet] = voiceJack(
+                            asBipolar(node, unipolar: unipolar, ids: ids),
+                            inlet: inlet,
+                            ids: ids
+                        )
+                    }
                     continue
                 }
 
@@ -367,6 +382,16 @@ public enum CrateFlatten {
         nodes.count == 1 ? nodes[0] : ids.node("mix", list: nodes)
     }
 
+    /// A graph-driven voice jack is in real units, not a param range map.
+    private static func voiceJack(_ source: FlatNode, inlet: String, ids: NodeIdAllocator) -> FlatNode {
+        let midi = inlet == "note"
+        return ids.node(
+            "range",
+            inputs: ["source": source],
+            params: ["min": .number(midi ? 48 : 0), "max": .number(midi ? 72 : 1)]
+        )
+    }
+
     /// `range` reads -1..1. A unipolar 0..1 source becomes that first.
     private static func asBipolar(_ node: FlatNode, unipolar: Bool, ids: NodeIdAllocator) -> FlatNode {
         guard unipolar else { return node }
@@ -560,6 +585,7 @@ public enum CrateFlatten {
             guard let target = entries[connection.target] else { continue }
             let relevant = target.isAudioInlet(connection.targetInput)
                 || target.params[connection.targetInput] != nil
+                || noteInputs.contains(connection.targetInput)
             if !relevant { continue }
             incoming[connection.target]?.insert(connection.source)
             if !(outgoing[connection.source]?.contains(connection.target) ?? false) {

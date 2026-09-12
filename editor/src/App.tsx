@@ -99,6 +99,8 @@ export function App() {
   const [exportForm, setExportForm] = useState<{ label: string; role: 'insert' | 'instrument' } | null>(null);
   const [sheet, setSheet] = useState<'none' | 'palette' | 'inspector'>('none');
   const [lineDeviceId, setLineDeviceId] = useState<string | null>(() => loadLineDeviceId());
+  const [lineOpenedLabel, setLineOpenedLabel] = useState<string | null>(null);
+  const [lineOpenError, setLineOpenError] = useState<string | null>(null);
   const [masterMonitor, setMasterMonitor] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -400,6 +402,8 @@ export function App() {
       setKeys(analogRef.current.snapshot);
       setPlaying(true);
       setAudioReadout(readSharedWebAudio());
+      setLineOpenedLabel(audioRef.current.lineOpenedLabel);
+      setLineOpenError(audioRef.current.lineOpenError);
       if (!fromRemote) sessionRef.current?.publishTransport('playing');
       const state = audioRef.current.contextState();
       editor.syncTransportFromGraph();
@@ -410,12 +414,15 @@ export function App() {
           ? ` ${transport.bpm} bpm ${transport.beatsPerBar}/${transport.beatUnit ?? 4}${transport.startSec && transport.startSec > 0.25 ? `, from ${transport.startSec.toFixed(1)}s` : ''}`
           : '';
       const rate = hz ? ` at ${(hz / 1000).toFixed(hz % 1000 === 0 ? 0 : 1)} kHz` : '';
+      const lineErr = audioRef.current.lineOpenError;
       setStatus(
-        state === 'running'
-          ? fromRemote
-            ? `Playing (session).${song}${rate}.`
-            : `Playing.${song}${rate}.`
-          : `Audio is ${state}. Tap Play again (iOS drops the context after the first wait).`,
+        `${
+          state === 'running'
+            ? fromRemote
+              ? `Playing (session).${song}${rate}.`
+              : `Playing.${song}${rate}.`
+            : `Audio is ${state}. Tap Play again (iOS drops the context after the first wait).`
+        }${lineErr ? ` ${lineErr}` : ''}`,
       );
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
@@ -428,6 +435,7 @@ export function App() {
     analogRef.current.releaseAll();
     setKeys(analogRef.current.snapshot);
     setPlaying(false);
+    setLineOpenedLabel(null);
     if (!fromRemote) sessionRef.current?.publishTransport('stopped');
     setStatus(fromRemote ? 'Stopped (session).' : 'Stopped.');
   }
@@ -679,7 +687,7 @@ export function App() {
       setStatus(
         material && drumIsEmpty(material)
           ? 'This drum has no samples yet.'
-          : 'Nothing to play: this node has no live voice. Cable its outlet to Master and press Play.',
+          : 'Nothing to play: this node has no live voice yet.',
       );
     }
   }
@@ -936,10 +944,14 @@ export function App() {
           snapshot={keys}
           masterMonitor={masterMonitor}
           lineDeviceId={lineDeviceId}
+          lineOpenedLabel={lineOpenedLabel}
+          lineOpenError={lineOpenError}
           onLineDevice={async (id) => {
             const used = await audioRef.current.setLineDevice(id);
             saveLineDeviceId(used);
             setLineDeviceId(used);
+            setLineOpenedLabel(audioRef.current.lineOpenedLabel);
+            setLineOpenError(audioRef.current.lineOpenError);
           }}
           onMasterMonitor={(on) => {
             audioRef.current.setMasterMonitor(on);

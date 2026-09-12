@@ -174,13 +174,16 @@ export const euclideanMaterial = new AudioMaterial({
   name: 'Euclidean',
   kind: 'euclidean',
   params: {
+    clock: param.range(0, 1, { default: 0 }),
     steps: param.stepped(1, 32, { step: 1, default: 8 }),
     hits: param.stepped(0, 32, { step: 1, default: 3 }),
     rotation: param.stepped(0, 31, { step: 1, default: 0 }),
   },
   automatable: ['steps', 'hits', 'rotation'],
-  graph: ({ input, params }) =>
-    euclidean(input, { steps: params.steps, hits: params.hits, rotation: params.rotation }),
+  channels: 1,
+  cvPolarity: 'unipolar',
+  graph: ({ params }) =>
+    euclidean(params.clock, { steps: params.steps, hits: params.hits, rotation: params.rotation }),
 });
 
 export const randomSteppedMaterial = new AudioMaterial({
@@ -229,6 +232,7 @@ export const sequencerMaterial = new AudioMaterial({
   name: 'Sequencer',
   kind: 'sequencer',
   params: {
+    clock: param.range(0, 1, { default: 0 }),
     step0: param.range(-1, 1, { default: 0 }),
     step1: param.range(-1, 1, { default: 0.25 }),
     step2: param.range(-1, 1, { default: 0.5 }),
@@ -239,8 +243,9 @@ export const sequencerMaterial = new AudioMaterial({
     step7: param.range(-1, 1, { default: 0.25 }),
   },
   automatable: ['step0', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step7'],
-  graph: ({ input, params }) =>
-    sequencer(input, [
+  channels: 1,
+  graph: ({ params }) =>
+    sequencer(params.clock, [
       params.step0,
       params.step1,
       params.step2,

@@ -17,10 +17,11 @@ interface WalkNode {
   list?: readonly WalkNode[];
 }
 
-const CONTROL_PARAMS = new Set(['note', 'gate', 'velocity']);
+const CONTROL_PARAMS = new Set(['note', 'gate', 'velocity', 'clock', 'trig']);
+const CV_OUTPUT_KINDS = new Set(['lfo', 'sequencer']);
 const MAX_CV_JACKS = 10;
 
-/** note/gate/velocity on instrument graphs, plus automatable params as CV. */
+/** Voice and clock jacks the graph reads, plus automatable params as CV. */
 export function controlInputs(material: AudioMaterial): string[] {
   const names = new Set<string>();
   walk(material.graph.output as WalkNode, names, new Set());
@@ -29,7 +30,7 @@ export function controlInputs(material: AudioMaterial): string[] {
     names.add('gate');
     names.add('velocity');
   }
-  return ['note', 'gate', 'velocity'].filter((name) => names.has(name));
+  return ['note', 'gate', 'velocity', 'clock', 'trig'].filter((name) => names.has(name));
 }
 
 export function cvInputs(material: AudioMaterial): string[] {
@@ -48,7 +49,7 @@ export function nodeOutputs(material: AudioMaterial): string[] {
   if (isTransportKind(material.kind)) return [...TRANSPORT_OUTPUTS];
   if (isAnalysisKind(material.kind)) return [...analysisOutputs(material.kind)];
   if (isLooperKind(material.kind)) return [...LOOPER_OUTPUTS];
-  return material.cvPolarity === 'unipolar' || material.kind === 'lfo' ? ['cv'] : ['audio'];
+  return material.cvPolarity === 'unipolar' || CV_OUTPUT_KINDS.has(material.kind) ? ['cv'] : ['audio'];
 }
 
 /** Analyser keys for a live node. Always include `audio` so scopes and old cables still resolve. */
