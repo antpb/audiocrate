@@ -6,7 +6,11 @@ import Foundation
 /// fields an `AUParameterTree` needs are all here, which is the point: a
 /// crate plugin's parameter tree is read off the document rather than
 /// authored twice.
-public struct CrateParamDescriptor: Decodable, Sendable {
+public struct CrateParamDescriptor: Codable, Sendable, Equatable {
+    /// `range`, `stepped`, `enum` or `toggle`. Absent on a document written
+    /// before the patcher needed it; a host that only draws faders never had
+    /// to know, and one that draws a menu or a switch does.
+    public let kind: String?
     public let min: Double
     public let max: Double
     /// `default` in the document; `default` is a keyword here.
@@ -29,8 +33,54 @@ public struct CrateParamDescriptor: Decodable, Sendable {
     public let labels: [String]?
 
     private enum CodingKeys: String, CodingKey {
-        case min, max, address, label, unit, step, curve, options, labels
+        case kind, min, max, address, label, unit, step, curve, options, labels
         case defaultValue = "default"
+    }
+
+    public init(
+        kind: String? = nil,
+        min: Double,
+        max: Double,
+        defaultValue: Double,
+        address: Int? = nil,
+        label: String? = nil,
+        unit: String? = nil,
+        step: Double? = nil,
+        curve: String? = nil,
+        options: [String]? = nil,
+        labels: [String]? = nil
+    ) {
+        self.kind = kind
+        self.min = min
+        self.max = max
+        self.defaultValue = defaultValue
+        self.address = address
+        self.label = label
+        self.unit = unit
+        self.step = step
+        self.curve = curve
+        self.options = options
+        self.labels = labels
+    }
+
+    /// A republished descriptor: the same declaration with a new default and
+    /// the address flatten assigned it. Written as a method rather than a
+    /// second initialiser so a caller cannot rebuild one and quietly drop a
+    /// field that was added later.
+    public func republished(defaultValue: Double, address: Int) -> CrateParamDescriptor {
+        CrateParamDescriptor(
+            kind: kind,
+            min: min,
+            max: max,
+            defaultValue: defaultValue,
+            address: address,
+            label: label,
+            unit: unit,
+            step: step,
+            curve: curve,
+            options: options,
+            labels: labels
+        )
     }
 
     /// Whether this parameter should appear in an `AUParameterTree`.
@@ -47,7 +97,7 @@ public struct CrateParamDescriptor: Decodable, Sendable {
 /// second implementation of node-to-graph lowering, so export writes the
 /// compiled artifact into the document. See
 /// `web-version/packages/crate/src/patcher/compiledPlugin.ts`.
-public struct CompiledMaterialDocument: Decodable, Sendable {
+public struct CompiledMaterialDocument: Codable, Sendable {
     public let graph: ASLGraphDocument
     public let params: [String: CrateParamDescriptor]
     public let name: String
@@ -57,6 +107,29 @@ public struct CompiledMaterialDocument: Decodable, Sendable {
     public let ports: [String]
 
     public var isInstrument: Bool { role == "instrument" }
+
+    public init(
+        graph: ASLGraphDocument,
+        params: [String: CrateParamDescriptor],
+        name: String,
+        role: String,
+        polyphony: Int? = nil,
+        ports: [String]
+    ) {
+        self.graph = graph
+        self.params = params
+        self.name = name
+        self.role = role
+        self.polyphony = polyphony
+        self.ports = ports
+    }
+
+    /// JSON, which is what `fullState` carries and what `adoptGraph` takes.
+    /// A patcher that can build one of these is a patcher whose graph has to
+    /// survive being saved, so encoding is not optional here.
+    public func encoded() throws -> Data {
+        try JSONEncoder().encode(self)
+    }
 }
 
 /// A whole `crate.plugin` document. The patch itself is deliberately not

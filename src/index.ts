@@ -14,6 +14,7 @@ export { ScenePlayback, type PlaybackStart, type TrackFader } from './playback/S
 export {
   prepareLiveVoices,
   disposeLiveVoices,
+  disposeVoiceHandle,
   type LiveVoiceRenderer,
   type LiveWasmBinaries,
   type LiveTrackVoices,
@@ -84,6 +85,7 @@ export {
   type FadeCurve,
   type ApplyClipFadesOptions,
 } from './clip/fades';
+export { resampleChannel, resampleAudioBufferLike } from './clip/resample';
 export {
   projectClipCrossfades,
   CROSSFADE_ADJACENCY_EPS_SEC,

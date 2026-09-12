@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createDrumMaterial } from './drumMaterial';
 import { INERT_PARAMS } from './drumParams';
 import { applyDrumPreset, decodeDrumPreset, isHomecrateDrum, HOMECRATE_DRUM_SUBTYPE } from './drumPreset';
+import { drumPlugin } from './plugin';
+import { resolveProjectAssetPath } from './crate';
 
 /**
  * A saved kit, base64 JSON, the way a preset blob arrives.
@@ -41,6 +43,17 @@ describe('drum preset', () => {
   it('carries a user master IR name without pretending it can run it', () => {
     const decoded = decodeDrumPreset(jsonBlob({ masterIRFile: 'spring.wav' }));
     expect(decoded.masterIrFilename).toBe('spring.wav');
+  });
+
+  it('asks for pad files in assets/samples, then assets/Samples', () => {
+    const requests = drumPlugin.assetRequests!(
+      decodeDrumPreset(jsonBlob({ pad0Sample: 'homecrate_kick2.wav' })),
+    );
+    expect(requests[0]?.library).toBe('samples');
+    expect(requests[0]?.fallbackLibraries).toEqual(['Samples']);
+    expect(resolveProjectAssetPath(requests[0]!.library, requests[0]!.filename)).toBe(
+      'assets/samples/homecrate_kick2.wav',
+    );
   });
 
   it('applies onto a material', () => {

@@ -800,7 +800,7 @@ export function App() {
                   New spatial
                 </button>
                 <button type="button" onClick={openImportProject}>
-                  Import Project
+                  Import homecrate Project
                 </button>
                 {roomId ? (
                   <>

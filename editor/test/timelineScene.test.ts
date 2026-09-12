@@ -10,6 +10,7 @@ import {
 } from '../../src/index';
 import { HAS_GRAIN } from './siblings';
 import { createGrainMaterial } from '../../examples/grain/src/index';
+import { createDrumMaterial } from '../../examples/drum/src/index';
 import { applySample } from '../src/nodeAssets';
 import { silentJack, type JackActivity } from '../src/activity';
 import { idsReachingMaster } from '../src/graphReach';
@@ -23,6 +24,7 @@ import {
   spreadActivity,
   editorTimelinePlan,
   fillTimelineScene,
+  bindsWorkletInstrument,
   type TimelineSource,
 } from '../src/timelineScene';
 
@@ -389,6 +391,29 @@ describe('fillTimelineScene builds from the document', () => {
     expect(scene.transport.beatsPerBar).toBe(plan.transport.beatsPerBar);
     expect(scene.transport.beatUnit).toBe(plan.transport.beatUnit);
     expect(scene.master.volume).toBe(plan.master.volume);
+  });
+
+  it('does not bind a drum as a worklet instrument', async () => {
+    expect(bindsWorkletInstrument('drum')).toBe(false);
+    expect(bindsWorkletInstrument('synth')).toBe(true);
+    const drum = createDrumMaterial();
+    const { scene } = await filled(
+      source({
+        nodeIds: ['t2-inst', 'midi-2-c', 'master-gain'],
+        kinds: new Map([
+          ['t2-inst', 'drum'],
+          ['midi-2-c', 'midiclip'],
+          ['master-gain', 'gain'],
+        ]),
+        materials: new Map([
+          ['t2-inst', drum],
+          ['master-gain', gainMaterial.duplicate()],
+        ]),
+        connections: [{ source: 'midi-2-c', sourceOutput: 'cv', target: 't2-inst', targetInput: 'note' }],
+        nodeData: (id) => (id === 'midi-2-c' ? { offsetSec: 0, notes: [] } : undefined),
+      }),
+    );
+    expect(scene.tracks.some((track) => track.instrument?.kind === 'drum')).toBe(false);
   });
 
   it('mutes the scene track the plan calls muted', async () => {

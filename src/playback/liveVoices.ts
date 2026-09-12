@@ -102,13 +102,50 @@ export async function prepareLiveVoices(
     for (const material of track.materials) {
       inserts.push(await createVoiceFor(renderer, material, wasm, registry));
     }
-    const instrument = track.instrument
-      ? await createVoiceFor(renderer, track.instrument, wasm, registry)
-      : undefined;
+    const instrument =
+      track.instrument && track.instrument.kind !== 'drum'
+        ? await createVoiceFor(renderer, track.instrument, wasm, registry)
+        : undefined;
     tracksMap.set(track.id, { inserts, instrument });
   }
 
   return { master: masterVoices, tracks: tracksMap };
+}
+
+/**
+ * Stops one live worklet so a later Play cannot keep evaluating it.
+ *
+ * `AudioWorkletNode.process` keeps running while the silent driver is
+ * connected, even after every output is disconnected. Leaving that driver
+ * up is how Play/Stop/Play stacked two graphs and the mix started skipping.
+ */
+export function disposeVoiceHandle(voice: VoiceHandle): void {
+  try {
+    voice.setAnalysisInterval(0);
+  } catch {
+    /* already gone */
+  }
+  try {
+    voice.allNotesOff();
+  } catch {
+    /* already gone */
+  }
+  try {
+    voice.noteOff();
+  } catch {
+    /* already gone */
+  }
+  try {
+    voice.node.disconnect();
+  } catch {
+    /* already gone */
+  }
+  try {
+    voice.driver?.stop();
+    voice.driver?.disconnect();
+  } catch {
+    /* already stopped */
+  }
 }
 
 /** Tears down every voice `prepareLiveVoices` created. Safe to call more than once. */
@@ -118,18 +155,5 @@ export function disposeLiveVoices(voices: LiveSceneVoices): void {
     all.push(...track.inserts);
     if (track.instrument) all.push(track.instrument);
   }
-  for (const voice of all) {
-    try {
-      voice.noteOff();
-      voice.node.disconnect();
-      try {
-        voice.driver?.stop();
-        voice.driver?.disconnect();
-      } catch {
-        /* already stopped */
-      }
-    } catch {
-      /* already gone */
-    }
-  }
+  for (const voice of all) disposeVoiceHandle(voice);
 }

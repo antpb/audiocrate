@@ -16,6 +16,27 @@ export const NUM_PADS = 16;
 /** MIDI note of pad 0. Pads run C2..D#3, `padIndex = note - 36`. */
 export const PAD_BASE_NOTE = 36;
 
+/**
+ * Which pad a MIDI note hits.
+ *
+ * The AU maps `note - 36` in 0..15. The editor keybed defaults to C4 (60),
+ * and some project MIDI writes the pad index itself (0..15). Both have to
+ * reach a pad or the kit looks loaded and stays silent.
+ */
+export function padIndexFromNote(note: number): number | null {
+  if (!Number.isFinite(note)) return null;
+  const rounded = Math.round(note);
+  if (rounded < 0 || rounded > 127) return null;
+  if (rounded < NUM_PADS) return rounded;
+  return (((rounded - PAD_BASE_NOTE) % NUM_PADS) + NUM_PADS) % NUM_PADS;
+}
+
+/** Note the live graph compares against: always C2 plus the pad index. */
+export function drumLiveNote(note: number): number {
+  const pad = padIndexFromNote(note);
+  return pad === null ? Math.round(note) : PAD_BASE_NOTE + pad;
+}
+
 /** First address of each per-pad bank. One entry per bank in the Swift enum. */
 export const PAD_ADDRESS_BASE = {
   vol: 0,

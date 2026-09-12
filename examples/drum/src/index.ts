@@ -4,6 +4,8 @@ export { createDrumMaterial, drumPluginMaterial, liveDrumGraph, type DrumMateria
 export {
   NUM_PADS,
   PAD_BASE_NOTE,
+  padIndexFromNote,
+  drumLiveNote,
   PAD_ADDRESS_BASE,
   MASTER_ADDRESS,
   INERT_PARAMS,
@@ -23,6 +25,8 @@ export {
   drumPadKey,
   drumPadAsset,
   drumPadAssets,
+  drumPadBoxes,
+  ensureDrumPadBoxes,
   setDrumPadAsset,
   clearDrumPadAsset,
 } from './drumPads';

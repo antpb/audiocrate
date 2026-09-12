@@ -14,6 +14,7 @@ import {
   isTransportAbsoluteOutput,
   isTransportKind,
   audioMaterialRegistry,
+  disposeVoiceHandle,
   resolvedTransport,
   sampleAsset,
   type AudioContextLike,
@@ -49,10 +50,11 @@ import {
   emptyMidiSample,
   midiInOutlets,
   midiOutSample,
+  midiVelocity,
   type MidiInletReading,
 } from '../../src/index';
 import { patcherKernelBinaries } from './kernels';
-import { fillTimelineScene, editorTimelineSource, overlaySpread, patchUsesTimeline, type TimelineLane } from './timelineScene';
+import { fillTimelineScene, editorTimelineSource, overlaySpread, patchUsesTimeline, resetTimelineScene, type TimelineLane } from './timelineScene';
 import { openInput, type OpenInputResult } from './host/crateAudioInput';
 import { EDITOR_WORKLET_URL } from './host/workletUrl';
 import {
@@ -84,7 +86,14 @@ import { createNativeGain, createNativeStereoPan } from './nativeMixer';
 import { prepareClipBuffer } from './resampleAudio';
 import { lineMonitorOn } from './lineInput';
 import { isLineKind, isMasterKind, isMidiClipKind, isMidiInKind, isMidiOutKind } from './tools';
-import { NUM_PADS, PAD_BASE_NOTE, drumPadAsset, padParamName } from '../../examples/drum/src/index';
+import {
+  drumLiveNote,
+  drumPadAsset,
+  ensureDrumPadBoxes,
+  liveDrumGraph,
+  padIndexFromNote,
+  padParamName,
+} from '../../examples/drum/src/index';
 import {
   createSpatialMaster,
   createSpatialSource,
@@ -284,8 +293,10 @@ export class PatchAudio {
       await new Promise<void>((resolve) => {
         this.armWaiters.push(resolve);
       });
-      await this.resumeIfNeeded();
-      return;
+      if (this.playing) {
+        await this.resumeIfNeeded();
+        return;
+      }
     }
     const token = ++this.armToken;
     this.arming = true;
@@ -425,10 +436,6 @@ export class PatchAudio {
       this.lives.set(nodeId, this.createSampleLive(ctx, material));
       return;
     }
-    if (kind === 'drum') {
-      this.lives.set(nodeId, this.createDrumLive(ctx));
-      return;
-    }
     if (kind === 'gain') {
       this.lives.set(nodeId, this.createMixerLive(createNativeGain(ctx, material.getParam('gain'))));
       return;
@@ -545,9 +552,8 @@ export class PatchAudio {
       const live = this.lives.get(id);
       const material = this.editor.materials.get(id);
       if (!live || !material) continue;
-      if (material.kind === 'drum') {
-        if (event.type === 'press') this.triggerDrumNative(live, material, event.note, event.velocity);
-        continue;
+      if (material.kind === 'drum' && event.type === 'press') {
+        this.triggerDrumNative(live, material, event.note, event.velocity);
       }
       driveLive(live, material, event);
     }
@@ -639,6 +645,7 @@ export class PatchAudio {
     }
     if (token !== this.armToken) return;
     const startSec = Math.max(0, editor.transport?.startSec ?? 0);
+    if (scene.transport.state === 'playing') scene.transport.stop();
     scene.transport.seek(startSec);
     this.unlock();
     await this.resumeIfNeeded();
@@ -649,9 +656,15 @@ export class PatchAudio {
     this.timelinePlaying = true;
     await this.attachTimelineKernelInserts(editor, ctx, renderer, token);
     if (token !== this.armToken) return;
+    if (this.speaker) {
+      attachNodeToHtmlSink(this.speaker, ctx.destination);
+    }
     const attached = this.attachTimelineGraph(editor, stats.bindings);
+    await this.attachTimelineDrumLives(editor, ctx, renderer, stats.bindings, token);
+    if (token !== this.armToken) return;
     const masterFader = start?.masterFader as GainNode | null | undefined;
     if (attached && masterFader) masterFader.gain.value = 0;
+    this.armMidiClips(editor, ctx, 'drum');
     this.playing = true;
     this.startMeter();
     console.info(
@@ -827,19 +840,25 @@ export class PatchAudio {
     // swallowed: a pad that does nothing and says nothing is the worst
     // version of this.
     if (!live || !material) return false;
-    if (material.kind === 'drum') return this.triggerDrumNative(live, material, note, velocity);
+    if (material.kind === 'drum') {
+      const heard = this.triggerDrumNative(live, material, note, velocity);
+      const handle = live.handles[0];
+      if (handle) handle.noteOn({ ...material.snapshotParams(), note: drumLiveNote(note), velocity });
+      return heard;
+    }
+    const playNote = note;
     const handle = live.handles[0];
     if (!handle && !live.pool) return false;
     if (live.kernelPoly && handle) {
-      handle.midiNoteOn(note, velocity);
+      handle.midiNoteOn(playNote, velocity);
       return true;
     }
     if (live.pool) {
-      live.pool.noteOn(note, { velocity });
+      live.pool.noteOn(playNote, { velocity });
       return true;
     }
     if (!handle) return false;
-    handle.noteOn({ ...material.snapshotParams(), note, velocity });
+    handle.noteOn({ ...material.snapshotParams(), note: playNote, velocity });
     return true;
   }
 
@@ -884,15 +903,7 @@ export class PatchAudio {
     const material = editor?.materials.get(nodeId);
     const previous = this.lives.get(nodeId);
     if (!editor || !renderer || !ctx || !material || !previous) return;
-    for (const handle of previous.handles) {
-      try {
-        handle.setAnalysisInterval(0);
-        handle.allNotesOff();
-        handle.node.disconnect();
-      } catch {
-        /* already gone */
-      }
-    }
+    for (const handle of previous.handles) disposeVoiceHandle(handle);
     try {
       previous.mix.disconnect();
     } catch {
@@ -990,9 +1001,17 @@ export class PatchAudio {
       }
     }
     this.clearTaps();
-    const fft = this.timelinePlaying ? 2048 : 256;
+    const fft = this.timelinePlaying ? 512 : 256;
     const sink = this.timelinePlaying ? this.meterSink : null;
-    this.taps.set('__master', makeTap(ctx, master, sink, fft));
+    const tapsByNode = new Map<AudioNode, Tap>();
+    const tapFor = (node: AudioNode): Tap => {
+      const hit = tapsByNode.get(node);
+      if (hit) return hit;
+      const tap = makeTap(ctx, node, sink, fft);
+      tapsByNode.set(node, tap);
+      return tap;
+    };
+    this.taps.set('__master', tapFor(master));
 
     const wired: Array<{ from: AudioNode; to: AudioNode; output: number; input: number }> = [];
     const wiredParams: Array<{ from: AudioNode; to: AudioParam }> = [];
@@ -1047,35 +1066,35 @@ export class PatchAudio {
         const bank = this.transportJacks.get(id);
         if (!bank) continue;
         for (const name of TRANSPORT_OUTPUTS) {
-          this.taps.set(`${id}:${name}`, makeTap(ctx, transportJackNode(bank, name), sink, fft));
+          this.taps.set(`${id}:${name}`, tapFor(transportJackNode(bank, name)));
         }
         continue;
       }
       const analysis = this.analysisJacks.get(id);
       if (analysis) {
         for (const name of tapOutputNames(editor.materials.get(id))) {
-          this.taps.set(`${id}:${name}`, makeTap(ctx, analysisJackNode(analysis, name), sink, fft));
+          this.taps.set(`${id}:${name}`, tapFor(analysisJackNode(analysis, name)));
         }
         continue;
       }
       const looperBank = this.looperJacks.get(id);
       if (looperBank) {
         for (const name of LOOPER_OUTPUTS) {
-          this.taps.set(`${id}:${name}`, makeTap(ctx, looperJackNode(looperBank, name), sink, fft));
+          this.taps.set(`${id}:${name}`, tapFor(looperJackNode(looperBank, name)));
         }
         continue;
       }
       const tapNode = live.handles[0]?.node ?? live.mix;
-      const tap = makeTap(ctx, tapNode, sink, fft);
+      const tap = tapFor(tapNode);
       for (const name of tapOutputNames(editor.materials.get(id))) this.taps.set(`${id}:${name}`, tap);
     }
     for (const [id, bank] of this.jacks) {
-      for (const name of KEYBOARD_OUTPUTS) this.taps.set(`${id}:${name}`, makeTap(ctx, bank[name], sink, fft));
+      for (const name of KEYBOARD_OUTPUTS) this.taps.set(`${id}:${name}`, tapFor(bank[name]));
     }
     for (const [id, bank] of this.midiInJacks) {
-      for (const name of MIDI_IN_OUTPUTS) this.taps.set(`${id}:${name}`, makeTap(ctx, bank[name], sink, fft));
+      for (const name of MIDI_IN_OUTPUTS) this.taps.set(`${id}:${name}`, tapFor(bank[name]));
     }
-    for (const [id, line] of this.lines) this.taps.set(`${id}:audio`, makeTap(ctx, line.gain, sink, fft));
+    for (const [id, line] of this.lines) this.taps.set(`${id}:audio`, tapFor(line.gain));
     return true;
   }
 
@@ -1149,6 +1168,30 @@ export class PatchAudio {
     return attached;
   }
 
+  private async attachTimelineDrumLives(
+    editor: PatchEditor,
+    ctx: AudioContext,
+    renderer: WebAudioRenderer,
+    bindings: Array<{ trackId: number; lane: TimelineLane }>,
+    token: number,
+  ): Promise<void> {
+    let added = false;
+    for (const { lane } of bindings) {
+      if (token !== this.armToken) return;
+      if (!lane.instId || (editor.kinds.get(lane.instId) ?? '') !== 'drum') continue;
+      if (this.lives.get(lane.instId)?.handles[0]) continue;
+      const material = editor.materials.get(lane.instId);
+      if (!material) continue;
+      try {
+        this.lives.set(lane.instId, await this.createLive(ctx, renderer, material, lane.instId));
+        added = true;
+      } catch (err) {
+        console.warn(`[crate-patcher] drum ${lane.instId} fell back to silence`, err);
+      }
+    }
+    if (added) this.rewire();
+  }
+
   private ensureTimelineMixerLives(editor: PatchEditor | null = this.editor): void {
     const ctx = this.scene?.audioContext as AudioContext | undefined;
     if (!editor || !ctx) return;
@@ -1156,7 +1199,7 @@ export class PatchAudio {
       if (this.lives.has(node.id)) continue;
       const kind = editor.kinds.get(node.id) ?? '';
       if (isMasterKind(kind) || isMidiClipKind(kind) || isKeyboardKind(kind) || isLineKind(kind) || isTransportKind(kind) || isMidiInKind(kind) || isMidiOutKind(kind)) continue;
-      if (kind === 'sampleplayer' || kind === 'synth') continue;
+      if (kind === 'sampleplayer' || kind === 'synth' || kind === 'drum') continue;
       const material = editor.materials.get(node.id);
       if (kind === 'gain') {
         this.lives.set(node.id, this.createMixerLive(createNativeGain(ctx, material?.getParam('gain') ?? 1)));
@@ -1273,9 +1316,8 @@ export class PatchAudio {
       const live = this.lives.get(id);
       const material = this.editor.materials.get(id);
       if (!live || !material) continue;
-      if (material.kind === 'drum') {
-        if (event.type === 'press') this.triggerDrumNative(live, material, event.note, event.velocity);
-        continue;
+      if (material.kind === 'drum' && event.type === 'press') {
+        this.triggerDrumNative(live, material, event.note, event.velocity);
       }
       driveLive(live, material, event);
     }
@@ -1569,25 +1611,21 @@ export class PatchAudio {
     }
     if (this.scene) {
       try {
-        this.scene.transport.stop();
+        resetTimelineScene(this.scene);
       } catch {
-        /* never started */
+        try {
+          this.scene.transport.stop();
+        } catch {
+          /* never started */
+        }
+        this.scene.disposeLiveVoices();
       }
-      this.scene.disposeLiveVoices();
     }
     for (const off of this.analysisUnsubs) off();
     this.analysisUnsubs = [];
     for (const live of this.lives.values()) {
       live.pool?.allNotesOff();
-      for (const handle of live.handles) {
-        try {
-          handle.setAnalysisInterval(0);
-          handle.allNotesOff();
-          handle.node.disconnect();
-        } catch {
-          /* already gone */
-        }
-      }
+      for (const handle of live.handles) disposeVoiceHandle(handle);
       try {
         live.mix.disconnect();
       } catch {
@@ -1600,6 +1638,7 @@ export class PatchAudio {
           /* already gone */
         }
       }
+      live.dispose?.();
     }
     this.lives.clear();
     for (const bank of this.jacks.values()) {
@@ -1757,39 +1796,34 @@ export class PatchAudio {
     return { mix, handles: [], pool: null, kernelPoly: false };
   }
 
-  private createDrumLive(ctx: AudioContext): LiveNode {
-    const mix = ctx.createGain();
-    mix.gain.value = 1;
-    return { mix, handles: [], pool: null, kernelPoly: false };
-  }
-
   /**
-   * One-shot pad playback on the node's mix, the same native path Sample
-   * Player uses. The authored drum graph is too heavy for a worklet quantum,
-   * so a live voice compiled from it never fills the outlet.
+   * Pad audio on the node's mix, the same native path Sample Player uses.
+   *
+   * The live drum worklet still runs so the cables meter a hit. It does not
+   * carry the kit: sixteen WAV tables in processorOptions is how the voice
+   * arrives silent on both desktop and iOS. This one-shot is what you hear.
    */
   private triggerDrumNative(live: LiveNode, material: AudioMaterial, note: number, velocity: number): boolean {
-    const pad = Math.round(note) - PAD_BASE_NOTE;
-    if (pad < 0 || pad >= NUM_PADS) return false;
+    const pad = padIndexFromNote(note);
+    if (pad === null) return false;
     const asset = drumPadAsset(material, pad);
     if (!asset || asset.samples.length < 2) return false;
     const ctx = live.mix.context as AudioContext;
     const prepared = prepareClipBuffer(ctx, asset);
     const src = ctx.createBufferSource();
     src.buffer = prepared.buffer;
-    const pitch = material.getParam(padParamName('pitch', pad));
-    src.playbackRate.value = prepared.rateScale * Math.pow(2, (Number.isFinite(pitch) ? pitch : 0) / 12);
-    const startFrac = material.getParam(padParamName('sampleStart', pad));
-    const offset =
-      Math.min(Math.max(Number.isFinite(startFrac) ? startFrac : 0, 0), 1) * prepared.buffer.duration;
+    const pitch = drumNumber(material, padParamName('pitch', pad), 0);
+    src.playbackRate.value = prepared.rateScale * Math.pow(2, pitch / 12);
+    const startFrac = drumNumber(material, padParamName('sampleStart', pad), 0);
+    const offset = Math.min(Math.max(startFrac, 0), 1) * prepared.buffer.duration;
+    const startAt = offset >= prepared.buffer.duration ? 0 : offset;
     const padGain = ctx.createGain();
-    const vol = material.getParam(padParamName('vol', pad));
-    const master = material.getParam('masterVol');
-    padGain.gain.value =
-      (Number.isFinite(vol) ? vol : 1) * Math.max(0, velocity) * (Number.isFinite(master) ? master : 1);
-    const pan = material.getParam(padParamName('pan', pad));
+    const vol = drumNumber(material, padParamName('vol', pad), 1);
+    const master = drumNumber(material, 'masterVol', 1);
+    padGain.gain.value = vol * midiVelocity(velocity) * master;
+    const pan = drumNumber(material, padParamName('pan', pad), 0);
     const panner = ctx.createStereoPanner();
-    panner.pan.value = Math.min(1, Math.max(-1, Number.isFinite(pan) ? pan : 0));
+    panner.pan.value = Math.min(1, Math.max(-1, pan));
     src.connect(padGain);
     padGain.connect(panner);
     panner.connect(live.mix);
@@ -1802,7 +1836,7 @@ export class PatchAudio {
         /* already gone */
       }
     };
-    src.start(ctx.currentTime, offset);
+    src.start(ctx.currentTime, startAt);
     this.clipSources.push(src);
     return true;
   }
@@ -1851,7 +1885,7 @@ export class PatchAudio {
     }
   }
 
-  private armMidiClips(editor: PatchEditor, ctx: AudioContext): void {
+  private armMidiClips(editor: PatchEditor, ctx: AudioContext, onlyKind?: string): void {
     const bpm = editor.transport?.bpm && editor.transport.bpm > 0 ? editor.transport.bpm : 120;
     const startSec = Math.max(0, editor.transport?.startSec ?? 0);
     const now = ctx.currentTime;
@@ -1860,6 +1894,7 @@ export class PatchAudio {
       const destId = midiClipTarget(editor, node.id);
       const live = destId ? this.lives.get(destId) : undefined;
       if (!live) continue;
+      if (onlyKind && (editor.kinds.get(destId) ?? '') !== onlyKind) continue;
       const placed = placeMidiClip(editor.nodeData(node.id));
       for (const note of placed.notes) {
         const onSec = placed.offsetSec + Math.max(0, note.startBeat) * (60 / bpm);
@@ -1881,18 +1916,28 @@ export class PatchAudio {
     off: number,
   ): void {
     const handle = live.handles[0];
+    const playNote = material?.kind === 'drum' ? drumLiveNote(pitch) : pitch;
+    if (material?.kind === 'drum') {
+      const onMs = Math.max(0, (when - (live.mix.context.currentTime ?? when)) * 1000);
+      this.playTimers.push(
+        window.setTimeout(() => {
+          this.triggerDrumNative(live, material, pitch, velocity);
+          if (handle) handle.noteOn({ ...material.snapshotParams(), note: playNote, velocity });
+        }, onMs),
+      );
+      return;
+    }
     if (live.kernelPoly && handle) {
-      handle.midiNoteOn(pitch, velocity, when);
-      handle.midiNoteOff(pitch, off);
+      handle.midiNoteOn(playNote, velocity, when);
+      handle.midiNoteOff(playNote, off);
       return;
     }
     const onMs = Math.max(0, (when - (handle?.node.context.currentTime ?? when)) * 1000);
     const offMs = Math.max(0, (off - (handle?.node.context.currentTime ?? off)) * 1000);
     this.playTimers.push(
       window.setTimeout(() => {
-        if (material?.kind === 'drum') this.triggerDrumNative(live, material, pitch, velocity);
-        else if (live.pool) live.pool.noteOn(pitch, { velocity });
-        else if (handle && material) handle.noteOn({ ...material.snapshotParams(), note: pitch, velocity });
+        if (live.pool) live.pool.noteOn(playNote, { velocity });
+        else if (handle && material) handle.noteOn({ ...material.snapshotParams(), note: playNote, velocity });
       }, onMs),
     );
     this.playTimers.push(
@@ -1929,11 +1974,13 @@ export class PatchAudio {
     const kernelPoly = material.kind === 'synth' || material.kind === 'grain';
     const count = kernelPoly ? 1 : Math.min(TESTER_VOICE_CAP, Math.max(1, material.polyphony));
     const handles: VoiceHandle[] = [];
+    if (material.kind === 'drum') ensureDrumPadBoxes(material);
     for (let i = 0; i < count; i += 1) {
       // The authored drum graph is the 026S chain. Sixteen of those on every
       // sample does not finish a worklet block in time, so the outlet stays
       // silent. The live graph is the same pads and boxes without that chain.
-      const handle = await renderer.createVoice(material.graph);
+      const graph = material.kind === 'drum' ? liveDrumGraph(material) : material.graph;
+      const handle = await renderer.createVoice(graph);
       for (const [name, value] of Object.entries(material.snapshotParams())) {
         try {
           handle.setParam(name, value);
@@ -2141,8 +2188,18 @@ function writeMidiInJacks(
   }
 }
 
+function drumNumber(material: AudioMaterial, name: string, fallback: number): number {
+  try {
+    const value = material.getParam(name);
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function driveLive(live: LiveNode, material: AudioMaterial, event: AnalogEvent): void {
-  const { note, velocity, snapshot } = event;
+  const note = material.kind === 'drum' ? drumLiveNote(event.note) : event.note;
+  const { velocity, snapshot } = event;
   const handle = live.handles[0];
   if (live.kernelPoly && handle) {
     if (event.type === 'press') handle.midiNoteOn(note, velocity);

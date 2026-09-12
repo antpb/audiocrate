@@ -382,7 +382,8 @@ export function fillTimelineScene(
     // visible rather than worked around.
     if (lane.instId) {
       const instrument = source.materials.get(lane.instId);
-      if (instrument) track.instrument = instrument;
+      const kind = source.kinds.get(lane.instId) ?? instrument?.kind ?? '';
+      if (instrument && bindsWorkletInstrument(kind)) track.instrument = instrument;
     }
 
     for (const planClip of planned.clips) {
@@ -415,7 +416,12 @@ export function fillTimelineScene(
   return { tracks: lanes.length, clips, midi, bindings };
 }
 
+export function bindsWorkletInstrument(kind: string): boolean {
+  return kind !== 'drum';
+}
+
 function isInstrumentNode(kind: string, material: AudioMaterial | undefined): boolean {
+  if (kind === 'drum') return true;
   if (kind === 'synth') return true;
   return Boolean(material && material.audioInputs.length === 0 && (kind === 'grain' || material.polyphony > 1));
 }

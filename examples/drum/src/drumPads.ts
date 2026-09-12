@@ -27,6 +27,23 @@ export function drumPadBoxes(material: AudioMaterial): SampleBox[] | undefined {
   return padBoxes.get(material);
 }
 
+/** Copy decoded pad files into the playheads the live graph reads. */
+export function ensureDrumPadBoxes(material: AudioMaterial): SampleBox[] {
+  let boxes = padBoxes.get(material);
+  if (!boxes) {
+    boxes = createPadBoxes();
+    attachPadBoxes(material, boxes);
+  }
+  for (let pad = 0; pad < NUM_PADS; pad++) {
+    const asset = drumPadAsset(material, pad);
+    if (asset && asset.samples.length >= 2) {
+      boxes[pad]!.samples = asset.samples;
+      boxes[pad]!.sampleRate = asset.sampleRate;
+    }
+  }
+  return boxes;
+}
+
 export function setDrumPadAsset(material: AudioMaterial, pad: number, asset: AudioAssetData): void {
   material.setAsset(drumPadKey(pad), asset);
   const box = padBoxes.get(material)?.[pad];

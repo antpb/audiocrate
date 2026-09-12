@@ -52,7 +52,7 @@ export function SettingsPanel({
           {rateMismatch(settings.sampleRate, readout.sampleRate) ? (
             <p className="hint settings-warn">
               You asked for {formatRate(settings.sampleRate)}. The device opened {formatRate(readout.sampleRate)}.
-              Clip speed follows the opened rate.
+              Clips are converted to the opened rate.
             </p>
           ) : null}
           {settings.bufferMs <= 3 ? (
@@ -79,7 +79,7 @@ export function SettingsPanel({
                 </button>
               ))}
             </div>
-            <p className="hint">Default: 10ms</p>
+            <p className="hint">Default: 10ms. Song playback uses the playback category, not a 10ms callback.</p>
           </section>
 
           <section>

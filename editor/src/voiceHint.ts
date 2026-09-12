@@ -13,11 +13,15 @@ export function firstNoteTarget(editor: PatchEditor): AudioMaterial | null {
   return null;
 }
 
-export function applyVoiceHint(editor: PatchEditor, analog: { setVoiceView: (view: { polyphony: number; steal: string; targetName: string }) => void }): void {
+export function applyVoiceHint(
+  editor: PatchEditor,
+  analog: { setVoiceView: (view: { polyphony: number; steal: string; targetName: string }) => void; octave?: number },
+): void {
   const material = firstNoteTarget(editor);
   analog.setVoiceView({
     polyphony: material?.polyphony ?? 1,
     steal: stealLabel(material?.voiceStealing),
     targetName: material?.name ?? '',
   });
+  if (material?.kind === 'drum') analog.octave = 2;
 }

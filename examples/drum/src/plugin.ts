@@ -40,7 +40,13 @@ export const drumPlugin: AudioMaterialPlugin<DecodedDrumPreset> = {
     for (let pad = 0; pad < NUM_PADS; pad++) {
       const filename = preset.padFilenames[pad];
       if (!filename) continue;
-      requests.push({ key: drumPadKey(pad), library: 'Samples', filename, decode: 'audio' });
+      requests.push({
+        key: drumPadKey(pad),
+        library: 'samples',
+        fallbackLibraries: ['Samples'],
+        filename,
+        decode: 'audio',
+      });
     }
     return requests;
   },

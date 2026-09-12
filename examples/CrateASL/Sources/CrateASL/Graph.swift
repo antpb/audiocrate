@@ -48,6 +48,23 @@ public enum ASLValue: Equatable, Sendable {
     }
 }
 
+extension ASLValue: Encodable {
+    /// Writes back what was read. A native patcher builds graph documents
+    /// rather than only reading them, and the result has to survive
+    /// `fullState` and a project reload as the same numbers.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .number(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .array(let items): try container.encode(items)
+        case .object(let fields): try container.encode(fields)
+        case .null: try container.encodeNil()
+        }
+    }
+}
+
 extension ASLValue: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -77,7 +94,7 @@ extension ASLValue: Decodable {
 /// what keeps one filter one filter; a decoder that treats each copy as its
 /// own node gives it two delay lines fed the same signal, which sounds
 /// almost right and is not.
-public struct ASLNodeDocument: Decodable, Sendable {
+public struct ASLNodeDocument: Codable, Sendable {
     public let id: Int
     public let kind: String
     public let params: [String: ASLValue]
@@ -86,6 +103,32 @@ public struct ASLNodeDocument: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, params, inputs, list
+    }
+
+    public init(
+        id: Int,
+        kind: String,
+        params: [String: ASLValue] = [:],
+        inputs: [String: ASLNodeDocument] = [:],
+        list: [ASLNodeDocument]? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.params = params
+        self.inputs = inputs
+        self.list = list
+    }
+
+    /// `list` is omitted when absent rather than written as null, because the
+    /// JavaScript serializer omits it and a document that round-trips through
+    /// here should come back byte-comparable to one that did not.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(params, forKey: .params)
+        try container.encode(inputs, forKey: .inputs)
+        try container.encodeIfPresent(list, forKey: .list)
     }
 
     public init(from decoder: Decoder) throws {
@@ -99,12 +142,25 @@ public struct ASLNodeDocument: Decodable, Sendable {
 }
 
 /// A whole graph, matching `ASLGraphDescriptor`.
-public struct ASLGraphDocument: Decodable, Sendable {
+public struct ASLGraphDocument: Codable, Sendable {
     /// Named per-voice inputs the builder referenced, in first-access order.
     public let inputs: [String]
     public let output: ASLNodeDocument
     /// 1 or 2 to force the channel count; absent means decide from the graph.
     public let channels: Int?
+
+    public init(inputs: [String], output: ASLNodeDocument, channels: Int? = nil) {
+        self.inputs = inputs
+        self.output = output
+        self.channels = channels
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(inputs, forKey: .inputs)
+        try container.encode(output, forKey: .output)
+        try container.encodeIfPresent(channels, forKey: .channels)
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

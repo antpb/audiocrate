@@ -190,6 +190,7 @@ function drumLiveGraph(boxes: SampleBox[]) {
         position: p('sampleStart'),
         pitch: p('pitch'),
         box: boxes[pad],
+        table: boxes[pad]!.samples,
       })
         .mul(p('vol'))
         .mul(velocity);
