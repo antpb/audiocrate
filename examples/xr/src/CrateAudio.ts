@@ -23,12 +23,18 @@
  * ## What this does not do
  *
  * It does not create an `AudioContext` or an `AudioListener`. XR Publisher
- * owns exactly one of each, mounted on the camera, and resumes the context
- * on the first user gesture. A second context would be silent on iOS,
- * unpannable everywhere, and would not be resumed. The listener is passed
- * in, and its context is the context.
+ * owns exactly one of each, mounted on the camera. A second context would
+ * be silent on iOS, unpannable everywhere, and would not be resumed. The
+ * listener is passed in, and its context is the context.
+ *
+ * The engine only calls `ctx.resume()` on a tap. That is not enough on
+ * iPhone Safari: the same turn also needs a silent buffer, a keep-alive,
+ * and an HTML MediaStream sink (see `hostedAudio.ts`). `createCrateAudio`
+ * is async, so it cannot be the unlock. The host must call
+ * `unlockHostedAudio` from the gesture, before any `await`.
  */
 import { AudioMaterial, WebAudioRenderer, type ASLGraphDescriptor, type VoiceHandle } from './crate';
+import { attachNodeToHtmlSink } from './hostedAudio';
 
 /**
  * The parts of `THREE` this file needs, and no more.
@@ -64,6 +70,12 @@ export interface ThreeAudioLike {
 
 export interface ThreeListenerLike {
   context: AudioContext;
+  /**
+   * The listener mix, already connected to `destination` by three.js.
+   * On iOS it is also tapped into the HTML sink, and disconnected from
+   * destination once that element is playing, same as the editor.
+   */
+  gain?: GainNode;
 }
 
 export interface ThreeNamespaceLike {
@@ -379,6 +391,8 @@ export async function createCrateAudio(
     audio.setMaxDistance?.(spatial.maxDistance ?? 60);
     audio.setDistanceModel?.(spatial.distanceModel ?? 'inverse');
   }
+
+  attachNodeToHtmlSink(listener.gain, context.destination);
 
   return new CrateAudio(audio, voice, context);
 }

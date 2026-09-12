@@ -344,6 +344,7 @@ export const catalog: CatalogEntry[] = [
   },
   ...CORE.map((entry) => tagged(fromProto(entry.proto, entry.label, entry.create), entry.category)),
   pluginEntry('amp', 'Amp', 'Plugins'),
+  pluginEntry('drum', 'Drum', 'Plugins'),
   pluginEntry('grain', 'Grain', 'Plugins'),
   pluginEntry('synth', 'Synth', 'Plugins'),
   pluginEntry('spacereverb', 'Space Reverb', 'Plugins'),

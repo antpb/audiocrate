@@ -11,4 +11,12 @@ export type {
   ThreeListenerLike,
   ThreeNamespaceLike,
 } from './CrateAudio';
+export {
+  attachNodeToHtmlSink,
+  describeHostedAudio,
+  getHtmlAudioSink,
+  prefersHtmlAudioSink,
+  shouldConnectWebAudioDestination,
+  unlockHostedAudio,
+} from './hostedAudio';
 export { resonantStoneMaterial } from './materials/resonantStone';

@@ -1,6 +1,7 @@
 import { irAsset, sampleAsset, wavetableAsset, type AudioAssetData, type AudioMaterial } from '../../src/index';
 import { ampNamAsset, ampNamAssetR } from './host/ampAssets';
 import {
+  applyDrumPad,
   applyIr,
   applyNam,
   applyNamR,
@@ -12,6 +13,7 @@ import {
   sampleFilename,
   wavetableFilename,
 } from './nodeAssets';
+import { NUM_PADS, drumPadAsset } from '../../examples/drum/src/index';
 import type { PatchEditor } from './editor';
 
 const DB_NAME = 'crate.patcher.assets';
@@ -37,6 +39,8 @@ interface StoredNode {
   ir?: StoredIr;
   sample?: StoredIr;
   wavetable?: StoredIr;
+  /** The drum's sixteen, sparse and indexed by pad. Holes are meaningful. */
+  pads?: (StoredIr | undefined)[];
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -74,7 +78,14 @@ async function writeNode(nodeId: string, record: StoredNode): Promise<void> {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE, 'readwrite');
-    if (!record.nam && !record.namR && !record.ir && !record.sample && !record.wavetable)
+    const empty =
+      !record.nam &&
+      !record.namR &&
+      !record.ir &&
+      !record.sample &&
+      !record.wavetable &&
+      !record.pads?.some(Boolean);
+    if (empty)
       await run(tx.objectStore(STORE).delete(nodeId));
     else await run(tx.objectStore(STORE).put(record, nodeId));
   } finally {
@@ -134,6 +145,14 @@ export async function persistNodeAssets(nodeId: string, material: AudioMaterial,
     const asset = wavetableAsset(material);
     if (asset) record.wavetable = packIr(asset);
   }
+  if (kind === 'drum') {
+    const pads: (StoredIr | undefined)[] = [];
+    for (let pad = 0; pad < NUM_PADS; pad++) {
+      const asset = drumPadAsset(material, pad);
+      pads[pad] = asset ? packIr(asset) : undefined;
+    }
+    if (pads.some(Boolean)) record.pads = pads;
+  }
   await writeNode(nodeId, record);
 }
 
@@ -141,7 +160,20 @@ export async function clearStoredNodeAssets(nodeId: string): Promise<void> {
   await writeNode(nodeId, {});
 }
 
-export type AssetSlot = 'nam' | 'namR' | 'ir' | 'sample' | 'wavetable';
+/**
+ * `pad0` through `pad15` are the drum's, one per pad. A slot is a string
+ * rather than a union member because sixteen of them are an index, not
+ * sixteen separate concepts.
+ */
+export type AssetSlot = 'nam' | 'namR' | 'ir' | 'sample' | 'wavetable' | `pad${number}`;
+
+/** The pad number in a `pad7` slot, or null if the slot is not a pad. */
+export function padSlotIndex(slot: AssetSlot): number | null {
+  const match = /^pad(\d+)$/.exec(slot);
+  if (!match) return null;
+  const pad = Number(match[1]);
+  return pad >= 0 && pad < NUM_PADS ? pad : null;
+}
 
 export interface PortableAsset {
   nodeId: string;
@@ -242,6 +274,19 @@ export function collectPortableAssets(editor: PatchEditor): PortableAsset[] {
         });
       }
     }
+    if (kind === 'drum') {
+      for (let pad = 0; pad < NUM_PADS; pad++) {
+        const asset = drumPadAsset(material, pad);
+        if (!asset) continue;
+        assets.push({
+          nodeId,
+          slot: `pad${pad}`,
+          filename: asset.filename,
+          sampleRate: asset.sampleRate,
+          bytes: packAudioBytes(asset),
+        });
+      }
+    }
   }
   return assets;
 }
@@ -261,9 +306,11 @@ export async function installPortableAsset(editor: PatchEditor, asset: PortableA
     return;
   }
   const audio = unpackAudioBytes(asset.bytes, asset.filename);
+  const pad = padSlotIndex(asset.slot);
   if (asset.slot === 'ir' && kind === 'ir') applyIr(material, kind, audio);
   else if (asset.slot === 'sample' && kind === 'sampleplayer') applySample(material, audio);
   else if (asset.slot === 'wavetable' && kind === 'wavetable') applyWavetable(material, audio);
+  else if (pad !== null && kind === 'drum') applyDrumPad(material, pad, audio);
   else return;
   await persistNodeAssets(asset.nodeId, material, kind);
 }
@@ -271,12 +318,18 @@ export async function installPortableAsset(editor: PatchEditor, asset: PortableA
 export async function hydratePatchAssets(editor: PatchEditor): Promise<void> {
   for (const [nodeId, material] of editor.materials) {
     const kind = editor.kinds.get(nodeId);
-    if (kind !== 'amp' && kind !== 'ir' && kind !== 'sampleplayer' && kind !== 'wavetable') continue;
+    if (kind !== 'amp' && kind !== 'ir' && kind !== 'sampleplayer' && kind !== 'wavetable' && kind !== 'drum')
+      continue;
     const stored = await readNode(nodeId);
     if (kind === 'amp' && stored.nam) applyNam(material, stored.nam);
     if (kind === 'amp' && stored.namR) applyNamR(material, stored.namR);
     if (kind === 'ir' && stored.ir) applyIr(material, kind, unpackIr(stored.ir));
     if (kind === 'sampleplayer' && stored.sample) applySample(material, unpackIr(stored.sample));
     if (kind === 'wavetable' && stored.wavetable) applyWavetable(material, unpackIr(stored.wavetable));
+    if (kind === 'drum' && stored.pads) {
+      stored.pads.forEach((entry, pad) => {
+        if (entry) applyDrumPad(material, pad, unpackIr(entry));
+      });
+    }
   }
 }

@@ -13,6 +13,7 @@ import {
   parseCratePlugin,
   stringifyCratePlugin,
   setLiveIrPartitionSize,
+  type AudioMaterial,
   type CratePluginDocument,
 } from '../../src/index';
 import { applyImportedAssets, importProjectBytes, isZipBytes, looksLikeZip } from './importProject';
@@ -31,7 +32,10 @@ import {
   applyIr,
   applyNam,
   applyNamR,
+  applyDrumPad,
   applySample,
+  attachFactoryKitToBareDrums,
+  drumIsEmpty,
   applyWavetable,
   attachFactoryNamToBareAmps,
   clearIr,
@@ -45,6 +49,8 @@ import {
   namFilename,
   namFilenameR,
   parseNamText,
+  clearDrumPad,
+  drumPadFilenames,
   sampleFilename,
   wavetableFilename,
 } from './nodeAssets';
@@ -188,6 +194,10 @@ export function App() {
         if (firstVisit) {
           await attachFactoryNamToBareAmps(editor, (id, material) => persistNodeAssets(id, material, 'amp'));
         }
+        // Not gated on the first visit, unlike the amp. An amp with no
+        // profile is the analog path and a deliberate state; a drum with no
+        // samples is sixteen pads that cannot make a sound.
+        await seedBareDrums(editor, (id, material) => persistNodeAssets(id, material, 'drum'));
         applyVoiceHint(editor, analog);
         setKeys(analog.snapshot);
         setStatus('Patch restored. Press Play, then use the keybed.');
@@ -550,6 +560,7 @@ export function App() {
     if (factoryNam) {
       await attachFactoryNamToBareAmps(editor, (id, material) => persistShare(id, material, 'amp'));
     }
+    await seedBareDrums(editor, (id, material) => persistShare(id, material, 'drum'));
     applyVoiceHint(editor, analogRef.current);
     setKeys(analogRef.current.snapshot);
     saveStoredPatch(patch);
@@ -619,9 +630,71 @@ export function App() {
     setSheet((current) => (current === next ? 'none' : next));
   }
 
+  /**
+   * Loads the factory kit into any drum that has none.
+   *
+   * A failure here is reported and not thrown: a drum with no samples is a
+   * quiet node, and taking the whole patch load down with it would be worse
+   * than the silence.
+   */
+  async function seedBareDrums(
+    editor: NonNullable<typeof editorRef.current>,
+    persist: (id: string, next: AudioMaterial) => Promise<void>,
+  ) {
+    try {
+      const ctx = getSharedWebAudioContext() as AudioContext | null;
+      const seeded = await attachFactoryKitToBareDrums(editor, persist, ctx);
+      // The samples are part of the graph, so a voice built before they
+      // arrived is still holding empty pads.
+      for (const id of seeded) await audioRef.current.reloadVoice(id);
+    } catch (err) {
+      setStatus(`Drum kit did not load: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * A pad in the inspector plays the node the inspector is showing.
+   *
+   * Deliberately not `fingerDown`. That presses the analog keyboard, which is
+   * a patch-wide note source: it would light the keybed, drive every
+   * instrument the Keyboard node is cabled to, and never reach the drum whose
+   * pad was pressed.
+   *
+   * Playback still has to be running for a voice to exist, so a pad starts it
+   * the way a key does.
+   */
+  async function padDown(nodeId: string, note: number) {
+    const audio = audioRef.current;
+    audio.unlock();
+    if (!audio.playing) {
+      try {
+        await play();
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
+    if (!audio.triggerNode(nodeId, note, analogRef.current.velocity)) {
+      const material = editorRef.current?.materials.get(nodeId);
+      setStatus(
+        material && drumIsEmpty(material)
+          ? 'This drum has no samples yet.'
+          : 'Nothing to play: this node has no live voice. Cable its outlet to Master and press Play.',
+      );
+    }
+  }
+
   async function addFromPalette(kind: string, position?: { x: number; y: number }) {
     try {
       await editorRef.current?.addKind(kind, position);
+      // A drum arrives empty and silent. The plugin seeds a kit when a fresh
+      // instance is added; do the same here rather than leaving the node
+      // looking broken.
+      const editor = editorRef.current;
+      if (kind === 'drum' && editor) {
+        await seedBareDrums(editor, (id, next) => persistShare(id, next, 'drum'));
+        setTick((n) => n + 1);
+      }
       if (isMobile()) setSheet('inspector');
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
@@ -974,6 +1047,37 @@ export function App() {
                 }
               : undefined
           }
+          drumPadFilenames={material && selectedKind === 'drum' ? drumPadFilenames(material) : undefined}
+          onDrumPadFile={
+            material && selectedId && selectedKind === 'drum'
+              ? async (pad, file) => {
+                  const bytes = new Uint8Array(await file.arrayBuffer());
+                  const ctx = getSharedWebAudioContext() as AudioContext | null;
+                  applyDrumPad(material, pad, await decodeIrBytes(bytes, file.name, ctx));
+                  await persistShare(selectedId, material, 'drum');
+                  await audioRef.current.reloadVoice(selectedId);
+                  setTick((n) => n + 1);
+                }
+              : undefined
+          }
+          onDrumPadClear={
+            material && selectedId && selectedKind === 'drum'
+              ? (pad) => {
+                  clearDrumPad(material, pad);
+                  void persistShare(selectedId, material, 'drum');
+                  void audioRef.current.reloadVoice(selectedId);
+                  setTick((n) => n + 1);
+                }
+              : undefined
+          }
+          onNotePress={
+            selectedId
+              ? (note) => {
+                  void padDown(selectedId, note);
+                }
+              : undefined
+          }
+          onNoteRelease={selectedId ? (note) => audioRef.current.releaseNode(selectedId, note) : undefined}
           onSampleFile={
             material && selectedId && selectedKind === 'sampleplayer'
               ? async (file) => {
@@ -981,6 +1085,7 @@ export function App() {
                   const ctx = getSharedWebAudioContext() as AudioContext | null;
                   applySample(material, await decodeIrBytes(bytes, file.name, ctx));
                   await persistShare(selectedId, material, 'sampleplayer');
+                  await audioRef.current.reloadVoice(selectedId);
                   setTick((n) => n + 1);
                 }
               : undefined
@@ -990,6 +1095,7 @@ export function App() {
               ? () => {
                   clearSample(material);
                   void persistShare(selectedId, material, 'sampleplayer');
+                  void audioRef.current.reloadVoice(selectedId);
                   setTick((n) => n + 1);
                 }
               : undefined
@@ -1001,6 +1107,7 @@ export function App() {
                   const ctx = getSharedWebAudioContext() as AudioContext | null;
                   applyWavetable(material, await decodeIrBytes(bytes, file.name, ctx));
                   await persistShare(selectedId, material, 'wavetable');
+                  await audioRef.current.reloadVoice(selectedId);
                   setTick((n) => n + 1);
                 }
               : undefined
@@ -1010,6 +1117,7 @@ export function App() {
               ? () => {
                   clearWavetable(material);
                   void persistShare(selectedId, material, 'wavetable');
+                  void audioRef.current.reloadVoice(selectedId);
                   setTick((n) => n + 1);
                 }
               : undefined

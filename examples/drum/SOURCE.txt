@@ -1,0 +1,18 @@
+Copied 2026-09-11 from example/ios/homecrate drum/ (the shipping AUv3)
+  DSP/*                                  ->  dsp/
+  Parameters/homecrate_drumParameterAddresses.swift  ->  params/
+
+Unlike amp, grain, and synth this is not copied from a VST3 port, because
+there is no VST3 drum. The source is the AUv3 kernel itself, so dsp/ still
+carries AudioToolbox and vDSP: homecrate_drumDSPKernel.mm includes
+AudioToolbox for AUParameterAddress, and IRConvolver.cpp is the vDSP
+overlap-save convolver. Nothing here is compiled.
+
+dsp/ is the specification, not a build input. src/reference/ is a
+line-by-line TypeScript port of it, and the parity tests hold the ASL graph
+to that port. When the AUv3 kernel changes, re-copy dsp/ and the tests will
+say what moved.
+
+Not copied: the Swift voice (playhead, SOLA stretch, sequencer, sample
+record), which is sampler plumbing rather than the 026S character chain.
+README.md lists what the ASL material reproduces and what it does not.

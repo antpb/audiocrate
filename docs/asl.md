@@ -264,6 +264,35 @@ the graph happened to be stereo. If you want the sum, tap it:
 tap.meter(audio.left().add(audio.right()).mul(0.5))
 ```
 
+## What runs per sample, and what does not
+
+A graph is fused into one unit that runs per sample. Not all of it has to.
+
+A subtree whose leaves are parameters and constants, built only from
+operations that are pure functions of their inputs, has the same value for
+every sample in a block: a curve mapping, a mode compare, a gain conversion, a
+filter coefficient computed from a knob. The evaluator computes those once a
+block and the rest per sample. Parameters move between blocks and nowhere
+else, which is the whole of the invalidation.
+
+Nothing about the output changes. What changes is that a plugin-sized
+parameter tree stops costing what it looks like it costs: in the drum example,
+1579 of 2014 nodes are that kind of arithmetic.
+
+```ts
+compileVoice(material.graph).blockConstantNodes;   // how many were hoisted
+```
+
+Only pure kinds qualify, and only with every input already constant. A filter,
+an oscillator or a sample-and-hold advances state per sample and stays on the
+sample path however constant its inputs look. So does `audio.lane()`, which is
+constant within one channel pass and different in the next, and so does
+anything reading the transport, a port, or a tap.
+
+This is a property of crate's evaluator, not of the language. A second
+implementation is free to evaluate every node per sample and still conform:
+the values are identical either way.
+
 ## Two ways to chain
 
 **Inside an AudioMaterial**, operations fuse into one unit. Cheaper.

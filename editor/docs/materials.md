@@ -1355,6 +1355,14 @@ Neural amp (NAM) plus analog / EQ / reverb / delay. Cabinet lives on an IR node 
 | `delayTime` | 20..2000 ms | 350 |
 | `inputPad` | 0..1 bool | 0 |
 
+### Drum (`drum`)
+
+Sixteen one-shot pads on C2 to D#3, each with its own bit crusher and low-pass, into a shared filter and character stage. A pad plays to its end and ignores the note-off. Pure ASL, so no WASM. A new one arrives with the factory kit loaded.
+
+- Jacks: in none / out audio
+
+No parameters.
+
 ### Grain (`grain`)
 
 Granular instrument kernel. Needs WASM. Files are not auto-loaded.

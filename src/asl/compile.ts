@@ -166,7 +166,51 @@ interface PlanNode {
   /** `range` bounds, read off params once instead of destructured per sample. */
   readonly rangeMin: number;
   readonly rangeMax: number;
+  /**
+   * 1 when this node's value cannot change within a block, so it is computed
+   * once per block instead of once per sample per channel. See
+   * `BLOCK_CONSTANT_KINDS`.
+   */
+  readonly hoist: number;
 }
+
+/**
+ * Kinds whose output is a pure function of their inputs.
+ *
+ * No stored state, no clock, no channel, no live audio, no randomness, and
+ * nothing read from outside the graph. A node of one of these kinds whose
+ * inputs are all themselves block constant is block constant, and a subtree
+ * of them rooted in parameters is a coefficient calculation: the same answer
+ * for every sample in the block.
+ *
+ * Everything absent from this set is absent on purpose. A filter, an
+ * oscillator and a sample-and-hold advance state per sample and would freeze
+ * if they were hoisted. `lane` is constant within one channel pass and
+ * different in the next. A tap records what went by and has to see every
+ * sample. `transport` is a function of where the song is, which moves inside
+ * a block.
+ *
+ * `bitcrush` is in the set and keeps a small cache; that cache is an
+ * optimisation of a pure function, not state the output depends on.
+ */
+const BLOCK_CONSTANT_KINDS: ReadonlySet<ASLNode['kind']> = new Set([
+  'const',
+  'param',
+  'mul',
+  'add',
+  'mix',
+  'range',
+  'toFrequency',
+  'select',
+  'compare',
+  'logic',
+  'clip',
+  'rectify',
+  'waveshape',
+  'quantize',
+  'panLaw',
+  'bitcrush',
+]);
 
 /**
  * Every input name any builder wires, on every plan node, whether that kind
@@ -395,6 +439,8 @@ interface Plan {
    * stops two channels fed the same samples from producing the same output.
    */
   readonly usesRandom: boolean;
+  /** How many nodes are evaluated once per block rather than once per sample. */
+  readonly blockConstantNodes: number;
 }
 
 /**
@@ -410,6 +456,7 @@ function buildPlan(root: ASLNode): Plan {
   let usesLane = false;
   let readsScalarInput = false;
   let usesRandom = false;
+  let blockConstantNodes = 0;
 
   function visit(node: ASLNode): PlanNode {
     const existing = bySourceId.get(node.id);
@@ -439,6 +486,7 @@ function buildPlan(root: ASLNode): Plan {
       slot,
       rangeMin: node.kind === 'range' ? (node.params.min as number) : 0,
       rangeMax: node.kind === 'range' ? (node.params.max as number) : 0,
+      hoist: 0,
     };
     // Registered before the children are visited, so a graph that somehow
     // refers back to itself terminates instead of recursing forever.
@@ -458,6 +506,31 @@ function buildPlan(root: ASLNode): Plan {
       for (const child of list) planned.push(visit(child));
       (plan as { list: readonly PlanNode[] | null }).list = planned;
     }
+    // After the children, because a node is block constant only if all of
+    // them are. The scalar `input` param is the exception among params:
+    // `renderBlock` rewrites it per sample, so a subtree reading it is not
+    // constant for the block even though every other param is.
+    if (BLOCK_CONSTANT_KINDS.has(node.kind) && !(node.kind === 'param' && name === MAIN_PORT)) {
+      let constant = true;
+      for (const key of Object.keys(node.inputs)) {
+        if (inputs[key]!.hoist === 0) {
+          constant = false;
+          break;
+        }
+      }
+      if (constant && plan.list) {
+        for (const child of plan.list) {
+          if (child.hoist === 0) {
+            constant = false;
+            break;
+          }
+        }
+      }
+      if (constant) {
+        (plan as { hoist: number }).hoist = 1;
+        blockConstantNodes += 1;
+      }
+    }
     return plan;
   }
 
@@ -470,6 +543,7 @@ function buildPlan(root: ASLNode): Plan {
     usesLane,
     readsScalarInput,
     usesRandom,
+    blockConstantNodes,
   };
 }
 
@@ -499,6 +573,14 @@ export interface VoiceRuntimeState {
   values: Float64Array;
   stamps: Float64Array;
   gen: number;
+  /**
+   * The generation a block-constant node's cached value belongs to.
+   *
+   * A second counter rather than a second array. It runs negative while
+   * `gen` runs positive, so one stamp slot serves both and a value cached
+   * for the block can never be mistaken for one cached for the sample.
+   */
+  blockGen: number;
   /**
    * Per-node persistent state (oscillator phase, envelope stage, filter delay
    * line) for the left channel, never cleared. Channels past the first get
@@ -575,6 +657,17 @@ export interface CompiledVoice {
   readonly ports: readonly string[];
   /** Tap ids this graph records under (`asl/analysis.ts`), sorted. Empty for a graph with no taps. */
   readonly taps: readonly string[];
+  /**
+   * How many of this graph's nodes are computed once per block instead of
+   * once per sample per channel.
+   *
+   * A coefficient subtree rooted in parameters has the same value for every
+   * sample in a block, and most of a plugin-sized graph is exactly that:
+   * curve mappings, mode compares, gain conversions. Reported because it is
+   * the difference between a graph that plays and one that does not, and
+   * because it is otherwise invisible.
+   */
+  readonly blockConstantNodes: number;
   /**
    * Reads every tap and resets the meters, so each frame covers exactly the
    * interval since the previous call. Returns null when the graph has no
@@ -900,7 +993,11 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
    */
   function evalNode(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const slot = node.i;
-    if (state.stamps[slot] === state.gen) return state.values[slot]!;
+    // Two generations, one cache. A coefficient subtree rooted in parameters
+    // is stamped with the block's generation and computed once; everything
+    // else is stamped with the sample's.
+    const stamp = node.hoist === 1 ? state.blockGen : state.gen;
+    if (state.stamps[slot] === stamp) return state.values[slot]!;
 
     let result: number;
     switch (node.kind) {
@@ -969,7 +1066,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     }
 
     state.values[slot] = result;
-    state.stamps[slot] = state.gen;
+    state.stamps[slot] = stamp;
     return result;
   }
 
@@ -2866,9 +2963,18 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
   function evalPanLaw(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const input = evalNode(node.inputs.input!, state, sampleRate);
     const pan = Math.min(1, Math.max(-1, evalNode(node.inputs.pan!, state, sampleRate)));
-    const angle = ((pan + 1) * Math.PI) / 4;
-    const gain = node.m === 1 ? Math.sin(angle) : Math.cos(angle);
-    return input * gain;
+    // The gain is a function of the position alone, and the position is a
+    // knob. Cached the way every filter here caches its coefficients: a pan
+    // that is not moving was otherwise a sine and a cosine per sample, and a
+    // kit with a pan on each of sixteen pads paid that thirty-two times over
+    // per sample per channel.
+    const mem = getMemory<{ k: number; gain: number }>(state, node.i, () => ({ k: NaN, gain: 0 }));
+    if (mem.k !== pan) {
+      const angle = ((pan + 1) * Math.PI) / 4;
+      mem.gain = node.m === 1 ? Math.sin(angle) : Math.cos(angle);
+      mem.k = pan;
+    }
+    return input * mem.gain;
   }
 
   return {
@@ -2877,6 +2983,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     stereo,
     ports,
     taps,
+    blockConstantNodes: plan.blockConstantNodes,
 
     drainAnalysis(state): AnalysisFrame | null {
       if (taps.length === 0) return null;
@@ -2918,6 +3025,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         // it has been computed once.
         stamps: new Float64Array(slotCount),
         gen: 1,
+        blockGen: -1,
         memory: new Array<unknown>(slotCount).fill(undefined),
         params: {},
         gate: false,
@@ -2937,11 +3045,17 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
 
     renderSample(state, sampleRate): number {
       state.gen += 1;
+      // One sample is its own block here: a caller feeding values one at a
+      // time may change a parameter between any two of them.
+      state.blockGen -= 1;
       return evalNode(root, state, sampleRate);
     },
 
     renderBlock(state, sampleRate, out, input, extras): boolean {
       const frames = out.length;
+      // Invalidates every block-constant value. Parameters move between
+      // blocks and nowhere else, so this is the whole invalidation.
+      state.blockGen -= 1;
       if (extras?.transport) state.transport = extras.transport;
 
       // A source kernel replaces the graph outright. Nothing downstream of it

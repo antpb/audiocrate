@@ -26,6 +26,7 @@ import { OSC_WAVE_HINTS, shapeLabelForWave } from './oscillatorWaves';
 import { NoisePicker } from './NoisePicker';
 import { NOISE_COLOR_HINTS } from './noiseColors';
 import { ParametricEqPanel } from './ParametricEqPanel';
+import { DrumPadPanel } from './DrumPadPanel';
 import { SpatialLookPanel } from './SpatialLookPanel';
 import { ControlGroups } from './ControlGroups';
 import { WAVESHAPE_HINTS } from './waveshapeCurves';
@@ -57,6 +58,12 @@ interface InspectorPanelProps {
   onSampleClear?: () => void;
   onWavetableFile?: (file: File) => Promise<void>;
   onWavetableClear?: () => void;
+  /** Sixteen slots rather than one, indexed by pad. */
+  drumPadFilenames?: readonly (string | null)[];
+  onDrumPadFile?: (pad: number, file: File) => Promise<void>;
+  onDrumPadClear?: (pad: number) => void;
+  onNotePress?: (note: number) => void;
+  onNoteRelease?: (note: number) => void;
   nodeData?: Record<string, unknown>;
   onNodeData?: (patch: Record<string, unknown>) => void;
 }
@@ -88,6 +95,11 @@ export function InspectorPanel({
   onSampleClear,
   onWavetableFile,
   onWavetableClear,
+  drumPadFilenames,
+  onDrumPadFile,
+  onDrumPadClear,
+  onNotePress,
+  onNoteRelease,
   nodeData,
   onNodeData,
 }: InspectorPanelProps) {
@@ -355,6 +367,17 @@ export function InspectorPanel({
       {kind === 'ParametricEQ' ? (
         <ParametricEqPanel controls={model.controls} onParam={onParam} />
       ) : null}
+      {kind === 'drum' ? (
+        <DrumPadPanel
+          controls={model.controls}
+          onParam={onParam}
+          padFilenames={drumPadFilenames ?? []}
+          {...(onDrumPadFile ? { onPadFile: onDrumPadFile } : {})}
+          {...(onDrumPadClear ? { onPadClear: onDrumPadClear } : {})}
+          {...(onNotePress ? { onPadTrigger: onNotePress } : {})}
+          {...(onNoteRelease ? { onPadRelease: onNoteRelease } : {})}
+        />
+      ) : null}
       {kind === 'spatialmaster' && material ? (
         <SpatialLookPanel
           yaw={material.getParam('yaw')}
@@ -483,7 +506,9 @@ export function InspectorPanel({
       kind === 'SynthVoice' ||
       kind === 'wavetable' ||
       kind === 'waveshape' ||
-      kind === 'breakpoints'
+      kind === 'breakpoints' ||
+      // 246 parameters, all of them already on the pad panel above.
+      kind === 'drum'
         ? null
         : model.controls.map((control) => {
         if (kind === 'noise' && control.name === 'color' && control.options) {

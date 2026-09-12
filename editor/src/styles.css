@@ -1340,3 +1340,71 @@ button:disabled {
 }
 .spatial-look-actions { display: flex; gap: 6px; }
 .spatial-look-actions button { flex: 1; }
+
+/* Drum: a pad grid, laid out bottom row first the way hands find it. */
+.drum-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.drum-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drum-grid-row {
+  display: flex;
+  gap: 4px;
+}
+
+.drum-pad {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid #2e2e2e;
+  background: #1b1b1b;
+  color: #6d6d6d;
+  font-size: 9px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.drum-pad.loaded {
+  background: #242424;
+  color: #b8b8b8;
+}
+
+.drum-pad.on {
+  border-color: #6f6f6f;
+}
+
+.drum-pad:active {
+  background: #3a3a3a;
+}
+
+.drum-pad-note {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.drum-pad-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a8a8a;
+}
+
+.drum-panel .eq-band h3 em {
+  float: right;
+  font-style: normal;
+  color: #6d6d6d;
+}

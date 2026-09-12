@@ -1,5 +1,5 @@
 /**
- * Registers amp, grain, synth, and space-reverb.
+ * Registers amp, drum, grain, synth, and space-reverb.
  *
  * Two halves that have to agree:
  *
@@ -12,17 +12,19 @@
  */
 import { audioMaterialRegistry, registerCoreMaterials, type AudioMaterialRegistry } from '../../../src/index';
 import { ampPlugin } from '../../amp/src/index';
+import { drumPlugin } from '../../drum/src/index';
 import { grainPlugin } from '../../grain/src/index';
 import { synthPlugin } from '../../synth/src/index';
 import { spaceReverbPlugin } from '../../space-reverb/src/index';
 
-export { ampPlugin, grainPlugin, synthPlugin, spaceReverbPlugin };
+export { ampPlugin, drumPlugin, grainPlugin, synthPlugin, spaceReverbPlugin };
 export { AMP_KERNEL_SLOT } from '../../amp/src/kernelSlot';
 export { GRAIN_KERNEL_SLOT } from '../../grain/src/kernelSlot';
 export { SYNTH_KERNEL_SLOT } from '../../synth/src/kernelSlot';
 export { SPACE_REVERB_KERNEL_SLOT } from '../../space-reverb/src/kernelSlot';
 
-export const homecrateMaterials = [ampPlugin, grainPlugin, synthPlugin, spaceReverbPlugin] as const;
+/** Drum has no kernel slot: it is pure ASL, so the worklet needs nothing added for it. */
+export const homecrateMaterials = [ampPlugin, drumPlugin, grainPlugin, synthPlugin, spaceReverbPlugin] as const;
 
 /** Registers the set into a registry (the shared one by default). Idempotent. */
 export function registerHomecrateMaterials(registry: AudioMaterialRegistry = audioMaterialRegistry): AudioMaterialRegistry {
