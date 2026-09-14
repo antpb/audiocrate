@@ -2,12 +2,17 @@
  * One AudioContext for the editor.
  *
  * iOS Safari will not keep two contexts alive. Play used to
- * `new AudioContext()` a second time. The crate graph ran for a buffer or
- * two (a synth click), then iOS killed the session.
+ * `new AudioContext()` a second time and iOS killed the session.
  *
- * iOS also ignores Web Audio `destination` when the Ring/Silent switch is
- * on Silent. An HTMLAudioElement playing the same graph via a
- * MediaStreamDestination uses the media-playback route and stays audible.
+ * iOS Silent switch mutes `destination`. The mix has to feed an
+ * HTMLAudioElement through MediaStreamDestination or iOS is silent.
+ * That stream is 44.1 kHz on Safari, so the context opens at 44.1 kHz
+ * unless the user asked for something else. If the opened rate still
+ * differs, the element playbackRate is the ratio, not a clip stretch.
+ *
+ * Desktop never uses the HTML tap. Destination stays connected on
+ * every platform. Disconnecting it when HTML called play() is what
+ * left meters running and speakers dead.
  */
 
 export interface WebAudioEngineOptions {
@@ -19,20 +24,9 @@ let engineOptions: WebAudioEngineOptions = {};
 let shared: AudioContext | null = null;
 let htmlOut: HTMLAudioElement | null = null;
 let htmlSink: MediaStreamAudioDestinationNode | null = null;
-/**
- * Whether the audio element is pointed at the sink that currently exists.
- * The element outlives a context; its stream does not, so replacing the
- * context has to re-point it or iOS plays a stream nobody is feeding.
- */
 let htmlSinkAttached = false;
 let keepAlive: { osc: OscillatorNode; gain: GainNode } | null = null;
 let wantRunning = false;
-/**
- * The context the watcher is currently installed on, not a boolean. Closing
- * a failed context and building a new one has to install a watcher on the
- * new one; a one-shot flag left the replacement unwatched, which is silent
- * until the day audio needs recovering and does not.
- */
 let watched: AudioContext | null = null;
 
 export function prefersHtmlAudioSink(
@@ -49,33 +43,42 @@ export function setWebAudioEngineOptions(options: WebAudioEngineOptions): void {
   engineOptions = options;
 }
 
-/**
- * Chrome treats a numeric latencyHint as seconds of output buffer. Asking
- * for 0.002 to 0.010 on a loaded graph makes Core Audio time-stretch when
- * the callback slips, which sounds like the mix dragging and then catching
- * up. Categories keep the device at a stable rate.
- */
 export function latencyHintForBufferMs(
   bufferMs: number | undefined,
-): AudioContextOptions['latencyHint'] | undefined {
-  if (bufferMs == null || !(bufferMs > 0)) return undefined;
-  if (bufferMs <= 3) return 'interactive';
-  if (bufferMs <= 10) return 'balanced';
+): AudioContextOptions['latencyHint'] {
+  if (bufferMs != null && bufferMs > 0 && bufferMs <= 3) return 'interactive';
   return 'playback';
 }
 
+export function audioContextOptionsForDevice(
+  options: WebAudioEngineOptions,
+  ios: boolean,
+): AudioContextOptions {
+  const opts: AudioContextOptions = {
+    latencyHint: ios ? 'playback' : latencyHintForBufferMs(options.bufferMs),
+  };
+  if (options.sampleRate) opts.sampleRate = options.sampleRate;
+  else if (ios) opts.sampleRate = 44100;
+  return opts;
+}
+
+export function htmlPlaybackRateForStream(contextRate: number, streamRate: number | undefined): number {
+  if (!(contextRate > 0) || !(streamRate && streamRate > 0)) return 1;
+  if (Math.abs(contextRate - streamRate) < 1) return 1;
+  return contextRate / streamRate;
+}
+
 function createAudioContext(): AudioContext {
-  const opts: AudioContextOptions = {};
-  if (engineOptions.sampleRate) opts.sampleRate = engineOptions.sampleRate;
-  const hint = latencyHintForBufferMs(engineOptions.bufferMs);
-  if (hint != null) opts.latencyHint = hint;
+  const ios = prefersHtmlAudioSink();
+  const opts = audioContextOptionsForDevice(engineOptions, ios);
   try {
     return new window.AudioContext(opts);
   } catch {
-    const fallback: AudioContextOptions = {};
-    if (engineOptions.sampleRate) fallback.sampleRate = engineOptions.sampleRate;
-    if (hint != null) fallback.latencyHint = hint;
-    return new window.AudioContext(fallback);
+    try {
+      return new window.AudioContext({ latencyHint: 'playback', sampleRate: ios ? 44100 : undefined });
+    } catch {
+      return new window.AudioContext();
+    }
   }
 }
 
@@ -84,16 +87,17 @@ export function getSharedWebAudioContext(): AudioContext {
   shared = createAudioContext();
   htmlSink = null;
   keepAlive = null;
+  htmlSinkAttached = false;
   resetResumeBackoff();
   installWatch(shared);
   console.info(
     `[editor] audio context created state=${shared.state} sampleRate=${shared.sampleRate}` +
+      ` latencyHint=${audioContextOptionsForDevice(engineOptions, prefersHtmlAudioSink()).latencyHint}` +
       (engineOptions.bufferMs != null ? ` bufferMs=${engineOptions.bufferMs}` : ''),
   );
   return shared;
 }
 
-/** Closes the current context so the next get uses the latest engine options. */
 export function resetSharedWebAudioContext(): AudioContext {
   if (shared && shared.state !== 'closed') releaseSharedContext(shared);
   return getSharedWebAudioContext();
@@ -119,26 +123,9 @@ export function readSharedWebAudio(): {
 
 export function setWebAudioWantRunning(on: boolean): void {
   wantRunning = on;
-  // Asking for audio again is a fresh intent, from a person who may well
-  // have just fixed whatever was wrong with their device.
   if (on) resetResumeBackoff();
 }
 
-/**
- * Resuming a context that cannot start is not free, and it is not local.
- *
- * When the output device fails, the browser suspends the context and fires
- * `statechange`. Answering that with `resume()` fires another `statechange`
- * when it fails, which was answered with another `resume()`, and so on with
- * nothing between the two. Each turn of that is a renderer-to-browser round
- * trip asking to open an audio stream, so a dead audio device stopped being
- * "no sound" and became tens of thousands of inter-process messages a second
- * and a machine too busy to use.
- *
- * So retries back off and then stop. A context that actually reaches
- * `running` clears the count, which is what keeps an ordinary iOS
- * suspend-on-background and resume-on-foreground instant.
- */
 const RESUME_ATTEMPT_LIMIT = 6;
 let resumeAttempts = 0;
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -163,16 +150,9 @@ function scheduleResume(ctx: AudioContext): void {
         `${RESUME_ATTEMPT_LIMIT} attempts; the output device is refusing it. ` +
         'Closing it and not retrying. Fix the device, then press play again.',
     );
-    // Closing is the part that actually costs the browser nothing more.
-    // Backing off only stops *our* resume calls; the browser keeps trying to
-    // open an output stream for as long as a context exists that wants one,
-    // and on a machine whose audio device has failed that retry is a storm
-    // of inter-process messages with no JavaScript in it at all. Releasing
-    // the context ends it. The next gesture builds a fresh one.
     releaseSharedContext(ctx);
     return;
   }
-  // 50, 100, 200, 400, 800, 1600 ms.
   const delay = 50 * 2 ** resumeAttempts;
   resumeAttempts += 1;
   resumeTimer = setTimeout(() => {
@@ -184,7 +164,6 @@ function scheduleResume(ctx: AudioContext): void {
   }, delay);
 }
 
-/** Drops a context that cannot run, so nothing downstream holds the device. */
 function releaseSharedContext(ctx: AudioContext): void {
   if (watched === ctx) watched = null;
   keepAlive = null;
@@ -211,8 +190,6 @@ function installWatch(ctx: AudioContext): void {
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    // Coming back to the tab is a fresh reason to try, so it clears a
-    // give-up from a device that may since have come back.
     resetResumeBackoff();
     scheduleResume(ctx);
   });
@@ -246,8 +223,17 @@ function startKeepAlive(ctx: AudioContext): void {
   keepAlive = { osc, gain };
 }
 
+function streamSampleRate(stream: MediaStream): number | undefined {
+  const rate = stream.getAudioTracks()[0]?.getSettings()?.sampleRate;
+  return typeof rate === 'number' && rate > 0 ? rate : undefined;
+}
+
 function armHtmlSink(ctx: AudioContext): MediaStreamAudioDestinationNode | null {
   if (!prefersHtmlAudioSink()) return htmlSink;
+  if (htmlSink && htmlSink.context !== ctx) {
+    htmlSink = null;
+    htmlSinkAttached = false;
+  }
   if (!htmlSink) {
     htmlSink = ctx.createMediaStreamDestination();
     htmlSinkAttached = false;
@@ -269,6 +255,7 @@ function armHtmlSink(ctx: AudioContext): MediaStreamAudioDestinationNode | null 
     htmlOut.srcObject = htmlSink.stream;
     htmlSinkAttached = true;
   }
+  htmlOut.playbackRate = htmlPlaybackRateForStream(ctx.sampleRate, streamSampleRate(htmlSink.stream));
   void htmlOut.play().catch(() => {
     /* need another gesture */
   });
@@ -282,10 +269,6 @@ function armHtmlSink(ctx: AudioContext): MediaStreamAudioDestinationNode | null 
   return htmlSink;
 }
 
-/**
- * Must run in the same turn as a tap. After the first `await`, iOS no
- * longer treats resume() as a user gesture.
- */
 export function unlockWebAudio(): AudioContext {
   const ctx = getSharedWebAudioContext();
   if (ctx.state !== 'running') {
@@ -301,25 +284,10 @@ export function getHtmlAudioSink(): MediaStreamAudioDestinationNode | null {
   return htmlSink;
 }
 
-function htmlSinkIsPlaying(): boolean {
-  return Boolean(htmlOut && !htmlOut.paused && htmlOut.readyState >= 2);
+export function shouldConnectWebAudioDestination(_preferHtml = false, _htmlPlaying = false): boolean {
+  return true;
 }
 
-/**
- * iOS needs the HTML MediaStream tap when the Ring switch is Silent.
- * Once that element is actually playing, Web Audio `destination` is the
- * same signal a second time. Desktop never uses the HTML tap.
- */
-export function shouldConnectWebAudioDestination(preferHtml: boolean, htmlPlaying: boolean): boolean {
-  return !preferHtml || !htmlPlaying;
-}
-
-/**
- * Wire the mix so it cannot go nowhere, and so it is not heard twice.
- *
- * Desktop: `destination` only. iOS: HTML sink plus `destination` until the
- * element is playing, then drop `destination`.
- */
 export function attachNodeToHtmlSink(
   node: { connect(dest: AudioNode): void; disconnect(dest?: AudioNode): void } | null | undefined,
   destination?: AudioNode,
@@ -331,22 +299,11 @@ export function attachNodeToHtmlSink(
     } catch {
       /* already connected */
     }
-    void htmlOut?.play().then(
-      () => {
-        if (destination && prefersHtmlAudioSink()) {
-          try {
-            node.disconnect(destination);
-          } catch {
-            /* not connected */
-          }
-        }
-      },
-      () => {
-        /* need another gesture */
-      },
-    );
+    void htmlOut?.play().catch(() => {
+      /* need another gesture */
+    });
   }
-  if (destination && shouldConnectWebAudioDestination(prefersHtmlAudioSink(), htmlSinkIsPlaying())) {
+  if (destination) {
     try {
       node.connect(destination);
     } catch {
@@ -356,7 +313,6 @@ export function attachNodeToHtmlSink(
 }
 
 export function describeAudioOutput(): string {
-  const sink = htmlSink ? (htmlSinkIsPlaying() ? 'html-playing' : 'html-paused') : 'none';
-  return `htmlSink=${sink} preferHtml=${prefersHtmlAudioSink()}`;
+  const sink = htmlSink ? (htmlOut && !htmlOut.paused ? 'html-playing' : 'html-paused') : 'none';
+  return `mix=destination+${sink} preferIos=${prefersHtmlAudioSink()}`;
 }
-

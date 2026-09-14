@@ -21,6 +21,7 @@
  *    `materials/resonantStone.ts`.
  */
 import { createCrateAudio, rendererFor, type CrateAudio, type ThreeListenerLike } from './CrateAudio';
+import { describeHostedAudio, prefersHtmlAudioSink, unlockHostedAudio } from './hostedAudio';
 import { resonantStoneMaterial } from './materials/resonantStone';
 
 /** Loose shapes for the two globals the engine provides. */
@@ -91,11 +92,38 @@ if (typeof window !== 'undefined') {
   //
   // `rendererFor` is keyed by AudioContext, so a second plugin going through
   // this object shares the one worklet module load as well as the code.
-  (window as never as { CrateXR?: unknown }).CrateXR ??= {
+  const crateXR = ((window as never as { CrateXR?: Record<string, unknown> }).CrateXR ??= {});
+  Object.assign(crateXR, {
     createCrateAudio,
     resonantStoneMaterial,
+    unlockHostedAudio,
+    describeHostedAudio,
+    prefersHtmlAudioSink,
     version: 1,
+  });
+
+  // Unlock has to be registered before any await, including `init()`.
+  // Load World is the first tap. The engine only `resume()`s, and it
+  // creates the AudioListener *after* that tap's awaits, so iOS treats
+  // the context as never unlocked. Mint the listener here, in the
+  // gesture turn; Player.jsx reuses `window.__xrAudioListener`.
+  const onGestureUnlock = () => {
+    const w = window as never as {
+      XRPublisher?: XRPublisherLike;
+      THREE?: { AudioListener?: new () => ThreeListenerLike };
+      __xrAudioListener?: ThreeListenerLike | null;
+    };
+    let hosted = w.XRPublisher?.getAudioListener?.() ?? w.__xrAudioListener ?? null;
+    if (!hosted && w.THREE?.AudioListener) {
+      hosted = new w.THREE.AudioListener();
+      w.__xrAudioListener = hosted;
+    }
+    if (!hosted?.context) return;
+    unlockHostedAudio(hosted.context, hosted.gain);
   };
+  for (const event of ['pointerdown', 'touchstart', 'keydown'] as const) {
+    window.addEventListener(event, onGestureUnlock, { capture: true, passive: true });
+  }
 
   void (() => {
     let registered = false;
@@ -145,7 +173,10 @@ if (typeof window !== 'undefined') {
       let listener: ThreeListenerLike | null = null;
       const acquireListener = () => {
         if (listener) return true;
-        listener = XRPublisher.getAudioListener();
+        listener =
+          XRPublisher.getAudioListener() ??
+          (window as never as { __xrAudioListener?: ThreeListenerLike | null }).__xrAudioListener ??
+          null;
         if (listener) console.log(`[${PLUGIN_ID}] audio listener acquired`);
         return !!listener;
       };
@@ -153,12 +184,6 @@ if (typeof window !== 'undefined') {
         const iv = setInterval(() => {
           if (acquireListener()) clearInterval(iv);
         }, 500);
-        // A phone will not have an AudioContext at all until the player
-        // touches the screen, so the first gesture is the likeliest moment
-        // for one to exist. Cheap insurance next to a 500 ms poll.
-        for (const event of ['pointerdown', 'touchend', 'keydown']) {
-          window.addEventListener(event, () => acquireListener(), { passive: true });
-        }
       }
 
       // Shared at module scope, per the engine's rules: `create()` runs once
@@ -448,6 +473,7 @@ if (typeof window !== 'undefined') {
           stonesMounted: stones.length,
           listener: !!listener,
           audioContextState: listener?.context.state ?? 'none',
+          hostedAudio: describeHostedAudio(),
           voiceBudget: MAX_VOICES,
           lastVoiceError,
           workletUrl: listener

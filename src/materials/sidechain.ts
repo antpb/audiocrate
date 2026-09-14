@@ -26,7 +26,7 @@
  */
 import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
-import { compare, compressor, envFollow, mix, panLaw, select, uniform } from '../asl/builders';
+import { compare, compressor, envFollow, logic, mix, panLaw, pulse, select, uniform } from '../asl/builders';
 
 /**
  * Compression keyed off another track. Identical to `compressor` except for
@@ -93,11 +93,13 @@ export function createSidechainGateMaterial(): AudioMaterial {
       threshold: param.range(0, 1, { default: 0.1 }),
       attack: param.range(0.0005, 0.5, { default: 0.002, unit: 's', curve: 'exp' }),
       release: param.range(0.005, 2, { default: 0.1, unit: 's', curve: 'exp' }),
+      hold: param.range(0, 0.5, { default: 0, unit: 's' }),
     },
-    automatable: ['threshold', 'attack', 'release'],
+    automatable: ['threshold', 'attack', 'release', 'hold'],
     graph: ({ input, audio, params }) => {
       const key = envFollow(audio.sidechain(), { attack: params.attack, release: params.release });
-      return input.mul(compare(key, { threshold: params.threshold, mode: 'gt' }));
+      const open = compare(key, { threshold: params.threshold, mode: 'gt' });
+      return input.mul(logic.or(open, pulse(open, { widthSec: params.hold })));
     },
   });
 }

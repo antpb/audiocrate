@@ -77,13 +77,35 @@ export const oscillatorMaterial = new AudioMaterial({
     octave: param.stepped(-2, 2, { default: 0, step: 1, label: 'Octave' }),
     detune: param.range(-100, 100, { default: 0, unit: 'ct', label: 'Detune' }),
     gain: param.range(0, 1, { default: 0.4 }),
+    // The amplitude envelope was four numbers written into the graph, so
+    // every note this AudioMaterial ever played had the same shape and there
+    // was no control anywhere that could change it. SynthVoice and Wavetable
+    // both expose theirs; this was the one voice that did not. The defaults
+    // are the numbers that were baked in, so an oscillator that already
+    // exists sounds the same until somebody moves a fader.
+    attack: param.range(0.001, 2, { default: 0.005, unit: 's', curve: 'exp' }),
+    decay: param.range(0.001, 2, { default: 0.08, unit: 's', curve: 'exp' }),
+    sustain: param.range(0, 1, { default: 0.7 }),
+    release: param.range(0.001, 4, { default: 0.2, unit: 's', curve: 'exp' }),
   },
-  automatable: ['gain', 'width', 'octave', 'detune'],
+  automatable: ['gain', 'width', 'octave', 'detune', 'attack', 'decay', 'sustain', 'release'],
   polyphony: 8,
   voiceStealing: 'oldest',
   graph: ({ note, velocity, params }) => {
     const freq = uniform(note).add(params.octave.mul(12)).add(params.detune.mul(0.01)).toFrequency();
-    const amp = env.adsr({ a: 0.005, d: 0.08, s: 0.7, r: 0.2 }).trigger(velocity);
+    // dahdsr rather than adsr: `env.adsr` bakes its times as numbers, so a
+    // live parameter cannot reach it. Delay and hold at zero make the two the
+    // same envelope, which is what `adsrMaterial` is already built from.
+    const amp = env
+      .dahdsr({
+        delay: 0,
+        attack: params.attack,
+        hold: 0,
+        decay: params.decay,
+        sustain: params.sustain,
+        release: params.release,
+      })
+      .mul(velocity);
     return osc({ freq, type: params.type, width: params.width }).mul(amp).mul(params.gain);
   },
 });

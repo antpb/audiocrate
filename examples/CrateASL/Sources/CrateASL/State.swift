@@ -50,8 +50,10 @@ struct NodeMemory {
     var env = 0.0
     var ka = Double.nan, ca = 0.0, kr = Double.nan, cr = 0.0
 
-    // Edge detection and holds.
-    var prev = 0.0, held = 0.0, count = 0.0, index = -1.0, on = 0.0
+    // Edge detection and holds. `prevReset` is separate from `prev` because
+    // the nodes that take a reset are already watching their clock inlet with
+    // `prev`, and one variable cannot hold two edges.
+    var prev = 0.0, prevReset = 0.0, held = 0.0, count = 0.0, index = -1.0, on = 0.0
     var prevGate = false, armed = false, playing = false
 
     // Multi-state filters: one-pole cascades, SVF, ladder.

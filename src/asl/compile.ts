@@ -166,7 +166,51 @@ interface PlanNode {
   /** `range` bounds, read off params once instead of destructured per sample. */
   readonly rangeMin: number;
   readonly rangeMax: number;
+  /**
+   * 1 when this node's value cannot change within a block, so it is computed
+   * once per block instead of once per sample per channel. See
+   * `BLOCK_CONSTANT_KINDS`.
+   */
+  readonly hoist: number;
 }
+
+/**
+ * Kinds whose output is a pure function of their inputs.
+ *
+ * No stored state, no clock, no channel, no live audio, no randomness, and
+ * nothing read from outside the graph. A node of one of these kinds whose
+ * inputs are all themselves block constant is block constant, and a subtree
+ * of them rooted in parameters is a coefficient calculation: the same answer
+ * for every sample in the block.
+ *
+ * Everything absent from this set is absent on purpose. A filter, an
+ * oscillator and a sample-and-hold advance state per sample and would freeze
+ * if they were hoisted. `lane` is constant within one channel pass and
+ * different in the next. A tap records what went by and has to see every
+ * sample. `transport` is a function of where the song is, which moves inside
+ * a block.
+ *
+ * `bitcrush` is in the set and keeps a small cache; that cache is an
+ * optimisation of a pure function, not state the output depends on.
+ */
+const BLOCK_CONSTANT_KINDS: ReadonlySet<ASLNode['kind']> = new Set([
+  'const',
+  'param',
+  'mul',
+  'add',
+  'mix',
+  'range',
+  'toFrequency',
+  'select',
+  'compare',
+  'logic',
+  'clip',
+  'rectify',
+  'waveshape',
+  'quantize',
+  'panLaw',
+  'bitcrush',
+]);
 
 /**
  * Every input name any builder wires, on every plan node, whether that kind
@@ -395,6 +439,8 @@ interface Plan {
    * stops two channels fed the same samples from producing the same output.
    */
   readonly usesRandom: boolean;
+  /** How many nodes are evaluated once per block rather than once per sample. */
+  readonly blockConstantNodes: number;
 }
 
 /**
@@ -410,6 +456,7 @@ function buildPlan(root: ASLNode): Plan {
   let usesLane = false;
   let readsScalarInput = false;
   let usesRandom = false;
+  let blockConstantNodes = 0;
 
   function visit(node: ASLNode): PlanNode {
     const existing = bySourceId.get(node.id);
@@ -439,6 +486,7 @@ function buildPlan(root: ASLNode): Plan {
       slot,
       rangeMin: node.kind === 'range' ? (node.params.min as number) : 0,
       rangeMax: node.kind === 'range' ? (node.params.max as number) : 0,
+      hoist: 0,
     };
     // Registered before the children are visited, so a graph that somehow
     // refers back to itself terminates instead of recursing forever.
@@ -458,6 +506,31 @@ function buildPlan(root: ASLNode): Plan {
       for (const child of list) planned.push(visit(child));
       (plan as { list: readonly PlanNode[] | null }).list = planned;
     }
+    // After the children, because a node is block constant only if all of
+    // them are. The scalar `input` param is the exception among params:
+    // `renderBlock` rewrites it per sample, so a subtree reading it is not
+    // constant for the block even though every other param is.
+    if (BLOCK_CONSTANT_KINDS.has(node.kind) && !(node.kind === 'param' && name === MAIN_PORT)) {
+      let constant = true;
+      for (const key of Object.keys(node.inputs)) {
+        if (inputs[key]!.hoist === 0) {
+          constant = false;
+          break;
+        }
+      }
+      if (constant && plan.list) {
+        for (const child of plan.list) {
+          if (child.hoist === 0) {
+            constant = false;
+            break;
+          }
+        }
+      }
+      if (constant) {
+        (plan as { hoist: number }).hoist = 1;
+        blockConstantNodes += 1;
+      }
+    }
     return plan;
   }
 
@@ -470,6 +543,7 @@ function buildPlan(root: ASLNode): Plan {
     usesLane,
     readsScalarInput,
     usesRandom,
+    blockConstantNodes,
   };
 }
 
@@ -499,6 +573,14 @@ export interface VoiceRuntimeState {
   values: Float64Array;
   stamps: Float64Array;
   gen: number;
+  /**
+   * The generation a block-constant node's cached value belongs to.
+   *
+   * A second counter rather than a second array. It runs negative while
+   * `gen` runs positive, so one stamp slot serves both and a value cached
+   * for the block can never be mistaken for one cached for the sample.
+   */
+  blockGen: number;
   /**
    * Per-node persistent state (oscillator phase, envelope stage, filter delay
    * line) for the left channel, never cleared. Channels past the first get
@@ -575,6 +657,17 @@ export interface CompiledVoice {
   readonly ports: readonly string[];
   /** Tap ids this graph records under (`asl/analysis.ts`), sorted. Empty for a graph with no taps. */
   readonly taps: readonly string[];
+  /**
+   * How many of this graph's nodes are computed once per block instead of
+   * once per sample per channel.
+   *
+   * A coefficient subtree rooted in parameters has the same value for every
+   * sample in a block, and most of a plugin-sized graph is exactly that:
+   * curve mappings, mode compares, gain conversions. Reported because it is
+   * the difference between a graph that plays and one that does not, and
+   * because it is otherwise invisible.
+   */
+  readonly blockConstantNodes: number;
   /**
    * Reads every tap and resets the meters, so each frame covers exactly the
    * interval since the previous call. Returns null when the graph has no
@@ -667,14 +760,30 @@ function harmonicSample(phase: number, tilt: number, freq: number, sampleRate: n
   return norm > 0 ? sample / norm : 0;
 }
 
+/**
+ * `offset` shifts where the waveform is *read* without touching where it has
+ * got to, so two LFOs at one rate can sit a quarter cycle apart and still be
+ * the same clock. Stored phase is left alone deliberately: an offset that
+ * moved it would make every change to the knob a jump rather than a rotation.
+ *
+ * Zero is exact rather than nearly exact. `mem.phase` is always in 0..1, so
+ * `(mem.phase + 0) % 1` is `mem.phase` to the bit, which is what lets this be
+ * added without moving a single existing golden sample.
+ */
 function renderOsc(
   shape: number,
   mem: OscMemory,
   freq: number,
   sampleRate: number,
   width: number,
+  offset = 0,
 ): number {
   const increment = freq / sampleRate;
+  const shift = (phase: number): number => {
+    if (offset === 0) return phase;
+    const shifted = (phase + offset) % 1;
+    return shifted < 0 ? shifted + 1 : shifted;
+  };
   if (shape === SHAPE_SUPERSQUARE) {
     const ratio = 1 + (width < 0 ? 0 : width > 1 ? 1 : width) * 3;
     mem.phase += increment;
@@ -684,11 +793,11 @@ function renderOsc(
       mem.slavePhase = mem.phase * ratio;
     }
     if (mem.slavePhase >= 1) mem.slavePhase -= Math.floor(mem.slavePhase);
-    const master = 2 * mem.phase - 1;
-    const slave = mem.slavePhase < 0.5 ? 1 : -1;
+    const master = 2 * shift(mem.phase) - 1;
+    const slave = shift(mem.slavePhase) < 0.5 ? 1 : -1;
     return (master + slave) * 0.5;
   }
-  const sample = oscillatorSample(shape, mem.phase, width, freq, sampleRate);
+  const sample = oscillatorSample(shape, shift(mem.phase), width, freq, sampleRate);
   mem.phase = (mem.phase + increment) % 1;
   return sample;
 }
@@ -900,7 +1009,11 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
    */
   function evalNode(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const slot = node.i;
-    if (state.stamps[slot] === state.gen) return state.values[slot]!;
+    // Two generations, one cache. A coefficient subtree rooted in parameters
+    // is stamped with the block's generation and computed once; everything
+    // else is stamped with the sample's.
+    const stamp = node.hoist === 1 ? state.blockGen : state.gen;
+    if (state.stamps[slot] === stamp) return state.values[slot]!;
 
     let result: number;
     switch (node.kind) {
@@ -969,7 +1082,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     }
 
     state.values[slot] = result;
-    state.stamps[slot] = state.gen;
+    state.stamps[slot] = stamp;
     return result;
   }
 
@@ -1028,8 +1141,21 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         const shape = node.inputs.type
           ? Math.min(7, Math.max(0, Math.round(evalNode(node.inputs.type, state, sampleRate))))
           : node.m;
-        const mem = getMemory<OscMemory>(state, node.i, () => ({ phase: 0, slavePhase: 0 }));
-        result = renderOsc(shape, mem, rate, sampleRate, width);
+        const offset = node.inputs.phase ? evalNode(node.inputs.phase, state, sampleRate) : 0;
+        const mem = getMemory<OscMemory & { prevReset: number }>(state, node.i, () => ({
+          phase: 0,
+          slavePhase: 0,
+          prevReset: 0,
+        }));
+        // Back to the start of the cycle, not to the start of the *next* one:
+        // an LFO is a shape being read, so its reset lands on the first sample
+        // of the shape. A clock, being an event, fires on the sample it is
+        // reset instead.
+        if (resetRose(node, state, sampleRate, mem)) {
+          mem.phase = 0;
+          mem.slavePhase = 0;
+        }
+        result = renderOsc(shape, mem, rate, sampleRate, width, offset);
         break;
       }
 
@@ -1763,7 +1889,13 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     }
     const g = mem.g;
     const k = Math.min(Math.max(resonance, 0), 0.99) * 4;
-    const x = input - k * Math.tanh(mem.y4);
+    // Drive is a saturation into the filter, normalised so that 1 is exactly
+    // unity. `tanh(x * d) / tanh(d)` is the usual shape but is not the
+    // identity at d = 1, so the default is a branch rather than a formula:
+    // a ladder that already exists must sound like itself.
+    const drive = node.inputs.drive ? evalNode(node.inputs.drive, state, sampleRate) : 1;
+    const driven = drive === 1 ? input : Math.tanh(input * drive) / Math.tanh(drive);
+    const x = driven - k * Math.tanh(mem.y4);
     mem.y1 += g * (x - mem.y1);
     mem.y2 += g * (mem.y1 - mem.y2);
     mem.y3 += g * (mem.y2 - mem.y3);
@@ -1850,17 +1982,39 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     return mem.y;
   }
 
+  /**
+   * Sample and hold, on its own rate or on somebody else's clock.
+   *
+   * A sample and hold whose only rate is its own is half a module: what it is
+   * for is taking a reading at the moment the rest of the patch does
+   * something, so the held value and the pattern are the same event. There
+   * was no inlet for that at all.
+   *
+   * Both at once would be two grids fighting, so `freq` at zero turns the
+   * internal one off. Zero rather than the presence of a cable because the
+   * graph cannot see whether a cable is attached: an uncabled jack is still an
+   * input node holding its default.
+   */
   function evalSampleHold(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const input = evalNode(node.inputs.input!, state, sampleRate);
     const freq = Math.max(evalNode(node.inputs.freq!, state, sampleRate), 0);
-    const mem = getMemory<{ held: number; phase: number }>(state, node.i, () => ({
+    const mem = getMemory<{ held: number; phase: number; prevClock: number }>(state, node.i, () => ({
       held: input,
       phase: 1,
+      prevClock: 0,
     }));
-    mem.phase += freq / sampleRate;
-    if (mem.phase >= 1) {
-      mem.held = input;
-      mem.phase -= Math.floor(mem.phase);
+    if (node.inputs.clock) {
+      const clock = evalNode(node.inputs.clock, state, sampleRate);
+      const rose = clock > 0.5 && mem.prevClock <= 0.5;
+      mem.prevClock = clock;
+      if (rose) mem.held = input;
+    }
+    if (freq > 0) {
+      mem.phase += freq / sampleRate;
+      if (mem.phase >= 1) {
+        mem.held = input;
+        mem.phase -= Math.floor(mem.phase);
+      }
     }
     return mem.held;
   }
@@ -1946,9 +2100,44 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     return 0;
   }
 
+  /**
+   * A rising edge on `reset` puts the node back where it starts.
+   *
+   * Shared by the five nodes that carry a position in a pattern, because
+   * without it a patch cannot start with the song. The transport's `playing`
+   * is the signal anybody actually wires here: a clock is a free-running
+   * phase and a euclidean is a step counter, so when Play arrives they are
+   * wherever they happened to be, and the pattern lands off the bar for as
+   * long as the plugin stays loaded. `syncedclock` is exempt, being derived
+   * from the song position with no state of its own, but everything counting
+   * steps downstream of it is not.
+   *
+   * Edge-triggered rather than level-triggered, so a `playing` held high is
+   * one reset at the top and not a node pinned to step zero for the whole
+   * song.
+   */
+  function resetRose(
+    node: PlanNode,
+    state: VoiceRuntimeState,
+    sampleRate: number,
+    mem: { prevReset: number },
+  ): boolean {
+    if (!node.inputs.reset) return false;
+    const value = evalNode(node.inputs.reset, state, sampleRate);
+    const rose = value > 0.5 && mem.prevReset <= 0.5;
+    mem.prevReset = value;
+    return rose;
+  }
+
   function evalClock(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const freq = Math.max(evalNode(node.inputs.freq!, state, sampleRate), 0);
-    const mem = getMemory<{ phase: number }>(state, node.i, () => ({ phase: 1 }));
+    const mem = getMemory<{ phase: number; prevReset: number }>(state, node.i, () => ({
+      phase: 1,
+      prevReset: 0,
+    }));
+    // Phase 1 rather than 0: a clock fires on the sample it is reset, which
+    // is what makes Play and the first tick the same instant.
+    if (resetRose(node, state, sampleRate, mem)) mem.phase = 1;
     mem.phase += freq / sampleRate;
     if (mem.phase >= 1) {
       mem.phase -= Math.floor(mem.phase);
@@ -1960,7 +2149,15 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
   function evalClockDivide(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const input = evalNode(node.inputs.input!, state, sampleRate);
     const factor = Math.max(1, Math.round(evalNode(node.inputs.factor!, state, sampleRate)));
-    const mem = getMemory<{ prev: number; count: number }>(state, node.i, () => ({ prev: 0, count: 0 }));
+    const mem = getMemory<{ prev: number; count: number; prevReset: number }>(state, node.i, () => ({
+      prev: 0,
+      count: 0,
+      prevReset: 0,
+    }));
+    // One short of the factor, so the next tick through is the one that
+    // fires. A divider that swallowed the first `factor` ticks after a reset
+    // would start the bar late, which is the thing being fixed.
+    if (resetRose(node, state, sampleRate, mem)) mem.count = factor - 1;
     const rose = input > 0.5 && mem.prev <= 0.5;
     mem.prev = input;
     if (!rose) return 0;
@@ -1982,7 +2179,26 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       nextAt: number;
       left: number;
       armed: boolean;
-    }>(state, node.i, () => ({ prev: 0, since: 0, interval: 0, nextAt: 0, left: 0, armed: false }));
+      prevReset: number;
+    }>(state, node.i, () => ({
+      prev: 0,
+      since: 0,
+      interval: 0,
+      nextAt: 0,
+      left: 0,
+      armed: false,
+      prevReset: 0,
+    }));
+    // Back to knowing nothing. The interval is learned from two consecutive
+    // input ticks, and one learned before a reset was measured against a
+    // position the patch has left.
+    if (resetRose(node, state, sampleRate, mem)) {
+      mem.since = 0;
+      mem.interval = 0;
+      mem.nextAt = 0;
+      mem.left = 0;
+      mem.armed = false;
+    }
     const rose = input > 0.5 && mem.prev <= 0.5;
     mem.prev = input;
     if (rose) {
@@ -2042,7 +2258,20 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       kh: number;
       kr: number;
       pattern: readonly boolean[] | null;
-    }>(state, node.i, () => ({ prev: 0, step: -1, kn: NaN, kh: NaN, kr: NaN, pattern: null }));
+      prevReset: number;
+    }>(state, node.i, () => ({
+      prev: 0,
+      step: -1,
+      kn: NaN,
+      kh: NaN,
+      kr: NaN,
+      pattern: null,
+      prevReset: 0,
+    }));
+    // Before the first step, so the next clock is step zero. The cached
+    // pattern is kept: it depends on the three settings and not on where in
+    // it the node had got to.
+    if (resetRose(node, state, sampleRate, mem)) mem.step = -1;
     const rose = input > 0.5 && mem.prev <= 0.5;
     mem.prev = input;
     if (!rose) return 0;
@@ -2187,7 +2416,12 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
   function evalSequencer(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const clockIn = evalNode(node.inputs.clock!, state, sampleRate);
     const steps = node.list ?? [];
-    const mem = getMemory<{ prev: number; index: number }>(state, node.i, () => ({ prev: 0, index: -1 }));
+    const mem = getMemory<{ prev: number; index: number; prevReset: number }>(state, node.i, () => ({
+      prev: 0,
+      index: -1,
+      prevReset: 0,
+    }));
+    if (resetRose(node, state, sampleRate, mem)) mem.index = -1;
     const rose = clockIn > 0.5 && mem.prev <= 0.5;
     mem.prev = clockIn;
     if (steps.length === 0) return 0;
@@ -2866,9 +3100,18 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
   function evalPanLaw(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const input = evalNode(node.inputs.input!, state, sampleRate);
     const pan = Math.min(1, Math.max(-1, evalNode(node.inputs.pan!, state, sampleRate)));
-    const angle = ((pan + 1) * Math.PI) / 4;
-    const gain = node.m === 1 ? Math.sin(angle) : Math.cos(angle);
-    return input * gain;
+    // The gain is a function of the position alone, and the position is a
+    // knob. Cached the way every filter here caches its coefficients: a pan
+    // that is not moving was otherwise a sine and a cosine per sample, and a
+    // kit with a pan on each of sixteen pads paid that thirty-two times over
+    // per sample per channel.
+    const mem = getMemory<{ k: number; gain: number }>(state, node.i, () => ({ k: NaN, gain: 0 }));
+    if (mem.k !== pan) {
+      const angle = ((pan + 1) * Math.PI) / 4;
+      mem.gain = node.m === 1 ? Math.sin(angle) : Math.cos(angle);
+      mem.k = pan;
+    }
+    return input * mem.gain;
   }
 
   return {
@@ -2877,6 +3120,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     stereo,
     ports,
     taps,
+    blockConstantNodes: plan.blockConstantNodes,
 
     drainAnalysis(state): AnalysisFrame | null {
       if (taps.length === 0) return null;
@@ -2918,6 +3162,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         // it has been computed once.
         stamps: new Float64Array(slotCount),
         gen: 1,
+        blockGen: -1,
         memory: new Array<unknown>(slotCount).fill(undefined),
         params: {},
         gate: false,
@@ -2937,11 +3182,17 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
 
     renderSample(state, sampleRate): number {
       state.gen += 1;
+      // One sample is its own block here: a caller feeding values one at a
+      // time may change a parameter between any two of them.
+      state.blockGen -= 1;
       return evalNode(root, state, sampleRate);
     },
 
     renderBlock(state, sampleRate, out, input, extras): boolean {
       const frames = out.length;
+      // Invalidates every block-constant value. Parameters move between
+      // blocks and nowhere else, so this is the whole invalidation.
+      state.blockGen -= 1;
       if (extras?.transport) state.transport = extras.transport;
 
       // A source kernel replaces the graph outright. Nothing downstream of it

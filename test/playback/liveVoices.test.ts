@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prepareLiveVoices, disposeLiveVoices, type LiveVoiceRenderer } from '../../src/playback/liveVoices';
+import { prepareLiveVoices, disposeLiveVoices, disposeVoiceHandle, type LiveVoiceRenderer } from '../../src/playback/liveVoices';
 import { Track } from '../../src/graph/Track';
 import { Bus } from '../../src/graph/Bus';
 import { AudioMaterial } from '../../src/graph/AudioMaterial';
@@ -137,6 +137,20 @@ describe('prepareLiveVoices', () => {
     expect(calls).toHaveLength(3); // master insert + track insert + track instrument
   });
 
+  it('does not compile a drum instrument into a worklet', async () => {
+    const track = new Track({ name: 'T' });
+    track.instrument = new AudioMaterial({
+      name: 'Drum',
+      kind: 'drum',
+      params: {},
+      graph: ({ input }) => input,
+    });
+    const { renderer, calls } = fakeRenderer();
+    const voices = await prepareLiveVoices(renderer, [track], new Bus({ name: 'Master' }), {}, registry);
+    expect(voices.tracks.get(track.id)!.instrument).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
   it('disposeLiveVoices disconnects every voice it created', async () => {
     const track = new Track({ name: 'T' });
     track.materials.add(createFuzzMaterial());
@@ -147,5 +161,26 @@ describe('prepareLiveVoices', () => {
     disposeLiveVoices(voices);
 
     expect(calls.every((c) => c.disconnected)).toBe(true);
+  });
+
+  it('disposeVoiceHandle stops the silent driver so process() cannot keep running', () => {
+    const driver = {
+      stopped: false,
+      disconnected: false,
+      stop() {
+        this.stopped = true;
+      },
+      disconnect() {
+        this.disconnected = true;
+      },
+    };
+    const node = { disconnected: false, disconnect() { this.disconnected = true; } };
+    const voice = fakeVoiceHandle(node as unknown as AudioWorkletNode, {
+      driver: driver as unknown as ConstantSourceNode,
+    });
+    disposeVoiceHandle(voice);
+    expect(node.disconnected).toBe(true);
+    expect(driver.stopped).toBe(true);
+    expect(driver.disconnected).toBe(true);
   });
 });

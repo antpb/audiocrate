@@ -1,5 +1,6 @@
 import type { AudioContextLike } from '../AudioContextLike';
 import { applyClipGainAndFades } from '../clip/fades';
+import { resampleAudioBufferLike } from '../clip/resample';
 import type { AudioBufferLike } from '../graph/Clip';
 import type { Bus } from '../graph/Bus';
 import type { Track } from '../graph/Track';
@@ -86,10 +87,12 @@ export function asWebAudio(ctx: AudioContextLike): WebAudioBits | null {
   return raw as WebAudioBits;
 }
 
-export function toNativeBuffer(ctx: WebAudioBits, buffer: AudioBufferLike) {
-  const out = ctx.createBuffer(buffer.numberOfChannels, buffer.length, buffer.sampleRate);
-  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
-    const data = buffer.getChannelData(ch);
+export function toNativeBuffer(ctx: WebAudioBits, buffer: AudioBufferLike): ReturnType<WebAudioBits['createBuffer']> {
+  const destRate = ctx.sampleRate > 0 ? ctx.sampleRate : buffer.sampleRate;
+  const aligned = resampleAudioBufferLike(buffer, destRate);
+  const out = ctx.createBuffer(aligned.numberOfChannels, Math.max(1, aligned.length), destRate);
+  for (let ch = 0; ch < aligned.numberOfChannels; ch++) {
+    const data = aligned.getChannelData(ch);
     if (out.copyToChannel) out.copyToChannel(data, ch);
     else out.getChannelData(ch).set(data);
   }
@@ -312,7 +315,11 @@ export class ScenePlayback {
 
       for (const { source, job } of pending) {
         try {
-          source.start(origin + job.whenSec + job.pdcSec, job.fileOffsetSec, job.fileDurationSec);
+          source.start(
+            origin + job.whenSec + job.pdcSec,
+            job.fileOffsetSec,
+            job.fileDurationSec,
+          );
         } catch (err) {
           console.warn(
             `[crate] clip start failed when=${(origin + job.whenSec).toFixed(3)} offset=${job.fileOffsetSec.toFixed(3)} dur=${job.fileDurationSec.toFixed(3)}`,

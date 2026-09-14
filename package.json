@@ -83,7 +83,9 @@
     "editor:build": "vite build --config editor/vite.config.ts",
     "example:xr": "vite build --config examples/xr/vite.config.ts && vite --config examples/xr/demo/vite.config.ts",
     "test:editor": "vitest run --config editor/vitest.config.ts",
-    "test:examples": "vitest run --config examples/amp/vitest.config.ts --dir examples/amp && vitest run --config examples/grain/vitest.config.ts --dir examples/grain && vitest run --config examples/synth/vitest.config.ts --dir examples/synth && vitest run --config examples/space-reverb/vitest.config.ts --dir examples/space-reverb && vitest run --config examples/xr/vitest.config.ts --dir examples/xr",
+    "fixtures:materials": "esbuild editor/scripts/emit-material-catalog.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/emit-material-catalog.mjs && node node_modules/.cache/emit-material-catalog.mjs examples/CrateASL/Sources/CrateASL/Resources/material-catalog.json",
+    "fixtures:flatten": "esbuild editor/scripts/emit-flatten-fixtures.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/emit-flatten-fixtures.mjs && node node_modules/.cache/emit-flatten-fixtures.mjs fixtures/flatten-conformance.json",
+    "test:examples": "vitest run --config examples/amp/vitest.config.ts --dir examples/amp && vitest run --config examples/drum/vitest.config.ts --dir examples/drum && vitest run --config examples/grain/vitest.config.ts --dir examples/grain && vitest run --config examples/synth/vitest.config.ts --dir examples/synth && vitest run --config examples/space-reverb/vitest.config.ts --dir examples/space-reverb && vitest run --config examples/xr/vitest.config.ts --dir examples/xr",
     "test:swift": "/usr/bin/swift test --package-path examples/CrateASL",
     "prepublishOnly": "npm run test && npm run build && npm run verify:package"
   },

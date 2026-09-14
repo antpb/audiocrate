@@ -37,7 +37,7 @@ function makeNode(extra: Record<string, unknown> = {}): FakeNode & Record<string
   return node;
 }
 
-function createFakeWebAudioContext() {
+function createFakeWebAudioContext(sampleRate = 48000) {
   const destination = makeNode();
   const sources: ReturnType<typeof makeNode>[] = [];
   /** Every node the context minted, so a test can look for an edge by port index. */
@@ -48,7 +48,7 @@ function createFakeWebAudioContext() {
   };
   const ctx = {
     currentTime: 0,
-    sampleRate: 48000,
+    sampleRate,
     destination,
     createGain: () => track(makeNode({ gain: { value: 1 } })),
     createStereoPanner: () => track(makeNode({ pan: { value: 0 } })),
@@ -60,9 +60,10 @@ function createFakeWebAudioContext() {
       sources.push(s);
       return s;
     },
-    createBuffer: (channels: number, length: number) => {
+    createBuffer: (channels: number, length: number, sampleRate: number) => {
       const data = Array.from({ length: channels }, () => new Float32Array(length));
       return {
+        sampleRate,
         copyToChannel: (d: Float32Array, ch: number) => data[ch]!.set(d),
         getChannelData: (ch: number) => data[ch]!,
       };
@@ -311,5 +312,36 @@ describe('ScenePlayback: live voice wiring', () => {
     const playback = new ScenePlayback();
     const start = playback.start(ctx as never, [track], new Bus({ name: 'Master' }), plan, buffers);
     expect(start.instrumentTargets.size).toBe(0);
+  });
+
+  it('resamples 44.1k clips to the opened 48k context and keeps file-time windows', () => {
+    const { ctx, sources } = createFakeWebAudioContext(48000);
+    const track = new Track({ name: 'T' });
+    const data = new Float32Array(44100);
+    const buffer: AudioBufferLike = {
+      sampleRate: 44100,
+      length: 44100,
+      numberOfChannels: 1,
+      getChannelData: () => data,
+    };
+    const playback = new ScenePlayback();
+    playback.start(
+      ctx as never,
+      [track],
+      new Bus({ name: 'Master' }),
+      emptyPlan({
+        jobs: [clipJob({ trackId: track.id, fileOffsetSec: 2.728, fileDurationSec: 0.5, playbackRate: 1 })],
+      }),
+      new Map([[1, buffer]]),
+    );
+    const src = sources[0]!;
+    const args = src.startArgs as unknown[];
+    expect((src.buffer as { sampleRate: number; getChannelData: (ch: number) => Float32Array }).sampleRate).toBe(48000);
+    expect(
+      (src.buffer as { getChannelData: (ch: number) => Float32Array }).getChannelData(0).length,
+    ).toBe(48000);
+    expect(src.playbackRate.value).toBe(1);
+    expect(args[1]).toBeCloseTo(2.728, 8);
+    expect(args[2]).toBeCloseTo(0.5, 8);
   });
 });

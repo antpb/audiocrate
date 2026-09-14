@@ -60,7 +60,24 @@ extension CompiledVoice {
             let shape = node.has(.type)
                 ? min(7, max(0, Int(jsRound(ev(node, .type, state, sr)))))
                 : node.m
+            let offset = node.has(.phase) ? ev(node, .phase, state, sr) : 0
             let mem = state.memory(for: node.slot)
+            // Back to the start of the cycle, not to the start of the *next*
+            // one: an LFO is a shape being read, so its reset lands on the
+            // first sample of the shape. A clock, being an event, fires on
+            // the sample it is reset instead.
+            if resetRose(node, state, sr, mem) {
+                mem.pointee.phase = 0
+                mem.pointee.s0 = 0
+            }
+            // Shifts where the shape is *read* without touching where it has
+            // got to, so two LFOs at one rate can sit apart and still be the
+            // same clock. Zero is exact: stored phase is always in 0..1.
+            func shift(_ phase: Double) -> Double {
+                if offset == 0 { return phase }
+                let shifted = jsMod(phase + offset, 1)
+                return shifted < 0 ? shifted + 1 : shifted
+            }
             let increment = rate / sr
             if shape == Shape.supersquare {
                 let ratio = 1 + min(max(width, 0), 1) * 3
@@ -71,11 +88,11 @@ extension CompiledVoice {
                     mem.pointee.s0 = mem.pointee.phase * ratio
                 }
                 if mem.pointee.s0 >= 1 { mem.pointee.s0 -= mem.pointee.s0.rounded(.down) }
-                let master = 2 * mem.pointee.phase - 1
-                let slave = mem.pointee.s0 < 0.5 ? 1.0 : -1.0
+                let master = 2 * shift(mem.pointee.phase) - 1
+                let slave = shift(mem.pointee.s0) < 0.5 ? 1.0 : -1.0
                 return (master + slave) * 0.5
             }
-            let out = oscillatorSample(shape, mem.pointee.phase, width, rate, sr)
+            let out = oscillatorSample(shape, shift(mem.pointee.phase), width, rate, sr)
             mem.pointee.phase = jsMod(mem.pointee.phase + increment, 1)
             return out
 
@@ -164,6 +181,14 @@ extension CompiledVoice {
             if delta > 0 { mem.pointee.s0 += min(delta, rise / sr) } else { mem.pointee.s0 += max(delta, -fall / sr) }
             return mem.pointee.s0
 
+        // Sample and hold, on its own rate or on somebody else's clock.
+        //
+        // A sample and hold whose only rate is its own is half a module: what
+        // it is for is taking a reading at the moment the rest of the patch
+        // does something. Both grids at once would fight, so `freq` at zero
+        // turns the internal one off. Zero rather than the presence of a cable
+        // because the graph cannot see whether a cable is attached: an
+        // uncabled jack is still an input node holding its default.
         case .sampleHold:
             let value = ev(node, .input, state, sr)
             let freq = max(ev(node, .freq, state, sr), 0)
@@ -173,10 +198,18 @@ extension CompiledVoice {
                 mem.pointee.phase = 1
                 mem.pointee.initialized = true
             }
-            mem.pointee.phase += freq / sr
-            if mem.pointee.phase >= 1 {
-                mem.pointee.held = value
-                mem.pointee.phase -= mem.pointee.phase.rounded(.down)
+            if node.has(.clock) {
+                let clock = ev(node, .clock, state, sr)
+                let rose = clock > 0.5 && mem.pointee.prev <= 0.5
+                mem.pointee.prev = clock
+                if rose { mem.pointee.held = value }
+            }
+            if freq > 0 {
+                mem.pointee.phase += freq / sr
+                if mem.pointee.phase >= 1 {
+                    mem.pointee.held = value
+                    mem.pointee.phase -= mem.pointee.phase.rounded(.down)
+                }
             }
             return mem.pointee.held
 
@@ -199,8 +232,11 @@ extension CompiledVoice {
             let freq = max(ev(node, .freq, state, sr), 0)
             let mem = state.memory(for: node.slot)
             // Phase starts at 1 so the first sample fires, which is what
-            // makes a clock audible from the moment it is armed.
+            // makes a clock audible from the moment it is armed, and is the
+            // same reason a reset puts it back to 1 rather than to 0: Play
+            // and the first tick are the same instant.
             if !mem.pointee.initialized { mem.pointee.phase = 1; mem.pointee.initialized = true }
+            if resetRose(node, state, sr, mem) { mem.pointee.phase = 1 }
             mem.pointee.phase += freq / sr
             if mem.pointee.phase >= 1 {
                 mem.pointee.phase -= mem.pointee.phase.rounded(.down)
@@ -212,6 +248,10 @@ extension CompiledVoice {
             let value = ev(node, .input, state, sr)
             let factor = max(1, jsRound(ev(node, .factor, state, sr)))
             let mem = state.memory(for: node.slot)
+            // One short of the factor, so the next tick through is the one
+            // that fires. A divider that swallowed the first `factor` ticks
+            // after a reset would start the bar late.
+            if resetRose(node, state, sr, mem) { mem.pointee.count = factor - 1 }
             let rose = value > 0.5 && mem.pointee.prev <= 0.5
             mem.pointee.prev = value
             if !rose { return 0 }
@@ -274,6 +314,7 @@ extension CompiledVoice {
             let clockIn = ev(node, .clock, state, sr)
             let steps = node.list ?? []
             let mem = state.memory(for: node.slot)
+            if resetRose(node, state, sr, mem) { mem.pointee.index = -1 }
             let rose = clockIn > 0.5 && mem.pointee.prev <= 0.5
             mem.pointee.prev = clockIn
             if steps.isEmpty { return 0 }
@@ -310,5 +351,32 @@ extension CompiledVoice {
     @inline(__always) func ev(_ node: PlanNode, _ name: InputName, _ state: VoiceState, _ sr: Double) -> Double {
         guard let child = node.input(name) else { return 0 }
         return eval(child, state, sr)
+    }
+
+    /// Whether a rising edge arrived on `reset` this sample.
+    ///
+    /// Shared by the five nodes that carry a position in a pattern, because
+    /// without it a patch cannot start with the song. The transport's
+    /// `playing` is the signal anybody actually wires here: a clock is a
+    /// free-running phase and a euclidean is a step counter, so when Play
+    /// arrives they are wherever they happened to be, and the pattern lands
+    /// off the bar for as long as the plugin stays loaded. `syncedclock` is
+    /// exempt, being derived from the song position with no state of its own,
+    /// but everything counting steps downstream of it is not.
+    ///
+    /// Edge-triggered rather than level-triggered, so a `playing` held high
+    /// is one reset at the top and not a node pinned to step zero for the
+    /// whole song.
+    @inline(__always) func resetRose(
+        _ node: PlanNode,
+        _ state: VoiceState,
+        _ sr: Double,
+        _ mem: UnsafeMutablePointer<NodeMemory>
+    ) -> Bool {
+        guard let child = node.input(.reset) else { return false }
+        let value = eval(child, state, sr)
+        let rose = value > 0.5 && mem.pointee.prevReset <= 0.5
+        mem.pointee.prevReset = value
+        return rose
     }
 }

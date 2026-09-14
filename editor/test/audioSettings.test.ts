@@ -22,7 +22,7 @@ function memoryStore(initial: Record<string, string> = {}) {
 describe('audio settings', () => {
   it('maps IO pills to stable device categories instead of 2ms', () => {
     expect(latencyHintForBufferMs(2)).toBe('interactive');
-    expect(latencyHintForBufferMs(10)).toBe('balanced');
+    expect(latencyHintForBufferMs(10)).toBe('playback');
     expect(latencyHintForBufferMs(20)).toBe('playback');
   });
 

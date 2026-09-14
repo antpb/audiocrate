@@ -10,8 +10,8 @@ import Foundation
 enum InputName: Int, CaseIterable {
     case input, a, b, attack, bits, clock, cutoff, decay, delay, drive
     case duration, factor, fall, feedback, freq, gainDb, gate, hits, hold
-    case index, length, mix, note, pan, pitch, position, q, rate, ratio
-    case record, release, resonance, rise, root, rotation, scale, sidechain
+    case index, length, mix, note, pan, phase, pitch, position, q, rate, ratio
+    case record, release, reset, resonance, rise, root, rotation, scale, sidechain
     case source, steps, sustain, threshold, timeSec, trigger, which, width
     case widthSec, windowSec, type, color
 

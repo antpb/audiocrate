@@ -22,6 +22,10 @@
  *    a Keyboard cable into a note jack only marks the patch as an
  *    instrument: the inner graph's `note` / `velocity` params already
  *    read the voice. MIDI In is the same note source from a hardware port.
+ *    A cable from another module into `note`, `velocity`, `gate` or `trig`
+ *    is different: those are graph-driven voice jacks (a sequencer into
+ *    an oscillator). They replace the inner param with the upstream
+ *    signal in real units: MIDI 48..72 for `note`, 0..1 for the others.
  *    MIDI Out is a sink, like Master, and does not enter the audio graph.
  *    Transport params are the patcher's session tempo; a hosted DAW already
  *    hosted DAW already publishes that snapshot, so flatten keeps the
@@ -84,7 +88,7 @@ export const DEFAULT_PATCH_IO: PatchIoKinds = {
 };
 
 /** Inlets a keyboard drives per note rather than per sample. */
-const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig']);
+const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig', 'clock', 'reset']);
 
 export interface FlattenPatchOptions {
   /**
@@ -205,6 +209,14 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
       if (material.audioInputs.includes(inlet)) {
         const node = sourceKind === io.line ? insertInputNode() : flattened.get(conn.source);
         if (node) push(audioSources, inlet, node);
+        continue;
+      }
+      if (NOTE_INPUTS.has(inlet) && sourceKind !== io.line) {
+        const node = flattened.get(conn.source);
+        if (node) {
+          const polarity = materials.get(conn.source)?.cvPolarity ?? 'bipolar';
+          cvAbsolute.set(inlet, voiceJackNode(asBipolar(node, polarity), inlet));
+        }
         continue;
       }
       if (inlet in material.params && sourceKind !== io.line) {
@@ -378,6 +390,12 @@ function mixNodes(nodes: ASLNode[]): ASLNode {
 }
 
 /** `range` is -1..1. Unipolar 0..1 becomes that before the map. */
+/** A graph-driven voice jack is in real units, not a param range map. */
+function voiceJackNode(source: ASLNode, inlet: string): ASLNode {
+  const midi = inlet === 'note';
+  return makeNode('range', { source }, { min: midi ? 48 : 0, max: midi ? 72 : 1 });
+}
+
 function asBipolar(node: ASLNode, polarity: 'unipolar' | 'bipolar'): ASLNode {
   if (polarity === 'bipolar') return node;
   return makeNode(
@@ -427,7 +445,10 @@ function topoSort(
     if (!materials.has(conn.source) || !materials.has(conn.target)) continue;
     if (kinds.get(conn.source) === io.keyboard || kinds.get(conn.source) === io.midiIn) continue;
     const target = materials.get(conn.target)!;
-    const relevant = target.audioInputs.includes(conn.targetInput) || conn.targetInput in target.params;
+    const relevant =
+      target.audioInputs.includes(conn.targetInput) ||
+      conn.targetInput in target.params ||
+      NOTE_INPUTS.has(conn.targetInput);
     if (!relevant) continue;
     incoming.get(conn.target)!.add(conn.source);
     outgoing.get(conn.source)!.add(conn.target);

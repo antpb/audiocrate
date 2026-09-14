@@ -199,5 +199,13 @@ export function isKeyboardKind(kind: string): boolean {
 }
 
 export function isControlJack(name: string): boolean {
-  return name === 'note' || name === 'gate' || name === 'velocity' || name === 'trig' || name === 'cv';
+  return (
+    name === 'note' ||
+    name === 'gate' ||
+    name === 'velocity' ||
+    name === 'trig' ||
+    name === 'clock' ||
+    name === 'reset' ||
+    name === 'cv'
+  );
 }

@@ -30,7 +30,8 @@ import { AMP_ASSET, ampNamAsset, ampNamAssetR } from './host/ampAssets';
 import { persistNodeAssets } from './assetStore';
 import { catalogEntry } from './catalog';
 import type { PatchEditor } from './editor';
-import { applyIr, applyNam, applyNamR, applySample } from './nodeAssets';
+import { applyDrumPad, applyIr, applyNam, applyNamR, applySample } from './nodeAssets';
+import { NUM_PADS, drumPadAsset, drumPadKey } from '../../examples/drum/src/index';
 import { KEYBOARD_KIND } from './analogKeyboard';
 import { PATCH_KIND, PATCH_VERSION, type CratePatch, type PatchConnection, type PatchMidiNote, type PatchNode } from './patch';
 import { LINE_KIND, MASTER_KIND, MIDICLIP_KIND } from './tools';
@@ -99,6 +100,8 @@ export function isZipBytes(bytes: Uint8Array): boolean {
   return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b;
 }
 
+const SMALL_ENTRY_CACHE = 256 * 1024;
+
 export async function importProjectBytes(bytes: Uint8Array): Promise<ImportedProject> {
   if (!isZipBytes(bytes)) {
     throw new Error('This file is not a readable zip archive.');
@@ -107,8 +110,7 @@ export async function importProjectBytes(bytes: Uint8Array): Promise<ImportedPro
   try {
     entries = listZipEntries(bytes);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(detail ? `This file is not a readable zip archive. (${detail})` : 'This file is not a readable zip archive.');
+    throw zipOpenError(err);
   }
 
   const byName = new Map<string, ZipEntry>();
@@ -128,12 +130,11 @@ export async function importProjectBytes(bytes: Uint8Array): Promise<ImportedPro
       if (!entry) continue;
       try {
         const out = await readZipEntry(bytes, entry);
-        cache.set(name, out);
+        if (out.byteLength <= SMALL_ENTRY_CACHE) cache.set(name, out);
         await yieldToUi();
         return out;
       } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(detail ? `This file is not a readable zip archive. (${detail})` : 'This file is not a readable zip archive.');
+        throw zipEntryError(err, name);
       }
     }
     return null;
@@ -170,6 +171,19 @@ export async function applyImportedAssets(editor: PatchEditor, imported: Importe
       imported.warnings.push(`Could not cache files for ${item.nodeId}. They are loaded for this session.`);
     }
   }
+}
+
+function zipOpenError(err: unknown): Error {
+  const detail = err instanceof Error ? err.message : String(err);
+  return new Error(detail ? `This file is not a readable zip archive. (${detail})` : 'This file is not a readable zip archive.');
+}
+
+function zipEntryError(err: unknown, name: string): Error {
+  const detail = err instanceof Error ? err.message : String(err);
+  if (/memory|implausible uncompressed|exceeds JS safe integer/i.test(detail)) {
+    return new Error(detail || `Could not extract ${name.replace(/^.*\//, '')}.`);
+  }
+  return new Error(detail ? `Could not extract ${name.replace(/^.*\//, '')}. (${detail})` : `Could not extract ${name.replace(/^.*\//, '')}.`);
 }
 
 function archiveRootFromNames(names: string[]): string {
@@ -498,8 +512,17 @@ async function hydratePluginAssets(
       warnings.push(`Could not decode ${request.filename}`);
       continue;
     }
-    material.setAsset(request.key, audio);
+    const pad = padIndexFromAssetKey(request.key);
+    if (pad !== null) applyDrumPad(material, pad, audio);
+    else material.setAsset(request.key, audio);
   }
+}
+
+function padIndexFromAssetKey(key: string): number | null {
+  for (let pad = 0; pad < NUM_PADS; pad++) {
+    if (key === drumPadKey(pad)) return pad;
+  }
+  return null;
 }
 
 async function loadClips(
@@ -582,6 +605,12 @@ function copyMaterialAssets(from: AudioMaterial, to: AudioMaterial, kind: string
   if (kind === 'ir') {
     const ir = irAsset(from);
     if (ir) applyIr(to, kind, ir);
+  }
+  if (kind === 'drum') {
+    for (let pad = 0; pad < NUM_PADS; pad++) {
+      const asset = drumPadAsset(from, pad);
+      if (asset) applyDrumPad(to, pad, asset);
+    }
   }
 }
 

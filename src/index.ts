@@ -14,6 +14,7 @@ export { ScenePlayback, type PlaybackStart, type TrackFader } from './playback/S
 export {
   prepareLiveVoices,
   disposeLiveVoices,
+  disposeVoiceHandle,
   type LiveVoiceRenderer,
   type LiveWasmBinaries,
   type LiveTrackVoices,
@@ -84,6 +85,7 @@ export {
   type FadeCurve,
   type ApplyClipFadesOptions,
 } from './clip/fades';
+export { resampleChannel, resampleAudioBufferLike } from './clip/resample';
 export {
   projectClipCrossfades,
   CROSSFADE_ADJACENCY_EPS_SEC,
@@ -245,7 +247,15 @@ export { audioPortNames, auxAudioPorts } from './asl/ports';
  */
 export { ASL } from './asl/graph';
 export type { ASLGraphDescriptor } from './asl/graph';
-export type { ASLNode, NodeKind, TransportField, LooperBox } from './asl/types';
+export type { ASLNode, NodeKind, TransportField, LooperBox, SampleBox } from './asl/types';
+/**
+ * The chainable value every builder returns, as a type.
+ *
+ * A package that writes its own ASL helpers ("give me the 026S bit crusher as
+ * a graph") needs to name what it takes and returns. Without this it can
+ * build graphs but cannot declare a function that does.
+ */
+export type { ASLValue, ASLValueLike } from './asl/ASLValue';
 export type { LooperField } from './asl/builders';
 export { ALL_NODE_KINDS, ALL_TRANSPORT_FIELDS } from './asl/types';
 export {

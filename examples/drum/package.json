@@ -1,0 +1,13 @@
+{
+  "name": "audiocrate-drum",
+  "version": "0.0.1",
+  "private": true,
+  "description": "16-pad sampler AudioMaterial. Pure ASL, no kernel.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}

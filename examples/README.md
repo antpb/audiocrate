@@ -6,10 +6,11 @@ Not in the npm package.
 |---|---|
 | [`portable-kernel/`](portable-kernel/README.md) | Freestanding wasm tremolo. The packaging walkthrough. |
 | [`amp/`](amp/) | Neural amp and analog FX. The default editor patch uses this. |
+| [`drum/`](drum/README.md) | 16-pad sampler. Pure ASL, no kernel. The stress test. |
 | [`grain/`](grain/) | Granular engine |
 | [`synth/`](synth/) | Wavetable / IR synth |
 | [`space-reverb/`](space-reverb/) | Costello room |
-| [`homecrate/`](homecrate/) | Registers the four kernels and ships the matching AudioWorklet entry |
+| [`homecrate/`](homecrate/) | Registers the plugins and ships the matching AudioWorklet entry |
 | [`xr/`](xr/) | Crate as a `THREE.Audio` source, plus an XR Publisher plugin. `npm run example:xr` |
 | [`CrateASL/`](CrateASL/) | Swift interpreter. The conformance twin. |
 

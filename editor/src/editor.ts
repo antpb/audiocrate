@@ -193,8 +193,8 @@ export class PatchEditor {
       this.materials.set(node.id, material);
       if (isTransportKind(entry.kind)) this.syncTransportFromGraph();
     }
-    await this.editor.addNode(node);
     this.kinds.set(node.id, entry.kind);
+    await this.editor.addNode(node);
     const at = position ?? {
       x: 80 + (this.dropIndex % 4) * 48,
       y: 80 + (this.dropIndex % 5) * 36,
@@ -345,8 +345,8 @@ export class PatchEditor {
       if (isLineKind(saved.kind)) node.nodeData = { monitor: 0, ...(saved.data ?? {}) };
       else if (saved.data) node.nodeData = saved.data;
       (node as { id: string }).id = saved.id;
-      await this.editor.addNode(node);
       this.kinds.set(node.id, saved.kind);
+      await this.editor.addNode(node);
       await this.area.translate(node.id, { x: saved.x, y: saved.y });
       byId.set(saved.id, node);
     }

@@ -64,9 +64,9 @@ function sourceProject(): ProjectFileData {
   return {
     id: 'proj-1',
     name: 'Export Song',
-    bpm: 120,
-    timeSigN: 4,
-    timeSigD: 4,
+    bpm: 94,
+    timeSigN: 7,
+    timeSigD: 8,
     tracks: [
       {
         id: 'track-a',
@@ -184,6 +184,9 @@ describe('exportProject', () => {
       new TextDecoder().decode(written.get('project.json')),
     );
     expect(parsed.project.id).toBe('proj-1');
+    expect(parsed.project.bpm).toBe(94);
+    expect(parsed.project.timeSigN).toBe(7);
+    expect(parsed.project.timeSigD).toBe(8);
 
     const scene = await loadProjectScene(parsed, {
       registry,
@@ -194,6 +197,9 @@ describe('exportProject', () => {
       },
     });
     expect(scene.tracks[0]!.clips).toHaveLength(1);
+    expect(scene.transport.bpm).toBe(94);
+    expect(scene.transport.beatsPerBar).toBe(7);
+    expect(scene.transport.beatUnit).toBe(8);
     expect(
       scene.tracks[0]!.materials.list[0]!.getAsset<AudioAssetData>(FUZZ_ASSET_KEY)?.filename,
     ).toBe('bright.wav');

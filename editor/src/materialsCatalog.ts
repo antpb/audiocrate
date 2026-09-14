@@ -134,6 +134,8 @@ export const MATERIAL_NOTES: Record<string, string> = {
   spatialmaster:
     'Sums any number of Spatial Sources, turns the room to face the listener, and decodes it to headphones. Yaw and pitch are the listener\'s head, not the room. This is the node that goes to Master.',
   amp: 'Neural amp (NAM) plus analog / EQ / reverb / delay. Cabinet lives on an IR node after Amp.',
+  drum:
+    'Sixteen one-shot pads on C2 to D#3, each with its own bit crusher and low-pass, into a shared filter and character stage. A pad plays to its end and ignores the note-off. Pure ASL, so no WASM. A new one arrives with the factory kit loaded.',
   grain: 'Granular instrument kernel. Needs WASM. Files are not auto-loaded.',
   synth: 'Subtractive synth kernel. Needs WASM.',
   spacereverb: 'Costello room kernel. Needs WASM.',
@@ -145,6 +147,7 @@ const FILE_SLOT: Record<string, string> = {
   ir: 'Impulse (.wav, .aiff, .flac, ...).',
   sampleplayer: 'Sample. Silent until a file is loaded.',
   wavetable: 'Optional table. 512+ samples become 256-sample frames. Clear restores the factory bank.',
+  drum: 'One sample per pad, sixteen slots. A new drum arrives with the factory kit loaded; choosing a file replaces that pad.',
 };
 
 export function undocumentedKinds(): string[] {

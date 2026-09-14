@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { lowpassMaterial } from '../../src/materials/filters';
 import { oscillatorMaterial, toneMaterial } from '../../src/materials/sources';
 import { reverbMaterial } from '../../src/materials/reverb';
-import { adsrMaterial, lfoMaterial } from '../../src/materials/control';
+import { adsrMaterial, euclideanMaterial, lfoMaterial, sequencerMaterial } from '../../src/materials/control';
 import { tunerMaterial } from '../../src/materials/meters';
 import { looperMaterial } from '../../src/materials/time';
 import { nodeInputs, nodeOutputs, tapOutputNames } from '../src/controlInputs';
 
 describe('nodeInputs', () => {
   it('exposes audio, note jacks, and automatable CV on a source', () => {
+    // The four envelope times joined the list when the Oscillator's amplitude
+    // envelope stopped being four numbers written into the graph.
     expect(nodeInputs(oscillatorMaterial)).toEqual([
       'note',
       'gate',
@@ -17,6 +19,10 @@ describe('nodeInputs', () => {
       'width',
       'octave',
       'detune',
+      'attack',
+      'decay',
+      'sustain',
+      'release',
     ]);
   });
 
@@ -31,6 +37,20 @@ describe('nodeInputs', () => {
 
   it('exposes the audio inlet plus cutoff/q on a filter', () => {
     expect(nodeInputs(lowpassMaterial)).toEqual(['input', 'cutoff', 'q']);
+  });
+
+  it('gives a sequencer a clock inlet and a cv outlet, not an audio path', () => {
+    expect(sequencerMaterial.audioInputs).toEqual([]);
+    expect(nodeInputs(sequencerMaterial)).toContain('clock');
+    expect(nodeInputs(sequencerMaterial)).not.toContain('input');
+    expect(nodeOutputs(sequencerMaterial)).toEqual(['cv']);
+  });
+
+  it('gives euclidean a clock inlet and a cv outlet', () => {
+    expect(euclideanMaterial.audioInputs).toEqual([]);
+    expect(nodeInputs(euclideanMaterial)).toContain('clock');
+    expect(nodeInputs(euclideanMaterial)).not.toContain('input');
+    expect(nodeOutputs(euclideanMaterial)).toEqual(['cv']);
   });
 
   it('gives envelopes and LFOs a cv outlet', () => {

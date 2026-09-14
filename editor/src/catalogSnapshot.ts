@@ -186,7 +186,7 @@ export function catalogSnapshot(): ModuleSnapshot[] {
   return cached;
 }
 
-const VOICE_JACKS = new Set(['note', 'gate', 'velocity', 'trig']);
+const VOICE_JACKS = new Set(['note', 'gate', 'velocity', 'trig', 'clock', 'reset']);
 const AUDIO_INLETS = new Set(['input', 'sidechain']);
 
 /**

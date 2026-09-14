@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
+import { androidChromeUsbHint } from './host/crateAudioInput';
 import { listLineInputs, type AudioInputPort } from './lineInput';
 
 interface LineDeviceSelectProps {
   deviceId: string | null;
+  openedLabel?: string | null;
+  hostError?: string | null;
   onChange: (id: string | null) => Promise<void>;
 }
 
-export function LineDeviceSelect({ deviceId, onChange }: LineDeviceSelectProps) {
+export function LineDeviceSelect({ deviceId, openedLabel, hostError, onChange }: LineDeviceSelectProps) {
   const [ports, setPorts] = useState<AudioInputPort[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const androidHint = androidChromeUsbHint(typeof navigator !== 'undefined' ? navigator.userAgent : '');
 
   const refresh = useCallback(async () => {
     try {
@@ -55,7 +59,9 @@ export function LineDeviceSelect({ deviceId, onChange }: LineDeviceSelectProps) 
           </option>
         ))}
       </select>
-      {error ? <p className="asset-slot-error">{error}</p> : null}
+      {openedLabel ? <p className="hint">Listening as {openedLabel}.</p> : null}
+      {error || hostError ? <p className="asset-slot-error">{error ?? hostError}</p> : null}
+      {androidHint ? <p className="hint">{androidHint}</p> : null}
     </label>
   );
 }

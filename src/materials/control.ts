@@ -53,10 +53,15 @@ export const sampleHoldMaterial = new AudioMaterial({
   name: 'SampleHold',
   kind: 'samplehold',
   params: {
-    freq: param.range(0.1, 20000, { default: 20, unit: 'Hz', curve: 'log' }),
+    // Down to zero, and zero means "somebody else's clock". The internal rate
+    // and an external one at the same time is two grids fighting, and the
+    // graph cannot see whether a cable is attached, so the knob is what says
+    // which is in charge.
+    freq: param.range(0, 20000, { default: 20, unit: 'Hz', curve: 'exp' }),
+    clock: param.range(0, 1, { default: 0 }),
   },
   automatable: ['freq'],
-  graph: ({ input, params }) => sampleHold(input, { freq: params.freq }),
+  graph: ({ input, params }) => sampleHold(input, { freq: params.freq, clock: params.clock }),
 });
 
 export const compareGreaterMaterial = new AudioMaterial({
@@ -84,10 +89,19 @@ export const clockMaterial = new AudioMaterial({
   kind: 'clock',
   params: {
     freq: param.range(0.1, 40, { default: 2, unit: 'Hz', curve: 'log' }),
+    // A jack, not a knob, which is why it is not automatable and why it is
+    // last: parameter order is declaration order and flatten hands out
+    // addresses along it, so appending leaves every existing address alone.
+    //
+    // Patch the Transport's `playing` here and the clock starts with the
+    // song. Without it a free-running clock is wherever it happens to be
+    // when Play arrives, and the pattern sits off the bar for as long as the
+    // plugin stays loaded.
+    reset: param.range(0, 1, { default: 0 }),
   },
   automatable: ['freq'],
   cvPolarity: 'unipolar',
-  graph: ({ params }) => clock({ freq: params.freq }),
+  graph: ({ params }) => clock({ freq: params.freq, reset: params.reset }),
 });
 
 export const clockDivideMaterial = new AudioMaterial({
@@ -95,10 +109,11 @@ export const clockDivideMaterial = new AudioMaterial({
   kind: 'clockdivide',
   params: {
     factor: param.stepped(1, 64, { step: 1, default: 2 }),
+    reset: param.range(0, 1, { default: 0 }),
   },
   automatable: ['factor'],
   cvPolarity: 'unipolar',
-  graph: ({ input, params }) => clockDivide(input, { factor: params.factor }),
+  graph: ({ input, params }) => clockDivide(input, { factor: params.factor, reset: params.reset }),
 });
 
 export const clockMultiplyMaterial = new AudioMaterial({
@@ -106,10 +121,11 @@ export const clockMultiplyMaterial = new AudioMaterial({
   kind: 'clockmultiply',
   params: {
     factor: param.stepped(1, 16, { step: 1, default: 2 }),
+    reset: param.range(0, 1, { default: 0 }),
   },
   automatable: ['factor'],
   cvPolarity: 'unipolar',
-  graph: ({ input, params }) => clockMultiply(input, { factor: params.factor }),
+  graph: ({ input, params }) => clockMultiply(input, { factor: params.factor, reset: params.reset }),
 });
 
 export const logicAndMaterial = new AudioMaterial({
@@ -174,13 +190,25 @@ export const euclideanMaterial = new AudioMaterial({
   name: 'Euclidean',
   kind: 'euclidean',
   params: {
+    clock: param.range(0, 1, { default: 0 }),
     steps: param.stepped(1, 32, { step: 1, default: 8 }),
     hits: param.stepped(0, 32, { step: 1, default: 3 }),
     rotation: param.stepped(0, 31, { step: 1, default: 0 }),
+    reset: param.range(0, 1, { default: 0 }),
   },
   automatable: ['steps', 'hits', 'rotation'],
-  graph: ({ input, params }) =>
-    euclidean(input, { steps: params.steps, hits: params.hits, rotation: params.rotation }),
+  channels: 1,
+  cvPolarity: 'unipolar',
+  graph: ({ params }) =>
+    euclidean(params.clock, {
+      steps: params.steps,
+      hits: params.hits,
+      rotation: params.rotation,
+      // A synced clock is already on the grid, and the step counter under it
+      // is not: it starts wherever it was left, so the pattern's first hit
+      // lands on an arbitrary beat. This is what puts step zero on Play.
+      reset: params.reset,
+    }),
 });
 
 export const randomSteppedMaterial = new AudioMaterial({
@@ -229,6 +257,7 @@ export const sequencerMaterial = new AudioMaterial({
   name: 'Sequencer',
   kind: 'sequencer',
   params: {
+    clock: param.range(0, 1, { default: 0 }),
     step0: param.range(-1, 1, { default: 0 }),
     step1: param.range(-1, 1, { default: 0.25 }),
     step2: param.range(-1, 1, { default: 0.5 }),
@@ -237,10 +266,12 @@ export const sequencerMaterial = new AudioMaterial({
     step5: param.range(-1, 1, { default: 0.75 }),
     step6: param.range(-1, 1, { default: 0.5 }),
     step7: param.range(-1, 1, { default: 0.25 }),
+    reset: param.range(0, 1, { default: 0 }),
   },
   automatable: ['step0', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step7'],
-  graph: ({ input, params }) =>
-    sequencer(input, [
+  channels: 1,
+  graph: ({ params }) =>
+    sequencer(params.clock, [
       params.step0,
       params.step1,
       params.step2,
@@ -249,7 +280,7 @@ export const sequencerMaterial = new AudioMaterial({
       params.step5,
       params.step6,
       params.step7,
-    ]),
+    ], { reset: params.reset }),
 });
 
 /**
@@ -336,12 +367,24 @@ export const lfoMaterial = new AudioMaterial({
     width: param.range(0, 1, { default: 0.5, label: 'Shape' }),
     rate: param.range(0.05, 20, { default: 0.4, unit: 'Hz', curve: 'log' }),
     amount: param.range(0, 1, { default: 0.35 }),
+    // Where in the cycle the shape is read, so two LFOs at one rate can sit
+    // apart instead of on top of each other.
+    phase: param.range(0, 1, { default: 0, label: 'Phase' }),
+    // A jack, like the clocks. Patch the Transport's `playing` here and the
+    // sweep starts with the song instead of wherever the plugin was loaded.
+    reset: param.range(0, 1, { default: 0 }),
   },
-  automatable: ['rate', 'amount', 'width'],
+  automatable: ['rate', 'amount', 'width', 'phase'],
   channels: 1,
   cvPolarity: 'bipolar',
   graph: ({ params }) =>
-    lfo({ rate: params.rate, shape: params.type, width: params.width }).mul(params.amount),
+    lfo({
+      rate: params.rate,
+      shape: params.type,
+      width: params.width,
+      phase: params.phase,
+      reset: params.reset,
+    }).mul(params.amount),
 });
 
 export const breakpointEnvelopeMaterial = new AudioMaterial({
