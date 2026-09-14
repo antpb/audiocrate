@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0
+
 ### Added
 
 - **Block-rate evaluation of parameter-only subtrees.** A subtree built from
@@ -44,6 +46,11 @@
   and release were four numbers written into the graph. They are parameters
   now, defaulted to those numbers, built from `env.dahdsr` so a live value can
   reach them. SynthVoice and Wavetable already exposed theirs.
+- Drum plugin example, factory kit, and pad editing in the patcher.
+- Line / Mic device picker. Android Chrome lists USB audio but often still
+  captures the phone microphone; the inspector now says what actually opened.
+- A module dropped while Play is running joins the live graph. Stop and Play
+  are no longer required to hear it.
 
 ### Changed
 
