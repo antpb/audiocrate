@@ -44,6 +44,38 @@ public struct MaterialCatalog: Decodable, Sendable {
         materialsByKind = Dictionary(uniqueKeysWithValues: materials.map { ($0.kind, $0) })
         toolsByKind = Dictionary(uniqueKeysWithValues: tools.map { ($0.kind, $0) })
         kernelsByKind = Dictionary(uniqueKeysWithValues: kernels.map { ($0.kind, $0) })
+        // Walked once here rather than per cable: an audit asks this of every
+        // connection in a patch, and the answer cannot change after decoding.
+        readParams = Dictionary(
+            uniqueKeysWithValues: materials.map { ($0.kind, $0.paramsTheGraphReads) }
+        )
+    }
+
+    private let readParams: [String: Set<String>]
+
+    /// Whether a cable into this inlet reaches anything.
+    ///
+    /// One rule, and it is `flattenPatch`'s rule read backwards. Flatten
+    /// lowers a cable into a value and then rewrites the material's graph,
+    /// replacing every `param` node of that name with it. A name the graph
+    /// never reads has no node to replace, so the value is built and thrown
+    /// away: the cable is in the document, the patch validates, the graph
+    /// compiles, and the sound does not change.
+    ///
+    /// That is how the ADSR came to have a `note` jack and the two spatial
+    /// modules five position jacks. Derived rather than listed, because a list
+    /// goes stale the first time somebody edits a material's graph.
+    ///
+    /// A host tool is judged by its declared jacks instead: Master, Line,
+    /// Keyboard and the rest are resolved by flatten itself and have no
+    /// material graph to read. Answering an unconditional true for them was
+    /// wrong in a way worth recording, because it does not look wrong: it made
+    /// Master appear to accept a `reset`, so the audit reported that the
+    /// output was not starting with the song.
+    public func canReceiveCable(kind: String, inlet: String) -> Bool {
+        if isHostTool(kind) { return jacks(kind)?.inputs.contains(inlet) == true }
+        guard let material = material(kind) else { return false }
+        return material.isAudioInlet(inlet) || readParams[kind]?.contains(inlet) == true
     }
 
     public static func decode(_ data: Data) throws -> MaterialCatalog {
@@ -294,6 +326,23 @@ public struct CatalogMaterialEntry: Decodable, Sendable, Identifiable {
 
     public func isAudioInlet(_ name: String) -> Bool { audioInputs.contains(name) }
     public func param(_ name: String) -> CrateParamDescriptor? { params[name] }
+
+    /// Every `param` name this material's graph reads, computed once when the
+    /// catalog is decoded. See `MaterialCatalog.canReceiveCable`.
+    public var paramsTheGraphReads: Set<String> {
+        var names = Set<String>()
+        var seen = Set<Int>()
+        func walk(_ node: ASLNodeDocument) {
+            guard seen.insert(node.id).inserted else { return }
+            if node.kind == "param", case let .string(name)? = node.params["name"] {
+                names.insert(name)
+            }
+            for (_, child) in node.inputs { walk(child) }
+            for child in node.list ?? [] { walk(child) }
+        }
+        walk(graph.output)
+        return names
+    }
 
     /// Params in declaration order, skipping any the catalog lists in
     /// `paramOrder` but does not describe. That mismatch cannot happen in a

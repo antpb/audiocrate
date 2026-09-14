@@ -40,8 +40,13 @@ public enum CrateFlatten {
         case instrument
     }
 
-    /// Inlets a keyboard drives per note rather than per sample.
-    private static let noteInputs: Set<String> = ["note", "gate", "velocity", "trig", "clock"]
+    /// Inlets that carry a value in real units rather than a knob position.
+    ///
+    /// A cable landing on one of these is not mapped across a parameter's
+    /// declared range: a note arrives as MIDI 48..72 and a trigger arrives as
+    /// 0 or 1. `reset` belongs here for the same reason `clock` does, which is
+    /// that an edge is an edge whatever the parameter behind it says.
+    private static let noteInputs: Set<String> = ["note", "gate", "velocity", "trig", "clock", "reset"]
 
     // MARK: - Role
 

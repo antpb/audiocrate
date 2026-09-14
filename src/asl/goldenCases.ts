@@ -281,6 +281,54 @@ export const sourceCases: Record<string, ASLGraphDescriptor> = {
     select(osc({ freq: note.toFrequency() }), lfo({ rate: uniform(40) }), { which: clock({ freq: uniform(200) }) }),
   ),
   'clock multiply': ASL.node(() => clockMultiply(clock({ freq: uniform(300) }), { factor: uniform(4) })),
+  // Reset, on the five nodes that carry a position in a pattern. A slow
+  // clock resets a fast one, which is the shape of the real use (the
+  // transport's `playing` restarting the patch on the bar) with nothing
+  // stateful outside the graph. The driven clocks are deliberately not whole
+  // multiples of the driver, so a node that ignores its reset and one that
+  // honours it cannot produce the same samples.
+  'clock reset': ASL.node(() => clock({ freq: uniform(700), reset: clock({ freq: uniform(190) }) })),
+  'clock divide reset': ASL.node(() =>
+    clockDivide(clock({ freq: uniform(900) }), { factor: uniform(3), reset: clock({ freq: uniform(170) }) }),
+  ),
+  'clock multiply reset': ASL.node(() =>
+    clockMultiply(clock({ freq: uniform(300) }), { factor: uniform(4), reset: clock({ freq: uniform(130) }) }),
+  ),
+  'euclidean reset': ASL.node(() =>
+    euclidean(clock({ freq: uniform(800) }), {
+      steps: uniform(8),
+      hits: uniform(3),
+      reset: clock({ freq: uniform(210) }),
+    }),
+  ),
+  'sequencer reset': ASL.node(() =>
+    sequencer(clock({ freq: uniform(500) }), [uniform(0.1), uniform(0.5), uniform(-0.3)], {
+      reset: clock({ freq: uniform(160) }),
+    }),
+  ),
+
+  // An LFO can be restarted and offset. Both are read, not stored: `phase`
+  // shifts where the shape is sampled while the cycle keeps running, which is
+  // what lets two LFOs at one rate sit apart. A supersquare case as well,
+  // because that shape is the one with a second phase of its own and so the
+  // one an offset can get wrong.
+  'lfo reset': ASL.node(() => lfo({ rate: uniform(40), reset: clock({ freq: uniform(170) }) })),
+  'lfo phase': ASL.node(() => lfo({ rate: uniform(35), phase: uniform(0.25) })),
+  'lfo phase supersquare': ASL.node(() =>
+    lfo({ rate: uniform(30), shape: 'supersquare', width: uniform(0.4), phase: uniform(0.3) }),
+  ),
+
+  // Sample and hold on somebody else's clock, with its own rate switched off.
+  // The pair matters: one case proves the external clock samples, and the
+  // other that `freq` at zero really does stop the internal one, which is
+  // what keeps the two grids from fighting.
+  'sample hold clocked': ASL.node(() =>
+    sampleHold(lfo({ rate: uniform(311) }), { freq: uniform(0), clock: clock({ freq: uniform(90) }) }),
+  ),
+  'sample hold both clocks': ASL.node(() =>
+    sampleHold(lfo({ rate: uniform(311) }), { freq: uniform(70), clock: clock({ freq: uniform(90) }) }),
+  ),
+
   grain: ASL.node(() =>
     grain(clock({ freq: uniform(400) }), {
       duration: uniform(0.002),
@@ -347,6 +395,14 @@ export const insertCases: Record<string, ASLGraphDescriptor> = {
   'svf highpass': ASL.node(({ cutoff }) => filter.svf(audio.input(), { cutoff, q: uniform(2), mode: 'highpass' })),
   'svf bandpass': ASL.node(({ cutoff }) => filter.svf(audio.input(), { cutoff, q: uniform(2), mode: 'bandpass' })),
   ladder: ASL.node(({ cutoff }) => filter.ladder(audio.input(), { cutoff, resonance: uniform(0.6) })),
+  // Drive saturates into the filter. The pair is the assertion: at 1 it must
+  // be the plain ladder to the bit, and above it must not be.
+  'ladder drive unity': ASL.node(() =>
+    filter.ladder(audio.input(), { cutoff: uniform(900), resonance: uniform(0.4), drive: uniform(1) }),
+  ),
+  'ladder drive': ASL.node(() =>
+    filter.ladder(audio.input(), { cutoff: uniform(900), resonance: uniform(0.4), drive: uniform(5) }),
+  ),
   comb: ASL.node(() => filter.comb(audio.input(), { freq: uniform(180) })),
   'slope 4 pole': ASL.node(({ cutoff }) => filter.slope(audio.input(), { cutoff, poles: 4 })),
   'slope highpass': ASL.node(({ cutoff }) => filter.slope(audio.input(), { cutoff, poles: 3, mode: 'highpass' })),

@@ -457,7 +457,13 @@ extension CompiledVoice {
         }
         let g = mem.pointee.c0
         let k = min(max(resonance, 0), 0.99) * 4
-        let x = input - k * tanh(mem.pointee.s3)
+        // Drive is a saturation into the filter, normalised so that 1 is
+        // exactly unity. `tanh(x * d) / tanh(d)` is the usual shape but is not
+        // the identity at d = 1, so the default is a branch rather than a
+        // formula: a ladder that already exists must sound like itself.
+        let drive = node.has(.drive) ? ev(node, .drive, state, sr) : 1
+        let driven = drive == 1 ? input : tanh(input * drive) / tanh(drive)
+        let x = driven - k * tanh(mem.pointee.s3)
         mem.pointee.s0 += g * (x - mem.pointee.s0)
         mem.pointee.s1 += g * (mem.pointee.s0 - mem.pointee.s1)
         mem.pointee.s2 += g * (mem.pointee.s1 - mem.pointee.s2)
@@ -805,6 +811,16 @@ extension CompiledVoice {
         let input = ev(node, .input, state, sr)
         let factor = max(1, jsRound(ev(node, .factor, state, sr)))
         let mem = state.memory(for: node.slot)
+        // Back to knowing nothing. The interval is learned from two
+        // consecutive input ticks, and one learned before a reset was
+        // measured against a position the patch has left.
+        if resetRose(node, state, sr, mem) {
+            mem.pointee.since = 0
+            mem.pointee.interval = 0
+            mem.pointee.nextAt = 0
+            mem.pointee.left = 0
+            mem.pointee.armed = false
+        }
         let rose = input > 0.5 && mem.pointee.prev <= 0.5
         mem.pointee.prev = input
         if rose {
@@ -832,6 +848,10 @@ extension CompiledVoice {
         let hits = ev(node, .hits, state, sr)
         let rotation = ev(node, .rotation, state, sr)
         let mem = state.memory(for: node.slot)
+        // Before the first step, so the next clock is step zero. The cached
+        // pattern is kept: it depends on the three settings and not on where
+        // in it the node had got to.
+        if resetRose(node, state, sr, mem) { mem.pointee.index = -1 }
         let rose = input > 0.5 && mem.pointee.prev <= 0.5
         mem.pointee.prev = input
         if !rose { return 0 }

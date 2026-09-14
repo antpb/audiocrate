@@ -205,6 +205,7 @@ export function isControlJack(name: string): boolean {
     name === 'velocity' ||
     name === 'trig' ||
     name === 'clock' ||
+    name === 'reset' ||
     name === 'cv'
   );
 }

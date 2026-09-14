@@ -1,6 +1,6 @@
 import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
-import { compare, compressor, envFollow, expander, transient } from '../asl/builders';
+import { compare, compressor, envFollow, expander, logic, pulse, transient } from '../asl/builders';
 
 export const compressorMaterial = new AudioMaterial({
   name: 'Compressor',
@@ -50,11 +50,21 @@ export const gateMaterial = new AudioMaterial({
     threshold: param.range(0.001, 1, { default: 0.05 }),
     attack: param.range(0.001, 0.2, { default: 0.002, unit: 's', curve: 'exp' }),
     release: param.range(0.01, 1, { default: 0.05, unit: 's', curve: 'exp' }),
+    // The shortest time the gate may stay open once it has opened. Without
+    // one, material that decays across the threshold chatters: the gate
+    // closes, the tail is still ringing, it opens again, and the result is a
+    // buzz rather than silence. A pulse holds it open, so the whole thing is
+    // ASL rather than a second envelope in the kernel.
+    hold: param.range(0, 0.5, { default: 0, unit: 's' }),
   },
-  automatable: ['threshold', 'attack', 'release'],
+  automatable: ['threshold', 'attack', 'release', 'hold'],
   graph: ({ input, params }) => {
     const envelope = envFollow(input, { attack: params.attack, release: params.release });
-    return input.mul(compare(envelope, { threshold: params.threshold, mode: 'gt' }));
+    const open = compare(envelope, { threshold: params.threshold, mode: 'gt' });
+    // At hold 0 the pulse is one sample wide and lands on the sample `open`
+    // already went high, so the or is exactly `open` and a gate that exists
+    // keeps sounding like itself.
+    return input.mul(logic.or(open, pulse(open, { widthSec: params.hold })));
   },
 });
 

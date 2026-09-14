@@ -140,10 +140,25 @@ describe('the block buffers', () => {
 
 describe('note control', () => {
   it('reset discards the tail, noteOff does not', () => {
+    // The envelope times are passed explicitly because the Oscillator's
+    // amplitude envelope is a live parameter now rather than four numbers
+    // written into the graph, and a `BlockRenderer` is handed a graph rather
+    // than a material, so it has no schema to take defaults from. A param
+    // this renderer is not told about reads as 0, and an envelope of all
+    // zeroes has no tail to assert about. SynthVoice and Wavetable have
+    // always worked this way.
     const make = () =>
       new BlockRenderer(oscillatorMaterial.graph, {
         sampleRate: SR,
-        params: { note: 69, velocity: 1, gain: 0.5 },
+        params: {
+          note: 69,
+          velocity: 1,
+          gain: 0.5,
+          attack: 0.005,
+          decay: 0.08,
+          sustain: 0.7,
+          release: 0.2,
+        },
       });
 
     const released = make();

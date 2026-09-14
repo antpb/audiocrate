@@ -145,10 +145,17 @@ export const ladderMaterial = new AudioMaterial({
   params: {
     cutoff: param.range(20, 20000, { default: 1000, unit: 'Hz', curve: 'log' }),
     resonance: param.range(0, 0.99, { default: 0 }),
+    // Saturation into the filter. 1 is exactly clean, so a ladder that
+    // already exists keeps sounding like itself.
+    drive: param.range(1, 8, { default: 1 }),
   },
-  automatable: ['cutoff', 'resonance'],
+  automatable: ['cutoff', 'resonance', 'drive'],
   graph: ({ input, params }) =>
-    filter.ladder(input, { cutoff: params.cutoff, resonance: params.resonance }),
+    filter.ladder(input, {
+      cutoff: params.cutoff,
+      resonance: params.resonance,
+      drive: params.drive,
+    }),
 });
 
 export const combMaterial = new AudioMaterial({

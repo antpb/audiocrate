@@ -9,6 +9,8 @@ import { nodeInputs, nodeOutputs, tapOutputNames } from '../src/controlInputs';
 
 describe('nodeInputs', () => {
   it('exposes audio, note jacks, and automatable CV on a source', () => {
+    // The four envelope times joined the list when the Oscillator's amplitude
+    // envelope stopped being four numbers written into the graph.
     expect(nodeInputs(oscillatorMaterial)).toEqual([
       'note',
       'gate',
@@ -17,6 +19,10 @@ describe('nodeInputs', () => {
       'width',
       'octave',
       'detune',
+      'attack',
+      'decay',
+      'sustain',
+      'release',
     ]);
   });
 

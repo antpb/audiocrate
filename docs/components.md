@@ -41,7 +41,7 @@ Note-driven or free-running. These read no input.
 
 | AudioMaterial | Parameters | |
 |---|---|---|
-| `oscillatorMaterial` | `type`, `width`, `octave`, `detune`, `gain` | Polyphonic note-driven oscillator with an amplitude envelope |
+| `oscillatorMaterial` | `type`, `width`, `octave`, `detune`, `gain`, ADSR | Polyphonic note-driven oscillator. The envelope is live, like SynthVoice's and Wavetable's |
 | `toneMaterial` | `freq`, `gain` | Free-running sine. Sounds on Play without a gate |
 | `noiseMaterial` | `color`, `gain`, `cutoff` | Six spectral colors through a lowpass |
 | `impulseMaterial` | | A single-sample impulse from a gate |
@@ -66,7 +66,7 @@ Note-driven or free-running. These read no input.
 | `svfLowpassMaterial` | `cutoff`, `q` | A topology that stays stable under fast modulation |
 | `svfHighpassMaterial` | `cutoff`, `q` | |
 | `svfBandpassMaterial` | `cutoff`, `q` | |
-| `ladderMaterial` | `cutoff`, `resonance` | Resonant ladder |
+| `ladderMaterial` | `cutoff`, `resonance`, `drive` | Resonant ladder. `drive` saturates into the filter, and 1 is exactly clean |
 | `combMaterial` | `freq`, `feedback`, `mix` | Tuned comb |
 | `slopeLowpass12Material` | `cutoff` | Fixed slope, no resonance control |
 | `slopeLowpass24Material` | `cutoff` | |
@@ -96,7 +96,7 @@ lowpass and a static lowpass use different implementations.
 |---|---|---|
 | `compressorMaterial` | `threshold`, `ratio`, `attack`, `release`, `makeup`, `mix` | Mix at 0 is dry |
 | `limiterMaterial` | `threshold`, `attack`, `release` | |
-| `gateMaterial` | `threshold`, `attack`, `release` | |
+| `gateMaterial` | `threshold`, `attack`, `release`, `hold` | `hold` is the shortest time it may stay open, so decaying material does not chatter it |
 | `expanderMaterial` | `threshold`, `ratio`, `attack`, `release` | |
 | `transientMaterial` | `attack`, `sustain` | Shapes attack and sustain independently of level |
 | `envelopeFollowerMaterial` | `attack`, `release` | Output is a control signal, not audio |
@@ -127,11 +127,11 @@ None of these produce audio. They produce numbers that drive things that do.
 | `controlMaterial` | `value` | A constant, so an automation lane has something to write to |
 | `offsetMaterial` | `amount` | Adds a constant |
 | `slewMaterial` | `rise`, `fall` | Rate limiter, with asymmetric rise and fall |
-| `sampleHoldMaterial` | `freq` | |
+| `sampleHoldMaterial` | `freq`, `clock` (jack) | `freq` at 0 means somebody else's clock |
 | `transportMaterial` | `bpm`, `beatsPerBar`, `beatUnit` (steppers) | Host tempo and time signature. Params publish the session clock. The graph outlet is a quarter-note pulse. The editor also exposes `bpm`, `beats`, `bars`, `playing`, `beatsPerBar`, `beatUnit`, and `pulse` jacks |
-| `clockMaterial` | `freq` | Free-running pulse train |
-| `clockDivideMaterial` | `factor` (stepper) | |
-| `clockMultiplyMaterial` | `factor` (stepper) | |
+| `clockMaterial` | `freq`, `reset` (jack) | Free-running pulse train |
+| `clockDivideMaterial` | `factor` (stepper), `reset` (jack) | |
+| `clockMultiplyMaterial` | `factor` (stepper), `reset` (jack) | |
 | `triggerMaterial` | `threshold` | An edge when the input crosses |
 | `pulseMaterial` | `widthSec` | Fixed-width pulse from an edge |
 | `flipFlopMaterial` | | Toggles on each edge |
@@ -142,18 +142,57 @@ None of these produce audio. They produce numbers that drive things that do.
 | `logicXorMaterial` | `other` | |
 | `logicNotMaterial` | | |
 | `quantizeMaterial` | `root`, `scale` (menus) | Snaps a pitch signal to a scale. Note names and scale names, not indices |
-| `euclideanMaterial` | `steps`, `hits`, `rotation` (steppers) | Evenly spread hits across a step count |
-| `sequencerMaterial` | `step0` to `step7` | Advances through eight values on a clock |
+| `euclideanMaterial` | `steps`, `hits`, `rotation` (steppers), `clock` and `reset` (jacks) | Evenly spread hits across a step count |
+| `sequencerMaterial` | `step0` to `step7`, `clock` and `reset` (jacks) | Advances through eight values on a clock |
 | `randomSteppedMaterial` | `freq` | New value per tick |
 | `randomSmoothMaterial` | `freq` | Interpolated between values |
 | `adsrMaterial` | `attack`, `decay`, `sustain`, `release`, `amount` | Note-driven. Times are live |
 | `dahdsrMaterial` | `delay`, `attack`, `hold`, `decay`, `sustain`, `release` | |
 | `syncedRampMaterial` | `division` (menu), `depth` | A 0..1 ramp locked to the grid |
 | `syncedClockMaterial` | `division` (menu) | A pulse on each division boundary, for the sequencer nodes. Reads the host snapshot. Does not set bpm |
-| `lfoMaterial` | `type`, `width`, `rate`, `amount` | Same eight waves as the oscillator, at control rate |
+| `lfoMaterial` | `type`, `width`, `rate`, `amount`, `phase`, `reset` (jack) | Same eight waves as the oscillator, at control rate. `phase` offsets where the shape is read without moving where the cycle has got to |
 | `breakpointEnvelopeMaterial` | `time0`..`time3`, `level0`..`level3` | Four live points from a gate |
 
 This is the largest category.
+
+**Jacks a cable cannot drive.** Nine inlets the palette draws accept a cable,
+save it in the document, and have no effect on the sound. They are two
+different things wearing one face.
+
+`gate` on the four polyphonic voices (SynthVoice, Oscillator, Wavetable, ADSR)
+belongs to the voice allocator rather than to the graph: it is a flag on the
+render state, not a value a node can read. It stays on the canvas because a
+*keyboard* cable into it is not a signal, it is the statement that this module
+is what the keys play, and flatten reads it exactly that way while contributing
+no node. To gate a voice from inside a patch, drive its `gain` or `velocity`;
+both are live.
+
+The five position parameters on the two spatial modules (`spatialsource.x/y/z`,
+`spatialmaster.yaw/pitch`) are real controls whose effect lives outside the
+graph: an automation lane writes them, they are saved with the patch, and the
+host's spatial renderer acts on them. What cannot reach them is a cable. That
+is a gap in those two modules rather than in the palette, and removing the
+jacks would hide a control that works to conceal one route into it that does
+not.
+
+To gate an envelope from inside a patch, use `dahdsrMaterial`, whose trigger is
+`input`, a real audio inlet. `breakpointEnvelopeMaterial` and
+`samplePlayerMaterial` take theirs the same way. The list is pinned by
+`DeadJackTests` in the Swift package, which measures it rather than trusting
+it: a new dead jack fails, and so does fixing one.
+
+**Reset.** The five modules that carry a position in a pattern (Clock, Clock
+Divide, Clock Multiply, Euclidean, Sequencer) take a `reset` jack. A rising
+edge puts the module back to its first step; it is edge-triggered, so a signal
+held high resets once rather than pinning the pattern at step zero.
+
+Patch the Transport's `playing` outlet into it and the pattern starts with the
+song. That cable is the point of the jack: a free-running clock's phase has
+nothing to do with the song, and a step counter under even a Synced Clock is
+wherever it was left, so without a reset a pattern comes back rotated by
+however far it had got when somebody last pressed Stop. Synced Clock and
+Synced Ramp need no reset, being read off the song position with no state of
+their own, but anything counting steps downstream of one does.
 
 `transportMaterial` publishes the session clock. Clock is free-running Hz.
 Synced Clock reads the host snapshot and does not set bpm. Synced Delay and
@@ -212,7 +251,7 @@ These read a second live input. Declare where it comes from with
 |---|---|---|
 | `sidechainCompressorMaterial` | `threshold`, `ratio`, `attack`, `release` | Compresses one signal by another's level |
 | `duckerMaterial` | `amount`, `attack`, `release` | One control |
-| `sidechainGateMaterial` | `threshold`, `attack`, `release` | Opens when the detector does |
+| `sidechainGateMaterial` | `threshold`, `attack`, `release`, `hold` | Opens when the detector does |
 | `audioMultiplyMaterial` | `mix` | Ring modulation by a live signal |
 | `audioMixMaterial` | `level` | Sums a second input |
 | `crossfadeMaterial` | `position` | |
@@ -257,7 +296,7 @@ Every value is chainable:
 
 ```ts
 osc({ freq, type?, width? })        // sine, saw, square, triangle
-lfo({ rate, shape?, width? })
+lfo({ rate, shape?, width?, phase?, reset? })
 noise({ color? })                  // white, pink, brown
 impulse({ gate? })
 wavetable({ freq, table?, position?, frameSize? })
@@ -279,7 +318,7 @@ filter.highshelf(x, { freq, gainDb, q? })
 filter.onePoleLowpass(x, { cutoff })
 filter.onePoleHighpass(x, { cutoff })
 filter.svf(x, { cutoff, q?, mode? })
-filter.ladder(x, { cutoff, resonance? })
+filter.ladder(x, { cutoff, resonance?, drive? })
 filter.comb(x, { freq, feedback?, mix? })
 filter.slope(x, { cutoff, poles?, mode? })
 dcBlock(x)
@@ -327,20 +366,20 @@ envFollow(x, { attack?, release? })
 ### Control
 
 ```ts
-clock({ freq? })
-clockDivide(x, { factor? })
-clockMultiply(x, { factor? })
+clock({ freq?, reset? })
+clockDivide(x, { factor?, reset? })
+clockMultiply(x, { factor?, reset? })
 trigger(x, { threshold? })
 pulse(x, { widthSec? })
 flipFlop(x)
 compare(x, { threshold?, mode? })
 logic.and(a, b)   logic.or(a, b)   logic.xor(a, b)   logic.not(a)
 quantize(x, { root?, scale? })
-euclidean(clockIn, { steps?, hits?, rotation? })
-sequencer(clockIn, [ ... ])
+euclidean(clockIn, { steps?, hits?, rotation?, reset? })
+sequencer(clockIn, [ ... ], { reset? })
 random({ freq?, mode? })
 slew(x, { rise?, fall? })
-sampleHold(x, { freq? })
+sampleHold(x, { freq?, clock? })
 ```
 
 `quantizeToScale`, `euclideanPattern`, and `QUANTIZE_SCALES` are exported

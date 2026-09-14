@@ -85,7 +85,7 @@ No parameters.
 
 Keyboard voice. Eight waves, octave and detune, a short amp envelope.
 
-- Jacks: in note, gate, velocity, gain(cv), width(cv), octave(cv), detune(cv) / out audio
+- Jacks: in note, gate, velocity, gain(cv), width(cv), octave(cv), detune(cv), attack(cv), decay(cv), sustain(cv), release(cv) / out audio
 - Voices: 8 (oldest steal)
 
 | Param | Control | Range | Default | CV |
@@ -95,6 +95,10 @@ Keyboard voice. Eight waves, octave and detune, a short amp envelope.
 | `octave` | stepper | -2..2 step 1 | 0 | yes |
 | `detune` | fader | -100..100 ct | 0 ct | yes |
 | `gain` | fader | 0..1 | 0.4 | yes |
+| `attack` | fader | 0.001..2 s exp | 0.01 s | yes |
+| `decay` | fader | 0.001..2 s exp | 0.08 s | yes |
+| `sustain` | fader | 0..1 | 0.7 | yes |
+| `release` | fader | 0.001..4 s exp | 0.2 s | yes |
 
 ### Tone (`tone`)
 
@@ -322,12 +326,13 @@ State-variable bandpass.
 
 Resonant ladder lowpass. Resonance has character.
 
-- Jacks: in input(audio), cutoff(cv), resonance(cv) / out audio
+- Jacks: in input(audio), cutoff(cv), resonance(cv), drive(cv) / out audio
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `cutoff` | fader | 20..20000 Hz log | 1000 Hz | yes |
 | `resonance` | fader | 0..0.99 | 0 | yes |
+| `drive` | fader | 1..8 | 1 | yes |
 
 ### Comb (`comb`)
 
@@ -433,13 +438,14 @@ Compressor locked to a high ratio.
 
 Opens when the envelope is above threshold.
 
-- Jacks: in input(audio), threshold(cv), attack(cv), release(cv) / out audio
+- Jacks: in input(audio), threshold(cv), attack(cv), release(cv), hold(cv) / out audio
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `threshold` | fader | 0.001..1 | 0.05 | yes |
 | `attack` | fader | 0.001..0.2 s exp | 0 s | yes |
 | `release` | fader | 0.01..1 s exp | 0.05 s | yes |
+| `hold` | fader | 0..0.5 s | 0 s | yes |
 
 ### Expander (`expander`)
 
@@ -494,13 +500,14 @@ Compressor keyed by a second audio inlet named sidechain.
 
 Gate keyed by a second audio inlet named sidechain.
 
-- Jacks: in input(audio), sidechain(audio), threshold(cv), attack(cv), release(cv) / out audio
+- Jacks: in input(audio), sidechain(audio), threshold(cv), attack(cv), release(cv), hold(cv) / out audio
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `threshold` | fader | 0..1 | 0.1 | yes |
 | `attack` | fader | 0.001..0.5 s exp | 0 s | yes |
 | `release` | fader | 0.005..2 s exp | 0.1 s | yes |
+| `hold` | fader | 0..0.5 s | 0 s | yes |
 
 ## Shape
 
@@ -677,12 +684,13 @@ Host tempo and time signature. Params publish bpm, beatsPerBar, and beatUnit. Ou
 
 Free-running pulse train. Output is CV, not audio.
 
-- Jacks: in freq(cv) / out cv
+- Jacks: in reset, freq(cv) / out cv
 - Outlet: unipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `freq` | fader | 0.1..40 Hz log | 2 Hz | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### Synced Clock (`syncedclock`)
 
@@ -699,23 +707,25 @@ A pulse on each tempo division. Output is CV.
 
 Passes one pulse every N incoming pulses.
 
-- Jacks: in input(audio), factor(cv) / out cv
+- Jacks: in input(audio), reset, factor(cv) / out cv
 - Outlet: unipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `factor` | stepper | 1..64 step 1 | 2 | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### Clock Multiply (`clockmultiply`)
 
 Emits extra pulses between incoming ones.
 
-- Jacks: in input(audio), factor(cv) / out cv
+- Jacks: in input(audio), reset, factor(cv) / out cv
 - Outlet: unipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
 | `factor` | stepper | 1..16 step 1 | 2 | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### Pulse (`pulse`)
 
@@ -743,7 +753,7 @@ Fires when the input crosses threshold upward.
 
 Eight stepped values advanced by a clock. Output is CV.
 
-- Jacks: in clock, step0(cv), step1(cv), step2(cv), step3(cv), step4(cv), step5(cv), step6(cv), step7(cv) / out cv
+- Jacks: in clock, reset, step0(cv), step1(cv), step2(cv), step3(cv), step4(cv), step5(cv), step6(cv), step7(cv) / out cv
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
@@ -756,6 +766,7 @@ Eight stepped values advanced by a clock. Output is CV.
 | `step5` | fader | -1..1 | 0.75 | yes |
 | `step6` | fader | -1..1 | 0.5 | yes |
 | `step7` | fader | -1..1 | 0.25 | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### Smooth Random (`randomsmooth`)
 
@@ -804,7 +815,7 @@ Amplitude modulation locked to a tempo division.
 
 Bipolar control oscillator. Same eight waves as Oscillator, at control rate.
 
-- Jacks: in rate(cv), amount(cv), width(cv) / out cv
+- Jacks: in reset, rate(cv), amount(cv), width(cv), phase(cv) / out cv
 - Outlet: bipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
@@ -813,12 +824,14 @@ Bipolar control oscillator. Same eight waves as Oscillator, at control rate.
 | `width` | fader | 0..1 | 0.5 | yes |
 | `rate` | fader | 0.05..20 Hz log | 0.4 Hz | yes |
 | `amount` | fader | 0..1 | 0.35 | yes |
+| `phase` | fader | 0..1 | 0 | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### ADSR (`adsr`)
 
 Note-driven envelope. Times are live. Output is unipolar CV.
 
-- Jacks: in note, gate, velocity, attack(cv), decay(cv), sustain(cv), release(cv), amount(cv) / out cv
+- Jacks: in gate, velocity, attack(cv), decay(cv), sustain(cv), release(cv), amount(cv) / out cv
 - Voices: 8 (oldest steal)
 - Outlet: unipolar CV (jack name cv)
 
@@ -913,11 +926,12 @@ Rate limiter with separate rise and fall speeds.
 
 Samples the input at freq and holds it.
 
-- Jacks: in input(audio), freq(cv) / out audio(cv)
+- Jacks: in input(audio), clock, freq(cv) / out audio(cv)
 
 | Param | Control | Range | Default | CV |
 |---|---|---|---|---|
-| `freq` | fader | 0.1..20000 Hz log | 20 Hz | yes |
+| `freq` | fader | 0..20000 Hz exp | 20 Hz | yes |
+| `clock` | fader | 0..1 | 0 |  |
 
 ### Compare > (`comparegt`)
 
@@ -1000,7 +1014,7 @@ Snaps a MIDI-style pitch number to a scale. Root and scale are menus.
 
 Evenly spaced hits across a step count, advanced by a clock.
 
-- Jacks: in clock, steps(cv), hits(cv), rotation(cv) / out cv
+- Jacks: in clock, reset, steps(cv), hits(cv), rotation(cv) / out cv
 - Outlet: unipolar CV (jack name cv)
 
 | Param | Control | Range | Default | CV |
@@ -1009,6 +1023,7 @@ Evenly spaced hits across a step count, advanced by a clock.
 | `steps` | stepper | 1..32 step 1 | 8 | yes |
 | `hits` | stepper | 0..32 step 1 | 3 | yes |
 | `rotation` | stepper | 0..31 step 1 | 0 | yes |
+| `reset` | fader | 0..1 | 0 |  |
 
 ### RMS (`rms`)
 

@@ -153,3 +153,119 @@ final class MaterialCatalogTests: XCTestCase {
         for child in node.list ?? [] { collectPorts(child, into: &names, seen: &seen) }
     }
 }
+
+/// Jacks the palette draws that a cable into does nothing.
+///
+/// A module's inlets come from two places that do not have to agree. The
+/// editor derives them (`controlInputs.ts`): audio inlets, plus any voice jack
+/// the graph mentions, plus the automatable parameters. Flatten derives what a
+/// cable can *reach*: an audio inlet, a declared parameter, or a voice jack the
+/// graph actually reads. Where the first is wider than the second there is a
+/// jack on the canvas that accepts a cable, draws it, saves it in the document,
+/// and has no effect on the sound.
+///
+/// This cost most of a day before it was understood: a rhythmic lane was
+/// patched into an `adsr`'s `gate`, everything validated, the graph compiled,
+/// and the patch rendered silence. Nothing anywhere said the cable had been
+/// dropped.
+///
+/// So the set is measured rather than reasoned about, and written down. A new
+/// dead jack fails here, and so does fixing one, which is the point: the list
+/// is the record of what is known to be a lie.
+final class DeadJackTests: XCTestCase {
+
+    /// Known dead, with why, and why each one is still here.
+    ///
+    /// **`gate` on the four voices.** A polyphonic material's gate belongs to
+    /// the voice allocator, not to the graph: it is a boolean on the render
+    /// state rather than a value a `param` node can read, so there is nothing
+    /// for a patch cable to write. It stays on the canvas because a *keyboard*
+    /// cable into it is not a signal, it is the statement that this module is
+    /// what the keys play, and `flattenPatch` reads it exactly that way while
+    /// contributing no node. To gate a voice from inside a patch, drive its
+    /// `gain` or `velocity`, both of which are live; that is what the
+    /// generator's `driveVoices` does.
+    ///
+    /// `adsr.note` used to be here too, and is gone: an ADSR has no pitch, and
+    /// the jack existed only because `controlInputs` advertised
+    /// note/gate/velocity for anything polyphonic whether its graph read them
+    /// or not. It asks the graph now.
+    ///
+    /// **The five spatial positions.** Not dead in the sense the others are.
+    /// An automation lane writes them, they are saved with the patch, and the
+    /// host's spatial renderer acts on them; what cannot drive them is a
+    /// cable, because the effect lives outside the ASL graph entirely.
+    /// Filtering them out of the palette was tried and is wrong: it removes a
+    /// control that works, to hide one route into it that does not.
+    static let known: Set<String> = [
+        "SynthVoice.gate",
+        "adsr.gate",
+        "oscillator.gate",
+        "wavetable.gate",
+        "spatialmaster.yaw",
+        "spatialmaster.pitch",
+        "spatialsource.x",
+        "spatialsource.y",
+        "spatialsource.z",
+    ]
+
+    func testNoJackIsDeadExceptTheOnesWeKnowAbout() throws {
+        let catalog = try MaterialCatalog.bundled()
+
+        func nodeCount(_ patch: CratePatch) -> Int {
+            guard let compiled = try? CrateFlatten.flatten(patch, catalog: catalog, name: "P") else {
+                return -1
+            }
+            var seen = Set<Int>()
+            func walk(_ node: ASLNodeDocument) {
+                guard seen.insert(node.id).inserted else { return }
+                for (_, child) in node.inputs { walk(child) }
+                for child in node.list ?? [] { walk(child) }
+            }
+            walk(compiled.graph.output)
+            return seen.count
+        }
+
+        var dead = Set<String>()
+        for kind in catalog.materials.map(\.kind).sorted() {
+            guard catalog.canCompile(kind),
+                  let material = catalog.material(kind),
+                  let jacks = catalog.jacks(kind)
+            else { continue }
+            let base = CratePatch(
+                nodes: [
+                    CratePatchNode(id: "clk", kind: "clock", params: ["freq": 4]),
+                    CratePatchNode(id: "n", kind: kind, params: [:]),
+                    CratePatchNode(id: "master", kind: catalog.io.master, params: [:]),
+                ],
+                connections: [
+                    CratePatchConnection(
+                        source: "n", sourceOutput: jacks.outputs.first ?? "audio",
+                        target: "master", targetInput: "input"
+                    )
+                ]
+            )
+            let baseline = nodeCount(base)
+            for inlet in jacks.inputs where !material.isAudioInlet(inlet) {
+                var patch = base
+                patch.connections.append(
+                    CratePatchConnection(
+                        source: "clk", sourceOutput: "cv", target: "n", targetInput: inlet
+                    )
+                )
+                // A cable that reaches something always adds nodes: at the
+                // least the source's own graph, and usually a `range` on top.
+                if nodeCount(patch) == baseline { dead.insert("\(kind).\(inlet)") }
+            }
+        }
+
+        XCTAssertEqual(
+            dead.subtracting(Self.known).sorted(), [],
+            "new dead jacks: the palette draws these and a cable into them does nothing"
+        )
+        XCTAssertEqual(
+            Self.known.subtracting(dead).sorted(), [],
+            "these are listed as dead and are not any more, so take them off the list"
+        )
+    }
+}

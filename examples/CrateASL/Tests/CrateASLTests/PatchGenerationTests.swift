@@ -667,8 +667,13 @@ final class PatchCompositionTests: XCTestCase {
             routes: [CrateGenRoute(lane: "lane1", target: "filter.cutoff")],
             catalog: catalog
         )
+        // The cable that *leaves* the lane. A lane's own scaling stages are
+        // in the lane, wired into each other's audio inlets, and it is what
+        // comes out the far end that has to land on a parameter.
         let cable = try XCTUnwrap(
-            built.patch.connections.first { $0.source.hasPrefix("m1") },
+            built.patch.connections.first {
+                CrateGenBuilder.isLaneId($0.source) && !CrateGenBuilder.isLaneId($0.target)
+            },
             "no modulation cable"
         )
         XCTAssertEqual(cable.target, "filter")
@@ -1042,5 +1047,471 @@ final class PatchSignalTypeTests: XCTestCase {
             let peak = out.reduce(0) { Swift.max($0, Double(abs($1))) }
             XCTAssertGreaterThan(peak, 0, "\(kind.rawValue): renders silence over half a second")
         }
+    }
+}
+
+// MARK: - Trim
+
+/// What a lane is allowed to do to the value the plan chose.
+///
+/// The third thing that shipped wrong, and the one that was invisible from
+/// the patch: every cable was correct, every lane validated and flattened and
+/// rendered, and the patch was still not the patch that had been planned. A
+/// cable into a parameter does not modulate it, it replaces it, mapped across
+/// the parameter's whole declared range. So a lane pointed at a lowpass
+/// planned at 1800 Hz re-centred it on 10 kHz and the filter stopped
+/// filtering, and a lane pointed at a gain planned at 0.2 swung it to 4.
+///
+/// Measured rather than argued: the first version of this suite passed while
+/// that was happening, because it asked whether the cables were legal and
+/// never what the numbers on either end of them were.
+final class PatchTrimTests: XCTestCase {
+
+    private func catalog() throws -> MaterialCatalog { try MaterialCatalog.bundled() }
+
+    private func plan() -> CrateGenPlan {
+        CrateGenPlan(
+            role: .generative, summary: "t", source: "comb", layer: "tone",
+            filter: "lowpass", space: "reverb", effects: ["gain"]
+        )
+    }
+
+    private func patch(_ kind: CrateGenLaneKind, depth: Double = 0.6, catalog: MaterialCatalog) -> CratePatch {
+        CrateGenBuilder.assemble(
+            plan: plan(),
+            lanes: [CrateGenLane(kind: kind, rateHz: 3, depth: depth)],
+            catalog: catalog
+        ).patch
+    }
+
+    /// What a route actually delivers to the parameter at its far end.
+    ///
+    /// Walks the cable back through however many trim stages it passes
+    /// through, applies each one to the lane's declared swing, and maps the
+    /// result the way `flattenPatch` maps it.
+    private func delivered(
+        _ cable: CratePatchConnection,
+        in patch: CratePatch,
+        lane: CrateGenLane,
+        catalog: MaterialCatalog
+    ) -> (lo: Double, hi: Double, descriptor: CrateParamDescriptor)? {
+        guard let target = patch.node(cable.target),
+              let descriptor = catalog.material(target.kind)?.param(cable.targetInput)
+        else { return nil }
+
+        var stages = [CratePatchNode]()
+        var id = cable.source
+        while let node = patch.node(id), node.kind == "gain" || node.kind == "offset",
+              CrateGenBuilder.isLaneId(node.id) {
+            stages.append(node)
+            guard let upstream = patch.connections.first(where: {
+                $0.target == node.id && $0.targetInput == "input"
+            }) else { return nil }
+            id = upstream.source
+        }
+
+        var (lo, hi) = lane.kind.swing(depth: lane.depth)
+        for node in stages.reversed() {
+            let amount = node.kind == "gain" ? (node.params["gain"] ?? 1) : (node.params["amount"] ?? 0)
+            if node.kind == "gain" {
+                (lo, hi) = (lo * amount, hi * amount)
+            } else {
+                (lo, hi) = (lo + amount, hi + amount)
+            }
+        }
+        // The wire reads -1..1, and anything past that is clipped by the
+        // parameter's own bounds rather than wrapping.
+        func value(_ wire: Double) -> Double {
+            let clamped = Swift.min(1, Swift.max(-1, wire))
+            return descriptor.min + (clamped + 1) / 2 * (descriptor.max - descriptor.min)
+        }
+        return (value(lo), value(hi), descriptor)
+    }
+
+    private func leaving(_ patch: CratePatch) -> [CratePatchConnection] {
+        patch.connections.filter {
+            CrateGenBuilder.isLaneId($0.source) && !CrateGenBuilder.isLaneId($0.target)
+        }
+    }
+
+    /// The headline. A lane moves the parameter around where the plan put it,
+    /// rather than replacing it with the middle of its own travel.
+    func testALaneMovesTheValueThePlanChose() throws {
+        let catalog = try catalog()
+        for kind in CrateGenLaneKind.allCases {
+            let lane = CrateGenLane(kind: kind, rateHz: 3, depth: 0.6)
+            let patch = patch(kind, catalog: catalog)
+            let routes = leaving(patch)
+            XCTAssertFalse(routes.isEmpty, "\(kind.rawValue): the lane drives nothing")
+            for cable in routes {
+                guard let reach = delivered(cable, in: patch, lane: lane, catalog: catalog) else {
+                    XCTFail("\(kind.rawValue): could not follow \(cable.source) back to its lane")
+                    continue
+                }
+                let node = try XCTUnwrap(patch.node(cable.target))
+                let planned = node.params[cable.targetInput] ?? reach.descriptor.defaultValue
+                let span = reach.descriptor.max - reach.descriptor.min
+                let where_ = "\(kind.rawValue) on \(cable.target).\(cable.targetInput)"
+
+                // Inside the parameter's own bounds, and a slice of them
+                // rather than all of them. Half is generous: what it is
+                // ruling out is the whole travel, which is the siren.
+                XCTAssertGreaterThanOrEqual(reach.lo, reach.descriptor.min - 1e-6, where_)
+                XCTAssertLessThanOrEqual(reach.hi, reach.descriptor.max + 1e-6, where_)
+                XCTAssertLessThan(
+                    reach.hi - reach.lo, span * 0.9,
+                    "\(where_) sweeps almost the whole range, which is what trimming exists to stop"
+                )
+
+                // And it goes where the plan pointed. A lane that rests at
+                // zero opens up to the planned value; one that swings around
+                // zero straddles it.
+                XCTAssertGreaterThanOrEqual(planned, reach.lo - span * 0.02, "\(where_) never reaches down to \(planned)")
+                XCTAssertLessThanOrEqual(planned, reach.hi + span * 0.02, "\(where_) never reaches up to \(planned)")
+            }
+        }
+    }
+
+    /// Every lane's declared swing is the swing it actually renders.
+    ///
+    /// `swing(depth:)` is a table of claims about modules, and the scaling is
+    /// arithmetic on those claims, so a wrong entry is silent: the patch is
+    /// still legal and still plays, it just moves the wrong part of its
+    /// window. Two entries were wrong when this was written, and this is what
+    /// found them.
+    func testALaneDeclaresTheSwingItActuallyProduces() throws {
+        let catalog = try catalog()
+        let depth = 0.6
+        for kind in CrateGenLaneKind.allCases {
+            guard let lane = CrateGenBuilder.laneNodes(
+                CrateGenLane(kind: kind, rateHz: 3, depth: depth), index: 0, catalog: catalog
+            ) else {
+                XCTFail("\(kind.rawValue) could not be built")
+                continue
+            }
+            var patch = CratePatch(nodes: lane.nodes, connections: lane.cables)
+            patch.nodes.append(CratePatchNode(id: "master", kind: catalog.io.master, params: [:]))
+            // The follower reads the sound, so it needs one to read.
+            if kind == .follower, let inlet = catalog.material("envfollow")?.audioInputs.first {
+                patch.nodes.append(CratePatchNode(id: "src", kind: "tone", params: ["freq": 220, "gain": 1]))
+                patch.connections.append(CratePatchConnection(
+                    source: "src", sourceOutput: "audio", target: lane.outlet.node, targetInput: inlet
+                ))
+            }
+            patch.connections.append(CratePatchConnection(
+                source: lane.outlet.node, sourceOutput: lane.outlet.jack,
+                target: "master", targetInput: "input"
+            ))
+
+            let compiled = try CrateFlatten.flatten(patch, catalog: catalog, name: "L")
+            let voice = try CompiledVoice(document: compiled.graph)
+            let state = voice.makeState()
+            state.setParams(ParameterMap(compiled.params).defaults)
+            state.gate = true
+            var out = [Float](repeating: 0, count: 192_000)
+            var right: [Float]? = nil
+            _ = voice.renderBlock(
+                state, sampleRate: 48_000, output: &out, outputR: &right,
+                transport: TransportSnapshot(playing: true)
+            )
+            let low = out.reduce(Double.infinity) { Swift.min($0, Double($1)) }
+            let high = out.reduce(-Double.infinity) { Swift.max($0, Double($1)) }
+            let declared = kind.swing(depth: depth)
+
+            // Contained, with a little room: an interpolated random
+            // overshoots its own corners, and an envelope at a given rate may
+            // not have time to reach full height.
+            XCTAssertGreaterThanOrEqual(low, declared.lo - 0.15, "\(kind.rawValue) goes lower than it says")
+            XCTAssertLessThanOrEqual(high, declared.hi + 0.15, "\(kind.rawValue) goes higher than it says")
+            // And not so much smaller that the declaration is wasting most of
+            // the window it asks for.
+            XCTAssertGreaterThan(
+                high - low, (declared.hi - declared.lo) * 0.45,
+                "\(kind.rawValue) swings \(high - low) but declares \(declared.hi - declared.lo)"
+            )
+        }
+    }
+
+    /// A trim stage is part of a lane, so it is fed by one and it is never
+    /// offered as somewhere to patch.
+    func testATrimStageBelongsToItsLane() throws {
+        let catalog = try catalog()
+        for kind in CrateGenLaneKind.allCases {
+            let patch = patch(kind, catalog: catalog)
+            let trims = patch.nodes.filter {
+                CrateGenBuilder.isLaneId($0.id) && ($0.kind == "gain" || $0.kind == "offset")
+            }
+            let targets = Set(CrateGenBuilder.routingTargets(patch.nodes, catalog: catalog, limit: .max))
+            for trim in trims {
+                XCTAssertTrue(
+                    patch.connections.contains { $0.target == trim.id && $0.targetInput == "input" },
+                    "\(kind.rawValue): \(trim.id) is scaling nothing"
+                )
+                XCTAssertTrue(
+                    patch.connections.contains { $0.source == trim.id },
+                    "\(kind.rawValue): \(trim.id) feeds nothing"
+                )
+                for target in targets {
+                    XCTAssertFalse(
+                        target.hasPrefix("\(trim.id)."),
+                        "\(kind.rawValue): \(target) was offered as a destination, and it is a lane's own scaling"
+                    )
+                }
+            }
+        }
+    }
+
+    /// A rhythmic lane on an amplitude is a VCA: it opens to the level the
+    /// plan chose and closes to nothing. Anything else and the rhythm reads
+    /// as the patch getting louder rather than as a rhythm.
+    func testARhythmicLaneOnAnAmplitudeOpensToThePlannedLevel() throws {
+        let catalog = try catalog()
+        for kind in [CrateGenLaneKind.pulse, .euclidean, .envelope] {
+            let lane = CrateGenLane(kind: kind, rateHz: 3, depth: 0.6)
+            let patch = patch(kind, catalog: catalog)
+            for cable in leaving(patch) where cable.targetInput == "gain" {
+                let reach = try XCTUnwrap(delivered(cable, in: patch, lane: lane, catalog: catalog))
+                let node = try XCTUnwrap(patch.node(cable.target))
+                let planned = node.params["gain"] ?? reach.descriptor.defaultValue
+                XCTAssertEqual(reach.lo, reach.descriptor.min, accuracy: 1e-6, "\(kind.rawValue) never closes")
+                XCTAssertEqual(reach.hi, planned, accuracy: 1e-3, "\(kind.rawValue) opens past the planned level")
+            }
+        }
+    }
+
+    /// A cable the model drew itself is scaled the same way a route is.
+    ///
+    /// The wiring pass invites it to send control at a named inlet, so it is
+    /// a second door into the same parameter and it has to be the same door.
+    func testACableFromALaneIsScaledLikeARoute() throws {
+        let catalog = try catalog()
+        let lane = CrateGenLane(kind: .drift, rateHz: 2, depth: 0.6)
+        let built = CrateGenBuilder.assemble(
+            plan: plan(),
+            lanes: [lane],
+            cables: [
+                CrateGenCable(from: "m1lfo", fromJack: "cv", to: "filter", toJack: "cutoff")
+            ],
+            catalog: catalog
+        )
+        let cable = try XCTUnwrap(
+            leaving(built.patch).first { $0.target == "filter" && $0.targetInput == "cutoff" },
+            "the cable did not survive"
+        )
+        XCTAssertNotEqual(cable.source, "m1lfo", "the lane reached the parameter without being scaled")
+        let reach = try XCTUnwrap(delivered(cable, in: built.patch, lane: lane, catalog: catalog))
+        let planned = try XCTUnwrap(built.patch.node("filter")?.params["cutoff"])
+        XCTAssertGreaterThanOrEqual(planned, reach.lo)
+        XCTAssertLessThanOrEqual(planned, reach.hi)
+        XCTAssertLessThan(
+            reach.hi - reach.lo, (reach.descriptor.max - reach.descriptor.min) * 0.9,
+            "a cable the model drew sweeps the whole range"
+        )
+    }
+
+    /// The patch still plays with the scaling in it, and it plays at roughly
+    /// the level the patch without any lanes plays at. The defect this fixes
+    /// was audible as a twenty-fold jump in level, so the level is the check.
+    func testALaneDoesNotChangeHowLoudThePatchIs() throws {
+        let catalog = try catalog()
+        func peak(_ patch: CratePatch) throws -> Double {
+            let compiled = try CrateFlatten.flatten(patch, catalog: catalog, name: "L")
+            let voice = try CompiledVoice(document: compiled.graph)
+            let state = voice.makeState()
+            state.setParams(ParameterMap(compiled.params).defaults)
+            state.gate = true
+            var out = [Float](repeating: 0, count: 96_000)
+            var right: [Float]? = nil
+            _ = voice.renderBlock(
+                state, sampleRate: 48_000, output: &out, outputR: &right,
+                transport: TransportSnapshot(playing: true)
+            )
+            return out.reduce(0) { Swift.max($0, Double(abs($1))) }
+        }
+        let bare = try peak(CrateGenBuilder.assemble(plan: plan(), lanes: [], catalog: catalog).patch)
+        XCTAssertGreaterThan(bare, 0, "the patch with no lanes is silent")
+        for kind in CrateGenLaneKind.allCases {
+            let moved = try peak(patch(kind, catalog: catalog))
+            XCTAssertGreaterThan(moved, 0, "\(kind.rawValue): renders silence")
+            XCTAssertLessThan(
+                moved, bare * 3,
+                "\(kind.rawValue) peaks at \(moved) against \(bare) with no lane, so it is rewriting the level"
+            )
+        }
+    }
+}
+
+// MARK: - Starting with the song
+
+/// Whether a generated patch plays the same pattern every time Play is
+/// pressed.
+///
+/// The defect these exist for is not audible in one render, which is why it
+/// survived everything above. A clock is a free-running phase and a euclidean
+/// is a step counter, and neither has any relationship to the song: press
+/// Stop halfway through a bar and press Play again, and the pattern comes
+/// back rotated by however far it had got. A synced clock does not fix it,
+/// because the clock was never the part that was drifting. The step counter
+/// under it was.
+final class PatchSongResetTests: XCTestCase {
+
+    private func catalog() throws -> MaterialCatalog { try MaterialCatalog.bundled() }
+
+    private func plan() -> CrateGenPlan {
+        CrateGenPlan(
+            role: .generative, summary: "t", source: "comb", layer: "tone",
+            filter: "lowpass", space: "reverb", effects: ["gain"]
+        )
+    }
+
+    private func built(_ kind: CrateGenLaneKind, catalog: MaterialCatalog) -> CratePatch {
+        CrateGenBuilder.assemble(
+            plan: plan(),
+            lanes: [CrateGenLane(kind: kind, rateHz: 3, depth: 0.6)],
+            catalog: catalog
+        ).patch
+    }
+
+    /// Renders `beats` of song from wherever the voice currently is.
+    private func play(
+        _ voice: CompiledVoice,
+        _ state: VoiceState,
+        from beats: Double,
+        seconds: Double,
+        playing: Bool = true
+    ) -> [Float] {
+        var out = [Float](repeating: 0, count: Int(48_000 * seconds))
+        var right: [Float]? = nil
+        _ = voice.renderBlock(
+            state, sampleRate: 48_000, output: &out, outputR: &right,
+            transport: TransportSnapshot(beats: beats, bpm: 120, playing: playing)
+        )
+        return out
+    }
+
+    /// Every clock and every pattern in a generated patch is reset by Play.
+    func testPlayResetsEveryPatternInThePatch() throws {
+        let catalog = try catalog()
+        for kind in CrateGenLaneKind.allCases {
+            let patch = built(kind, catalog: catalog)
+            let song = try XCTUnwrap(patch.nodes.first { $0.kind == catalog.io.transport })
+            for node in patch.nodes where catalog.jacks(node.kind)?.inputs.contains("reset") == true {
+                let cable = patch.connections.first {
+                    $0.target == node.id && $0.targetInput == "reset"
+                }
+                let found = try XCTUnwrap(
+                    cable, "\(kind.rawValue): \(node.id) (\(node.kind)) has no reset, so it starts wherever it likes"
+                )
+                XCTAssertEqual(found.source, song.id)
+                XCTAssertEqual(found.sourceOutput, "playing")
+            }
+        }
+    }
+
+    /// And it is one edge, not a level. A reset held high is a pattern pinned
+    /// at step zero, which is silence with a tick in it.
+    func testHoldingPlayDoesNotPinThePatternAtStepZero() throws {
+        let catalog = try catalog()
+        let patch = built(.euclidean, catalog: catalog)
+        let compiled = try CrateFlatten.flatten(patch, catalog: catalog, name: "R")
+        let voice = try CompiledVoice(document: compiled.graph)
+        let state = voice.makeState()
+        state.setParams(ParameterMap(compiled.params).defaults)
+        state.gate = true
+        let out = play(voice, state, from: 0, seconds: 4)
+        let peak = out.reduce(0) { Swift.max($0, Double(abs($1))) }
+        XCTAssertGreaterThan(peak, 0, "a patch with Play held high renders silence")
+    }
+
+    /// The headline, and the thing a person actually hears: two presses of
+    /// Play from the top of the song play the same pattern.
+    ///
+    /// Only the lanes that carry a position in a pattern are asserted, which
+    /// is the honest scope. A pulse lane is a synced clock into an envelope
+    /// and a synced clock has no state at all, being read off the song
+    /// position, so it starts with the song whether anybody resets it or not.
+    /// A euclidean and a sequencer are counters, and they are what comes back
+    /// rotated.
+    ///
+    /// Measured on the lane's own control signal rather than on the patch's
+    /// audio: a reverb and a delay carry the first pass into the second, so
+    /// comparing the audio would be comparing tails.
+    ///
+    /// Rendered on one voice, so the second pass starts with every counter
+    /// exactly where the first left it, which is the state a plugin is in
+    /// when somebody presses Stop and then Play.
+    func testTwoPressesOfPlayGiveTheSamePattern() throws {
+        let catalog = try catalog()
+        for kind in [CrateGenLaneKind.euclidean, .notes] {
+            let patch = try listeningToTheLane(built(kind, catalog: catalog), catalog: catalog)
+            let compiled = try CrateFlatten.flatten(patch, catalog: catalog, name: "R")
+            let voice = try CompiledVoice(document: compiled.graph)
+            let state = voice.makeState()
+            state.setParams(ParameterMap(compiled.params).defaults)
+            state.gate = true
+
+            let first = play(voice, state, from: 0, seconds: 2)
+            // Deliberately not a whole number of pattern cycles, and that is
+            // the whole test. Stop on a bar line and a counter is back at zero
+            // by arithmetic rather than by resetting, so a run that happens to
+            // divide evenly proves nothing: the first version of this stopped
+            // at two beats and passed with the reset removed.
+            _ = play(voice, state, from: 4, seconds: 1.37)
+            // Stopped, which is what a host sends between the two presses.
+            _ = play(voice, state, from: 6.7, seconds: 0.25, playing: false)
+            let second = play(voice, state, from: 0, seconds: 2)
+
+            // After a settling window, because an envelope caught mid-release
+            // when Play arrives finishes that release into the new pass, and
+            // that is not the pattern.
+            let settled = 48_000 / 4
+            let a = Array(first[settled...])
+            let b = Array(second[settled...])
+            let worst = zip(a, b).reduce(0.0) { Swift.max($0, Double(abs($1.0 - $1.1))) }
+            XCTAssertGreaterThan(
+                a.reduce(0.0) { Swift.max($0, Double(abs($1))) }, 0,
+                "\(kind.rawValue): the lane produced nothing to compare"
+            )
+            XCTAssertLessThan(
+                worst, 1e-6,
+                "\(kind.rawValue): the second press of Play plays a different pattern, so something did not reset"
+            )
+        }
+    }
+
+    /// The same patch with Master listening to the lane instead of to the
+    /// sound, so what is rendered is the movement and not the music.
+    ///
+    /// Listening at the lane's own outlet, upstream of its trim stages. The
+    /// first version of this tapped after them, where a rhythmic lane driving
+    /// a gain sits between -1 and -0.9: every hit is there, and none of them
+    /// crosses a threshold picked as a fraction of the peak.
+    private func listeningToTheLane(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog
+    ) throws -> CratePatch {
+        var patch = patch
+        let master = try XCTUnwrap(patch.nodes.first { $0.kind == catalog.io.master })
+        var tap = try XCTUnwrap(
+            patch.connections.last {
+                CrateGenBuilder.isLaneId($0.source) && !CrateGenBuilder.isLaneId($0.target)
+            },
+            "the patch has no lane output to listen to"
+        )
+        while let node = patch.node(tap.source), node.kind == "gain" || node.kind == "offset",
+              CrateGenBuilder.isLaneId(node.id),
+              let upstream = patch.connections.first(where: {
+                  $0.target == node.id && $0.targetInput == "input"
+              }) {
+            tap = upstream
+        }
+        patch.connections.removeAll { $0.target == master.id }
+        patch.connections.append(
+            CratePatchConnection(
+                source: tap.source, sourceOutput: tap.sourceOutput,
+                target: master.id, targetInput: "input"
+            )
+        )
+        return patch
     }
 }

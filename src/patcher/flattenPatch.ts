@@ -88,7 +88,7 @@ export const DEFAULT_PATCH_IO: PatchIoKinds = {
 };
 
 /** Inlets a keyboard drives per note rather than per sample. */
-const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig', 'clock']);
+const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig', 'clock', 'reset']);
 
 export interface FlattenPatchOptions {
   /**

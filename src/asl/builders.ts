@@ -12,6 +12,7 @@ import {
   type SampleBox,
   type SlopeMode,
   type SvfMode,
+  type ASLNode,
   constNode,
   makeNode,
 } from './types';
@@ -105,6 +106,10 @@ export function lfo(opts: {
   rate: ASLValueLike;
   shape?: OscShape | ASLValueLike;
   width?: ASLValueLike;
+  /** A rising edge restarts the cycle. */
+  reset?: ASLValueLike;
+  /** 0..1 of a cycle, added to where the shape is read. */
+  phase?: ASLValueLike;
 }): ASLValue {
   const shape = opts.shape ?? 'sine';
   const baked = typeof shape === 'string' ? shape : 'sine';
@@ -116,6 +121,8 @@ export function lfo(opts: {
         rate: toNode(opts.rate),
         ...(opts.width !== undefined ? { width: toNode(opts.width) } : {}),
         ...(liveShape ? { type: liveShape } : {}),
+        ...(opts.reset !== undefined ? { reset: toNode(opts.reset) } : {}),
+        ...(opts.phase !== undefined ? { phase: toNode(opts.phase) } : {}),
       },
       { shape: baked },
     ),
@@ -384,11 +391,19 @@ export const filter = {
     );
   },
 
-  ladder(input: ASLValueLike, opts: { cutoff: ASLValueLike; resonance?: ASLValueLike }): ASLValue {
+  ladder(
+    input: ASLValueLike,
+    opts: { cutoff: ASLValueLike; resonance?: ASLValueLike; drive?: ASLValueLike },
+  ): ASLValue {
     return new ASLValue(
       makeNode(
         'ladder',
-        { input: toNode(input), cutoff: toNode(opts.cutoff), resonance: toNode(opts.resonance ?? 0) },
+        {
+          input: toNode(input),
+          cutoff: toNode(opts.cutoff),
+          resonance: toNode(opts.resonance ?? 0),
+          ...(opts.drive !== undefined ? { drive: toNode(opts.drive) } : {}),
+        },
         {},
       ),
     );
@@ -505,8 +520,21 @@ export function slew(
   );
 }
 
-export function sampleHold(input: ASLValueLike, opts: { freq?: ASLValueLike } = {}): ASLValue {
-  return new ASLValue(makeNode('sampleHold', { input: toNode(input), freq: toNode(opts.freq ?? 20) }, {}));
+export function sampleHold(
+  input: ASLValueLike,
+  opts: { freq?: ASLValueLike; clock?: ASLValueLike } = {},
+): ASLValue {
+  return new ASLValue(
+    makeNode(
+      'sampleHold',
+      {
+        input: toNode(input),
+        freq: toNode(opts.freq ?? 20),
+        ...(opts.clock !== undefined ? { clock: toNode(opts.clock) } : {}),
+      },
+      {},
+    ),
+  );
 }
 
 export function compare(
@@ -543,16 +571,51 @@ export function compressor(
   return new ASLValue(makeNode('compressor', inputs, {}));
 }
 
-export function clock(opts: { freq?: ASLValueLike } = {}): ASLValue {
-  return new ASLValue(makeNode('clock', { freq: toNode(opts.freq ?? 2) }, {}));
+/**
+ * `reset` is added to a node only when it is asked for.
+ *
+ * Every node that carries a position in a pattern takes one, and a graph that
+ * does not use it has to serialize exactly as it did before: the conformance
+ * fixture is a byte comparison of 91 graphs, and an input silently present on
+ * all of them would have rewritten every one of those for a feature nobody
+ * had wired yet.
+ */
+function withReset(
+  inputs: Record<string, ASLNode>,
+  reset: ASLValueLike | undefined,
+): Record<string, ASLNode> {
+  if (reset !== undefined) inputs.reset = toNode(reset);
+  return inputs;
 }
 
-export function clockDivide(input: ASLValueLike, opts: { factor?: ASLValueLike } = {}): ASLValue {
-  return new ASLValue(makeNode('clockDivide', { input: toNode(input), factor: toNode(opts.factor ?? 2) }, {}));
+export function clock(opts: { freq?: ASLValueLike; reset?: ASLValueLike } = {}): ASLValue {
+  return new ASLValue(makeNode('clock', withReset({ freq: toNode(opts.freq ?? 2) }, opts.reset), {}));
 }
 
-export function clockMultiply(input: ASLValueLike, opts: { factor?: ASLValueLike } = {}): ASLValue {
-  return new ASLValue(makeNode('clockMultiply', { input: toNode(input), factor: toNode(opts.factor ?? 2) }, {}));
+export function clockDivide(
+  input: ASLValueLike,
+  opts: { factor?: ASLValueLike; reset?: ASLValueLike } = {},
+): ASLValue {
+  return new ASLValue(
+    makeNode(
+      'clockDivide',
+      withReset({ input: toNode(input), factor: toNode(opts.factor ?? 2) }, opts.reset),
+      {},
+    ),
+  );
+}
+
+export function clockMultiply(
+  input: ASLValueLike,
+  opts: { factor?: ASLValueLike; reset?: ASLValueLike } = {},
+): ASLValue {
+  return new ASLValue(
+    makeNode(
+      'clockMultiply',
+      withReset({ input: toNode(input), factor: toNode(opts.factor ?? 2) }, opts.reset),
+      {},
+    ),
+  );
 }
 
 export const logic = {
@@ -585,17 +648,25 @@ export function quantize(
 
 export function euclidean(
   input: ASLValueLike,
-  opts: { steps?: ASLValueLike; hits?: ASLValueLike; rotation?: ASLValueLike } = {},
+  opts: {
+    steps?: ASLValueLike;
+    hits?: ASLValueLike;
+    rotation?: ASLValueLike;
+    reset?: ASLValueLike;
+  } = {},
 ): ASLValue {
   return new ASLValue(
     makeNode(
       'euclidean',
-      {
-        input: toNode(input),
-        steps: toNode(opts.steps ?? 8),
-        hits: toNode(opts.hits ?? 3),
-        rotation: toNode(opts.rotation ?? 0),
-      },
+      withReset(
+        {
+          input: toNode(input),
+          steps: toNode(opts.steps ?? 8),
+          hits: toNode(opts.hits ?? 3),
+          rotation: toNode(opts.rotation ?? 0),
+        },
+        opts.reset,
+      ),
       {},
     ),
   );
@@ -613,8 +684,19 @@ export function pulse(input: ASLValueLike, opts: { widthSec?: ASLValueLike } = {
   return new ASLValue(makeNode('pulse', { input: toNode(input), widthSec: toNode(opts.widthSec ?? 0.01) }, {}));
 }
 
-export function sequencer(clockIn: ASLValueLike, steps: ASLValueLike[]): ASLValue {
-  return new ASLValue(makeNode('sequencer', { clock: toNode(clockIn) }, {}, steps.map(toNode)));
+export function sequencer(
+  clockIn: ASLValueLike,
+  steps: ASLValueLike[],
+  opts: { reset?: ASLValueLike } = {},
+): ASLValue {
+  return new ASLValue(
+    makeNode(
+      'sequencer',
+      withReset({ clock: toNode(clockIn) }, opts.reset),
+      {},
+      steps.map(toNode),
+    ),
+  );
 }
 
 export function impulse(opts: { gate?: ASLValueLike } = {}): ASLValue {

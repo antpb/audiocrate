@@ -300,6 +300,44 @@ public enum CrateGenLaneKind: String, Sendable, CaseIterable {
         }
     }
 
+    /// What this lane's outlet actually puts out, in the units the wire
+    /// carries, once its own depth control is set.
+    ///
+    /// Needed because a lane is scaled into the window it is allowed to move
+    /// (see `CrateGenBuilder.window`), and the scaling is arithmetic on the
+    /// signal rather than a rule about it: to place a swing you have to know
+    /// how wide it already is. A dahdsr reaches 1 however short its attack
+    /// is; an LFO reaches its `amount`; a synced ramp reaches its `depth`.
+    ///
+    /// This is a claim about the modules, not about the code that builds
+    /// them, so `testALaneDeclaresTheSwingItActuallyProduces` renders each
+    /// lane and checks it. If somebody changes the module a lane is made of
+    /// and forgets this table, that test is what says so.
+    public func swing(depth: Double) -> (lo: Double, hi: Double) {
+        let depth = Swift.min(Swift.max(depth, 0.05), 1)
+        switch self {
+        // A dahdsr: rest at zero, full height on every trigger.
+        case .pulse, .euclidean, .envelope: return (0, 1)
+        // An LFO around zero, as far as `amount`.
+        case .drift: return (-depth, depth)
+        // Interpolated noise, around zero. Measured -0.705..+0.933 over four
+        // seconds: it is bipolar, and the interpolation overshoots.
+        case .random: return (-1, 1)
+        // Held samples of the same.
+        case .stepped: return (-1, 1)
+        // Sequencer steps. The jack is written in -1..1, but the steps this
+        // lane is built with are the module's defaults, which climb 0 to 1
+        // and back down. Declaring the jack's range rather than the pattern's
+        // would put the whole sequence in the top half of its window and
+        // waste the octave below it.
+        case .notes: return (0, 1)
+        // A rise from nothing to `depth`, resetting on the bar.
+        case .ramp: return (0, depth)
+        // As far as the sound it is reading is loud.
+        case .follower: return (0, 1)
+        }
+    }
+
     /// What the lane's own rate number means, for the instructions.
     public var hint: String {
         switch self {
@@ -355,7 +393,11 @@ public struct CrateGenRoute: Sendable, Equatable {
 
 public enum CrateGenBuilder {
 
-    static let voiceJacks: Set<String> = ["note", "gate", "velocity", "trig", "clock"]
+    /// The inlets flatten delivers in real units, mirroring
+    /// `CrateFlatten.noteInputs`. A lane is never routed at one of these by
+    /// arithmetic: a continuous control voltage held above a trigger's
+    /// threshold is a node pinned at step zero, not a patch that moves.
+    static let voiceJacks: Set<String> = ["note", "gate", "velocity", "trig", "clock", "reset"]
 
     /// Beat lengths of `COMMON_DIVISION_NAMES` in `transportNodes.ts`.
     /// At 120 bpm a pulse's rate in Hz is `2 / beats`.
@@ -558,7 +600,13 @@ public enum CrateGenBuilder {
         case .euclidean:
             // Sixteen steps with a hit count that is not a divisor of it, so
             // the pattern lands off the grid rather than on every fourth beat.
-            let hits = Swift.max(2, Swift.min(11, Int((lane.depth * 9).rounded()) + 3))
+            //
+            // The nudge off a divisor is the part that was missing, and it is
+            // not cosmetic: 8 hits in 16 steps is every other step, which is
+            // a pattern that survives being rotated and so is not a euclidean
+            // pattern at all, it is a faster clock.
+            var hits = Swift.max(2, Swift.min(11, Int((lane.depth * 9).rounded()) + 3))
+            if 16 % hits == 0 { hits = Swift.min(11, hits + 1) }
             guard let clock = tick("clk"),
                   let euclid = make("euc", "euclidean", ["steps": 16, "hits": Double(hits), "rotation": 0]),
                   let pulse = make("pls", "pulse", ["widthSec": 0.02]),
@@ -762,6 +810,193 @@ public enum CrateGenBuilder {
         return names.filter { seen.insert($0).inserted }
     }
 
+    // MARK: Trim
+
+    /// Parameters a rhythmic lane should open and close rather than nudge.
+    static let amplitudeParams: Set<String> = ["gain", "velocity"]
+
+    /// A lane's own modules, by the id they are minted with.
+    static func isLaneId(_ id: String) -> Bool {
+        id.hasPrefix("m") && id.dropFirst().first?.isNumber == true
+    }
+
+    /// `m1env` belongs to lane `m1`.
+    static func lanePrefix(_ id: String) -> String {
+        guard id.hasPrefix("m") else { return id }
+        let digits = id.dropFirst().prefix(while: \.isNumber)
+        return digits.isEmpty ? id : "m\(digits)"
+    }
+
+    /// The next free number for a trim stage on this lane, read off the
+    /// patch rather than counted, so three separate places can each add one
+    /// without passing a counter between them.
+    static func nextTrim(_ nodes: [CratePatchNode], prefix: String) -> Int {
+        var highest = 0
+        for node in nodes {
+            for tag in ["trim", "bias"] where node.id.hasPrefix(prefix + tag) {
+                highest = Swift.max(highest, Int(node.id.dropFirst((prefix + tag).count)) ?? 0)
+            }
+        }
+        return highest + 1
+    }
+
+    /// A parameter whose travel spans decades, where a slice of the range is
+    /// still an octave or more and arithmetic on the range is the wrong unit.
+    static func isWide(_ descriptor: CrateParamDescriptor, _ param: String) -> Bool {
+        if descriptor.curve == "log" { return true }
+        if Self.wideRangeParams.contains(param) { return true }
+        return descriptor.min > 0 && descriptor.max / descriptor.min >= 20
+    }
+
+    /// Where a lane may move a parameter, given where the plan set it.
+    ///
+    /// This is the piece the second version was missing, and missing it made
+    /// every lane quietly rewrite the patch. A cable into a parameter does
+    /// not modulate it, it **replaces** it: `flattenPatch` maps the wire's
+    /// -1..1 onto the parameter's whole declared range, so the value the plan
+    /// chose is discarded and the parameter re-centres on the middle of its
+    /// own travel. A planned cutoff of 1800 Hz became 10 kHz that way, which
+    /// is a lowpass that is not filtering, and a planned gain of 0.2 swung to
+    /// 4, which is twenty times the level the rest of the patch was voiced
+    /// for. It is why a lane could be wired correctly, validate, flatten,
+    /// render, and still be inaudible or deafening.
+    ///
+    /// So the window is worked out here and the lane is scaled into it by
+    /// `routeCables`. Wide parameters move by ratio, because a fifth of the
+    /// way along 20..20000 Hz is not a fifth of a filter sweep. Bounded ones
+    /// move by a fraction of their range. And an amplitude driven by a lane
+    /// that rests at zero is a VCA: it opens to the level the plan chose and
+    /// closes to nothing, so the rhythm is a rhythm rather than a lurch in
+    /// volume.
+    static func window(
+        value: Double,
+        descriptor: CrateParamDescriptor,
+        param: String,
+        depth: Double,
+        restsAtZero: Bool
+    ) -> (lo: Double, hi: Double) {
+        let depth = Swift.min(Swift.max(depth, 0.05), 1)
+        if restsAtZero, Self.amplitudeParams.contains(param) {
+            return (descriptor.min, Swift.max(value, descriptor.min))
+        }
+        if isWide(descriptor, param) {
+            let ratio = 1 + 3 * depth
+            let floor = descriptor.min > 0 ? descriptor.min : 1e-6
+            let value = Swift.max(value, floor)
+            return (
+                Swift.max(descriptor.min, value / ratio),
+                Swift.min(descriptor.max, value * ratio)
+            )
+        }
+        let half = depth * 0.5 * (descriptor.max - descriptor.min)
+        return (
+            Swift.max(descriptor.min, value - half),
+            Swift.min(descriptor.max, value + half)
+        )
+    }
+
+    /// Cables a lane at a parameter, through as much scaling as it takes to
+    /// land in that parameter's window.
+    ///
+    /// The scaling is two ordinary modules, a `gain` and an `offset`, which
+    /// is how somebody would do it on the canvas by hand and means the result
+    /// is a patch a person can read and retune rather than a hidden rule.
+    /// Neither is added when the lane already lands where it should.
+    ///
+    /// Returns the modules to add and the cables to make. A voice jack is
+    /// left alone: `note`, `gate` and `velocity` are not declared parameters,
+    /// so flatten maps them in real units (48..72 for a note) rather than
+    /// across a descriptor, and there is no range here to scale into.
+    static func routeCables(
+        from outlet: (node: String, jack: String),
+        lane: CrateGenLane?,
+        to target: CratePatchNode,
+        param: String,
+        catalog: MaterialCatalog,
+        ordinal: Int
+    ) -> (nodes: [CratePatchNode], cables: [CratePatchConnection]) {
+        let direct = [
+            CratePatchConnection(
+                source: outlet.node, sourceOutput: outlet.jack,
+                target: target.id, targetInput: param
+            )
+        ]
+        guard let lane,
+              !Self.voiceJacks.contains(param),
+              let material = catalog.material(target.kind),
+              let descriptor = material.param(param),
+              descriptor.max > descriptor.min,
+              let trimMaterial = catalog.material("gain"), catalog.canCompile("gain"),
+              let biasMaterial = catalog.material("offset"), catalog.canCompile("offset"),
+              let trimParam = trimMaterial.param("gain"),
+              let biasParam = biasMaterial.param("amount")
+        else { return ([], direct) }
+
+        let swing = lane.kind.swing(depth: lane.depth)
+        guard swing.hi > swing.lo else { return ([], direct) }
+
+        let value = target.params[param] ?? descriptor.defaultValue
+        let window = Self.window(
+            value: value, descriptor: descriptor, param: param,
+            depth: lane.depth, restsAtZero: swing.lo >= 0
+        )
+
+        // The wire's own coordinates: -1 arrives as the parameter's minimum
+        // and +1 as its maximum, which is the whole of what flatten does.
+        func wire(_ value: Double) -> Double {
+            2 * (value - descriptor.min) / (descriptor.max - descriptor.min) - 1
+        }
+        let low = wire(window.lo)
+        let high = wire(window.hi)
+
+        var scale = (high - low) / (swing.hi - swing.lo)
+        var bias = low - scale * swing.lo
+        // A `gain` cannot attenuate past its own range, so a window narrower
+        // than that keeps its centre and gives up some of its width. Better a
+        // movement that is too large in the right place than one in the wrong
+        // place.
+        if scale > trimParam.max {
+            scale = trimParam.max
+            bias = (low + high) / 2 - scale * (swing.lo + swing.hi) / 2
+        }
+        scale = Swift.min(trimParam.max, Swift.max(trimParam.min, scale))
+        bias = Swift.min(biasParam.max, Swift.max(biasParam.min, bias))
+
+        let needsTrim = abs(scale - 1) > 0.001
+        let needsBias = abs(bias) > 0.001
+        guard needsTrim || needsBias else { return ([], direct) }
+
+        let prefix = lanePrefix(outlet.node)
+        var nodes = [CratePatchNode]()
+        var cables = [CratePatchConnection]()
+        var source = outlet
+
+        func stage(_ id: String, _ kind: String, _ param: String, _ value: Double, _ descriptor: CrateParamDescriptor) {
+            let node = CratePatchNode(
+                id: id, kind: kind, params: [param: CrateFlatten.quantize(descriptor, value)]
+            )
+            nodes.append(node)
+            cables.append(
+                CratePatchConnection(
+                    source: source.node, sourceOutput: source.jack,
+                    target: node.id, targetInput: "input"
+                )
+            )
+            source = (node.id, catalog.jacks(kind)?.outputs.first ?? "audio")
+        }
+
+        if needsTrim { stage("\(prefix)trim\(ordinal)", "gain", "gain", scale, trimParam) }
+        if needsBias { stage("\(prefix)bias\(ordinal)", "offset", "amount", bias, biasParam) }
+
+        cables.append(
+            CratePatchConnection(
+                source: source.node, sourceOutput: source.jack,
+                target: target.id, targetInput: param
+            )
+        )
+        return (nodes, cables)
+    }
+
     // MARK: Assembly
 
     /// The patch: an audio path, however many lanes of movement, and the
@@ -802,6 +1037,10 @@ public enum CrateGenBuilder {
         }
 
         let byId = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Which lane a module belongs to, so a cable named by the model can
+        // be scaled the same way a route is.
+        var lanesByPrefix = [String: CrateGenLane]()
+        for (index, lane) in lanes.enumerated() { lanesByPrefix["m\(index + 1)"] = lane }
 
         // The audio chain. Built by Swift rather than asked for: a chain is
         // the one part of a patch that has a right answer.
@@ -854,12 +1093,20 @@ public enum CrateGenBuilder {
                 continue
             }
             let parts = route.target.split(separator: ".", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
-            let connection = CratePatchConnection(
-                source: outlet.node, sourceOutput: outlet.jack,
-                target: parts[0], targetInput: parts[1]
+            guard parts.count == 2, let target = byId[parts[0]] else { continue }
+            let routed = routeCables(
+                from: outlet,
+                lane: (index >= 1 && index <= lanes.count) ? lanes[index - 1] : nil,
+                to: target, param: parts[1], catalog: catalog,
+                ordinal: nextTrim(nodes, prefix: lanePrefix(outlet.node))
             )
-            if !connections.contains(connection) { connections.append(connection) }
+            // One cable per destination. Two routes naming the same parameter
+            // would otherwise stack two trim chains onto it and mix them.
+            guard !connections.contains(where: {
+                $0.target == parts[0] && $0.targetInput == parts[1]
+            }) else { continue }
+            nodes.append(contentsOf: routed.nodes)
+            connections.append(contentsOf: routed.cables)
         }
 
         // Anything else the model asked for, checked the same way.
@@ -874,6 +1121,27 @@ public enum CrateGenBuilder {
             }
             guard catalog.jacks(target.kind)?.inputs.contains(cable.toJack) == true else {
                 notes.append("\(target.id) (\(target.kind)) has no inlet \(cable.toJack)")
+                continue
+            }
+            // A cable the model drew from a lane at a parameter is the same
+            // thing a route is and gets the same scaling. Without this the
+            // wiring pass is a way round the trim: the instructions invite it
+            // to send control at a named inlet, and one that arrives raw
+            // replaces the value the plan chose.
+            if let lane = lanesByPrefix[lanePrefix(cable.from)],
+               let material = catalog.material(target.kind),
+               material.param(cable.toJack) != nil,
+               !material.isAudioInlet(cable.toJack) {
+                guard !connections.contains(where: {
+                    $0.target == cable.to && $0.targetInput == cable.toJack
+                }) else { continue }
+                let routed = routeCables(
+                    from: (cable.from, cable.fromJack), lane: lane,
+                    to: target, param: cable.toJack, catalog: catalog,
+                    ordinal: nextTrim(nodes, prefix: lanePrefix(cable.from))
+                )
+                nodes.append(contentsOf: routed.nodes)
+                connections.append(contentsOf: routed.cables)
                 continue
             }
             let connection = CratePatchConnection(
@@ -900,6 +1168,11 @@ public enum CrateGenBuilder {
             patch, lanes: lanes, laneOutlets: laneOutlets, catalog: catalog, notes: &notes
         )
 
+        // Play puts every pattern back to its first step. Done after the
+        // lanes exist and after `driveVoices` may have injected more, so a
+        // lane minted late is not the one left running free.
+        patch = attachSongResets(patch, catalog: catalog)
+
         // A lane that reads the sound and then moves something the sound
         // passes through on the way in is a loop, and a flattened graph
         // cannot express one. The follower is the lane that can do this, but
@@ -907,12 +1180,57 @@ public enum CrateGenBuilder {
         patch = breakCycles(patch, catalog: catalog, notes: &notes)
 
         if !reachesMaster(patch, catalog: catalog) {
+            // A lane's own cables are kept alongside the modulation. A trim
+            // stage lands on an audio inlet, so judging cables by that alone
+            // would cut the scaling loose from the lane feeding it and leave
+            // a `gain` module wired to nothing.
             patch.connections = fallbackChain(nodes, catalog: catalog)
-                + patch.connections.filter { isControlCable($0, in: patch, catalog: catalog) }
+                + patch.connections.filter {
+                    isControlCable($0, in: patch, catalog: catalog)
+                        || isLaneId($0.source) || isLaneId($0.target)
+                }
             notes.append("the wiring did not reach the output, so the signal path was rebuilt in order")
         }
         patch = CratePatchLayout.apply(patch)
         return (patch, notes)
+    }
+
+    /// Play restarts every pattern in the patch.
+    ///
+    /// A synced clock is already on the grid, being derived from the song
+    /// position with no state of its own. Everything counting steps under one
+    /// is not: a euclidean's step and a sequencer's index are wherever they
+    /// were left, so the pattern's first hit lands on whatever beat the
+    /// plugin happened to be loaded on and stays there. A free-running clock
+    /// is worse again, since its phase has nothing to do with the song at
+    /// all.
+    ///
+    /// The transport's `playing` into each `reset` is what puts step zero on
+    /// the downbeat. It is one edge, at the moment Play arrives, because
+    /// `reset` is edge-triggered: a level-triggered one would pin every
+    /// pattern at its first step for the length of the song.
+    private static func attachSongResets(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog
+    ) -> CratePatch {
+        var patch = patch
+        guard let song = patch.nodes.first(where: { $0.kind == catalog.io.transport }),
+              catalog.jacks(song.kind)?.outputs.contains("playing") == true
+        else { return patch }
+
+        for node in patch.nodes where node.id != song.id {
+            guard catalog.jacks(node.kind)?.inputs.contains("reset") == true else { continue }
+            guard !patch.connections.contains(where: {
+                $0.target == node.id && $0.targetInput == "reset"
+            }) else { continue }
+            patch.connections.append(
+                CratePatchConnection(
+                    source: song.id, sourceOutput: "playing",
+                    target: node.id, targetInput: "reset"
+                )
+            )
+        }
+        return patch
     }
 
     /// Drops control cables that close a loop.
@@ -996,13 +1314,15 @@ public enum CrateGenBuilder {
             if driving { continue }
             guard let target = targets.first(where: { !taken.contains($0) }) else { continue }
             let parts = target.split(separator: ".", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
-            patch.connections.append(
-                CratePatchConnection(
-                    source: outlet.node, sourceOutput: outlet.jack,
-                    target: parts[0], targetInput: parts[1]
-                )
+            guard parts.count == 2, let node = patch.node(parts[0]) else { continue }
+            let routed = routeCables(
+                from: outlet,
+                lane: (index >= 1 && index <= lanes.count) ? lanes[index - 1] : nil,
+                to: node, param: parts[1], catalog: catalog,
+                ordinal: nextTrim(patch.nodes, prefix: lanePrefix(outlet.node))
             )
+            patch.nodes.append(contentsOf: routed.nodes)
+            patch.connections.append(contentsOf: routed.cables)
             taken.insert(target)
             notes.append("\(key) was not pointed at anything, so it moves \(target)")
         }
@@ -1149,13 +1469,15 @@ public enum CrateGenBuilder {
         }
         guard !voices.isEmpty else { return patch }
 
-        func outlet(for kinds: Set<CrateGenLaneKind>) -> (node: String, jack: String)? {
+        func outlet(
+            for kinds: Set<CrateGenLaneKind>
+        ) -> (outlet: (node: String, jack: String), lane: CrateGenLane)? {
             for key in laneOutlets.keys.sorted() {
                 let index = Int(key.dropFirst("lane".count)) ?? 0
-                guard index >= 1, index <= lanes.count, kinds.contains(lanes[index - 1].kind) else {
-                    continue
-                }
-                return laneOutlets[key]
+                guard index >= 1, index <= lanes.count, kinds.contains(lanes[index - 1].kind),
+                      let found = laneOutlets[key]
+                else { continue }
+                return (found, lanes[index - 1])
             }
             return nil
         }
@@ -1168,18 +1490,17 @@ public enum CrateGenBuilder {
             }.max() ?? 0
         }
 
-        func inject(_ kind: CrateGenLaneKind, rateHz: Double) -> (node: String, jack: String)? {
+        func inject(
+            _ kind: CrateGenLaneKind, rateHz: Double
+        ) -> (outlet: (node: String, jack: String), lane: CrateGenLane)? {
             let index = nextLaneIndex()
-            guard let built = laneNodes(
-                CrateGenLane(kind: kind, rateHz: rateHz, depth: 0.6),
-                index: index,
-                catalog: catalog
-            ) else { return nil }
+            let lane = CrateGenLane(kind: kind, rateHz: rateHz, depth: 0.6)
+            guard let built = laneNodes(lane, index: index, catalog: catalog) else { return nil }
             patch.nodes.append(contentsOf: built.nodes)
             patch.connections.append(contentsOf: built.cables)
             laneOutlets["lane\(index + 1)"] = built.outlet
             notes.append("a \(kind.rawValue) lane was added so the voice can play itself")
-            return built.outlet
+            return (built.outlet, lane)
         }
 
         func already(_ target: String, _ inlet: String) -> Bool {
@@ -1194,13 +1515,16 @@ public enum CrateGenBuilder {
         for voice in voices {
             let inputs = catalog.jacks(voice.kind)?.inputs ?? []
             if inputs.contains("note"), let pitch, !already(voice.id, "note") {
+                // Straight in. `note` is a voice jack rather than a declared
+                // parameter, so flatten maps the wire onto MIDI 48..72 in
+                // real units and there is no descriptor range to trim into.
                 patch.connections.append(
                     CratePatchConnection(
-                        source: pitch.node, sourceOutput: pitch.jack,
+                        source: pitch.outlet.node, sourceOutput: pitch.outlet.jack,
                         target: voice.id, targetInput: "note"
                     )
                 )
-                notes.append("\(pitch.node) writes notes into \(voice.id)")
+                notes.append("\(pitch.outlet.node) writes notes into \(voice.id)")
             }
             if inputs.contains("velocity"), !already(voice.id, "velocity"),
                catalog.material("control") != nil, catalog.canCompile("control") {
@@ -1217,13 +1541,14 @@ public enum CrateGenBuilder {
                 )
             }
             if catalog.material(voice.kind)?.param("gain") != nil, let amp, !already(voice.id, "gain") {
-                patch.connections.append(
-                    CratePatchConnection(
-                        source: amp.node, sourceOutput: amp.jack,
-                        target: voice.id, targetInput: "gain"
-                    )
+                let routed = routeCables(
+                    from: amp.outlet, lane: amp.lane, to: voice, param: "gain",
+                    catalog: catalog,
+                    ordinal: nextTrim(patch.nodes, prefix: lanePrefix(amp.outlet.node))
                 )
-                notes.append("\(amp.node) opens \(voice.id) through its gain")
+                patch.nodes.append(contentsOf: routed.nodes)
+                patch.connections.append(contentsOf: routed.cables)
+                notes.append("\(amp.outlet.node) opens \(voice.id) through its gain")
             }
         }
         return patch
