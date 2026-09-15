@@ -1,6 +1,6 @@
 {
   "name": "audiocrate",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A scene graph and AudioMaterial system for audio, organized like three.js. Serialisable DSP that the same interpreter runs offline and in an AudioWorklet.",
   "keywords": [
     "audio",
