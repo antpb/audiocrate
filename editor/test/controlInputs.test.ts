@@ -53,6 +53,13 @@ describe('nodeInputs', () => {
     expect(nodeOutputs(euclideanMaterial)).toEqual(['cv']);
   });
 
+  it('gives ADSR a live gate inlet plus note so the keybed can play it', () => {
+    expect(adsrMaterial.audioInputs).toContain('gate');
+    expect(nodeInputs(adsrMaterial)).toEqual(
+      expect.arrayContaining(['note', 'gate', 'velocity', 'attack', 'decay', 'sustain', 'release', 'amount']),
+    );
+  });
+
   it('gives envelopes and LFOs a cv outlet', () => {
     expect(nodeOutputs(adsrMaterial)).toEqual(['cv']);
     expect(nodeOutputs(lfoMaterial)).toEqual(['cv']);

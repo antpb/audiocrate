@@ -55,11 +55,18 @@ export function PaletteNav({ filter, query, onFilter, onQuery, onAdd }: Props) {
               <button
                 key={entry.kind}
                 type="button"
+                className="palette-item"
                 draggable
                 onDragStart={(event) => writePaletteKind(event.dataTransfer, entry.kind)}
                 onClick={() => onAdd(entry.kind)}
               >
-                {entry.label}
+                <span className="palette-copy">
+                  <strong>{entry.label}</strong>
+                  {entry.blurb ? <em>{entry.blurb}</em> : null}
+                </span>
+                <span className="palette-add" aria-hidden="true">
+                  +
+                </span>
               </button>
             ))}
           </section>

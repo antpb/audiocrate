@@ -120,9 +120,8 @@ extension CompiledVoice {
         let decay = max(ev(node, .decay, state, sr), 0)
         let sustain = min(max(ev(node, .sustain, state, sr), 0), 1)
         let release = max(ev(node, .release, state, sr), 0)
-        let gated = node.has(.gate)
-            ? ev(node, .gate, state, sr) > 0.5
-            : state.gate
+        let signalGate = node.has(.gate) ? ev(node, .gate, state, sr) > 0.5 : false
+        let gated = signalGate || state.gate
         let mem = state.memory(for: node.slot)
 
         if gated && !mem.pointee.lastGate {

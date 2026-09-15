@@ -75,6 +75,8 @@ export interface CatalogToolEntry {
   kind: string;
   label: string;
   category: string;
+  /** One sentence for a palette row. Same copy the web editor prints. */
+  blurb: string;
   inputs: readonly string[];
   outputs: readonly string[];
   /**
@@ -178,6 +180,7 @@ function toolEntry(entry: CatalogEntry): CatalogToolEntry {
     kind: entry.kind,
     label: entry.label,
     category: entry.category,
+    blurb: entry.blurb ?? '',
     ...labelled(entry.kind, jacks.inputs, jacks.outputs),
   };
 }
@@ -232,6 +235,7 @@ function materialEntry(entry: CatalogEntry): CatalogMaterialEntry {
     kind: entry.kind,
     label: entry.label,
     category: entry.category,
+    blurb: entry.blurb ?? '',
     ...(trait ? { trait } : {}),
     cvPolarity: material.cvPolarity,
     polyphony: material.polyphony,
@@ -270,6 +274,7 @@ export function buildMaterialCatalog(): MaterialCatalogFixture {
         kind: entry.kind,
         label: entry.label,
         category: entry.category,
+        blurb: entry.blurb ?? '',
         ...labelled(entry.kind, jacks.inputs, jacks.outputs),
         reason: 'names a kernel slot, which only a host with that kernel bound can run',
       });

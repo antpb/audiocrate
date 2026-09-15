@@ -18,7 +18,17 @@ import {
 } from '../../src/index';
 import { applyImportedAssets, importProjectBytes, isZipBytes, looksLikeZip } from './importProject';
 import { lineMonitorOn } from './lineInput';
+import { factoryPatchById } from './factoryPatches';
+import { LibraryPanel } from './LibraryPanel';
 import { parsePatch, stringifyPatch, starterPatch, spatialPatch, emptyPatch, type CratePatch } from './patch';
+import { parseNodeClip, stringifyNodeClip, pasteOffset } from './nodeClip';
+import {
+  deleteUserEntry,
+  importUserDocument,
+  patchFromUserEntry,
+  saveUserPatch,
+  type UserLibraryEntry,
+} from './userLibrary';
 import { isLineKind } from './tools';
 import { buildPluginDocument, registerPluginDocument, suggestedRole } from './pluginDoc';
 import { STORAGE_KEY, loadLineDeviceId, loadStoredPatch, saveLineDeviceId, saveStoredPatch } from './storage';
@@ -72,12 +82,6 @@ setOptionalNamMaxFrames(bootAudio.renderBlock);
 setLiveIrPartitionSize(bootAudio.renderBlock);
 setWebAudioEngineOptions({ sampleRate: bootAudio.sampleRate, bufferMs: bootAudio.bufferMs });
 
-const MOBILE_QUERY = '(max-width: 800px)';
-
-function isMobile(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches;
-}
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -103,6 +107,10 @@ export function App() {
   const [lineOpenError, setLineOpenError] = useState<string | null>(null);
   const [masterMonitor, setMasterMonitor] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [currentFactory, setCurrentFactory] = useState('');
+  const [currentUser, setCurrentUser] = useState('');
+  const [suggestedSaveName, setSuggestedSaveName] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(bootAudio);
   const [audioReadout, setAudioReadout] = useState(() => readSharedWebAudio());
@@ -122,6 +130,13 @@ export function App() {
   const [roomId, setRoomId] = useState<string | null>(() => readRoomId());
   const [peerCount, setPeerCount] = useState(0);
   const [assetProgress, setAssetProgress] = useState<TransferProgress | null>(null);
+  const clipRef = useRef<{
+    node: CratePatch['nodes'][number];
+    assets: ReturnType<typeof collectPortableAssets>;
+    pasteCount: number;
+  } | null>(null);
+  const copyRef = useRef<() => Promise<void>>(async () => {});
+  const pasteRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const host = hostRef.current;
@@ -130,9 +145,11 @@ export function App() {
     audioRef.current.lineDeviceId = loadLineDeviceId();
     audioRef.current.attachKeyboard(analog);
     const editor = new PatchEditor(host, {
-      onSelect: (id) => {
+      onSelect: (id, origin = 'graph') => {
         setSelectedId(id);
         setTick((n) => n + 1);
+        if (id && origin === 'user') setSheet('inspector');
+        else if (!id) setSheet((current) => (current === 'inspector' ? 'none' : current));
       },
       onChange: (kind = 'graph') => {
         const current = editorRef.current;
@@ -156,6 +173,19 @@ export function App() {
         event.preventDefault();
         void editor.removeSelected();
         return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'c') {
+          event.preventDefault();
+          void copyRef.current();
+          return;
+        }
+        if (key === 'v') {
+          event.preventDefault();
+          void pasteRef.current();
+          return;
+        }
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const digit = event.key.toLowerCase();
@@ -443,6 +473,64 @@ export function App() {
   playRef.current = play;
   stopRef.current = stop;
 
+  async function copySelection() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const node = editor.copiedNode();
+    if (!node) {
+      setStatus('Select a module to copy.');
+      return;
+    }
+    clipRef.current = {
+      node,
+      assets: collectPortableAssets(editor)
+        .filter((asset) => asset.nodeId === node.id)
+        .map((asset) => ({ ...asset, bytes: new Uint8Array(asset.bytes) })),
+      pasteCount: 0,
+    };
+    try {
+      await navigator.clipboard.writeText(stringifyNodeClip(node));
+    } catch {
+      /* in-memory clip still pastes */
+    }
+  }
+
+  async function pasteClipboard() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    let saved = clipRef.current?.node ?? null;
+    try {
+      const parsed = parseNodeClip(await navigator.clipboard.readText());
+      if (parsed) saved = parsed;
+    } catch {
+      /* keep the in-memory clip */
+    }
+    if (!saved) {
+      setStatus('Nothing to paste.');
+      return;
+    }
+    const memory = clipRef.current;
+    const sameClip =
+      memory && memory.node.kind === saved.kind && memory.node.x === saved.x && memory.node.y === saved.y;
+    const generation = sameClip ? memory.pasteCount + 1 : 1;
+    if (memory && sameClip) memory.pasteCount = generation;
+    const at = pasteOffset(saved.x, saved.y, generation);
+    try {
+      const id = await editor.pasteNode(saved, at);
+      if (sameClip && memory) {
+        for (const asset of memory.assets) {
+          await installPortableAsset(editor, { ...asset, nodeId: id });
+        }
+      }
+      setTick((n) => n + 1);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  copyRef.current = copySelection;
+  pasteRef.current = pasteClipboard;
+
   function fingerUp(note: number) {
     physicalRef.current.delete(note);
     analogRef.current.release(note);
@@ -503,6 +591,7 @@ export function App() {
         setKeys(analogRef.current.snapshot);
         saveStoredPatch(imported.patch);
         setTick((n) => n + 1);
+        forgetLibrarySelection();
         const extra = imported.warnings.length > 0 ? ` ${imported.warnings.join(' ')}` : '';
         setStatus(`Imported project "${imported.name}" (${imported.patch.nodes.length} nodes).${extra}`);
         return;
@@ -524,6 +613,7 @@ export function App() {
       applyVoiceHint(editor, analogRef.current);
       setKeys(analogRef.current.snapshot);
       saveStoredPatch(patch);
+      forgetLibrarySelection();
       setTick((n) => n + 1);
       setStatus(note);
     } catch (err) {
@@ -560,6 +650,11 @@ export function App() {
     }
   }
 
+  function forgetLibrarySelection() {
+    setCurrentFactory('');
+    setCurrentUser('');
+  }
+
   async function loadPreset(patch: CratePatch, status: string, factoryNam = false) {
     const editor = editorRef.current;
     if (!editor) return;
@@ -577,15 +672,77 @@ export function App() {
   }
 
   async function newPatch() {
+    forgetLibrarySelection();
+    setSuggestedSaveName('');
     await loadPreset(starterPatch(), 'New patch.', true);
   }
 
   async function newBlankPatch() {
+    forgetLibrarySelection();
+    setSuggestedSaveName('');
     await loadPreset(emptyPatch(), 'Blank patch.');
   }
 
   async function newSpatialPatch() {
+    forgetLibrarySelection();
+    setSuggestedSaveName('');
     await loadPreset(spatialPatch(), 'Spatial patch. Play, then turn the master yaw.');
+  }
+
+  async function loadFactoryPatch(id: string) {
+    const entry = factoryPatchById(id);
+    if (!entry) {
+      setStatus('That factory patch is not in this build.');
+      return;
+    }
+    await loadPreset(entry.patch, `Loaded "${entry.name}".`);
+    setCurrentFactory(id);
+    setCurrentUser('');
+    setSuggestedSaveName(entry.name);
+    setLibraryOpen(false);
+  }
+
+  async function loadUserEntry(entry: UserLibraryEntry) {
+    try {
+      const patch = patchFromUserEntry(entry);
+      await loadPreset(patch, `Loaded "${entry.label}".`);
+      setCurrentFactory('');
+      setCurrentUser(entry.filename);
+      setSuggestedSaveName(entry.label);
+      setLibraryOpen(false);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function saveToLibrary(name: string) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    try {
+      const entry = saveUserPatch(editor.getPatch(), name);
+      setCurrentFactory('');
+      setCurrentUser(entry.filename);
+      setSuggestedSaveName(entry.label);
+      setStatus(`Saved "${entry.label}".`);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function importToLibrary(file: File) {
+    try {
+      const text = await file.text();
+      const entry = importUserDocument(text, file.name);
+      setStatus(`Imported "${entry.label}" into Yours.`);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function deleteFromLibrary(filename: string) {
+    deleteUserEntry(filename);
+    if (currentUser === filename) setCurrentUser('');
+    setStatus('Deleted.');
   }
 
   function openImportProject() {
@@ -703,7 +860,6 @@ export function App() {
         await seedBareDrums(editor, (id, next) => persistShare(id, next, 'drum'));
         setTick((n) => n + 1);
       }
-      if (isMobile()) setSheet('inspector');
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
     }
@@ -751,11 +907,44 @@ export function App() {
           </h1>
         </div>
         <div className="actions">
-          <button type="button" onClick={() => void play()} disabled={playing}>
-            Play
+          <button
+            type="button"
+            className="icon-btn play"
+            onClick={() => void play()}
+            disabled={playing}
+            aria-label="Play"
+            title="Play"
+          >
+            ▷
           </button>
-          <button type="button" onClick={stop} disabled={!playing}>
-            Stop
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={stop}
+            disabled={!playing}
+            aria-label="Stop"
+            title="Stop"
+          >
+            □
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => void copySelection()}
+            disabled={!selectedId}
+            aria-label="Copy"
+            title="Copy"
+          >
+            <CopyGlyph />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => void pasteClipboard()}
+            aria-label="Paste"
+            title="Paste"
+          >
+            <PasteGlyph />
           </button>
           <button type="button" onClick={exportJson}>
             <span className="wide">Export Patch</span>
@@ -780,6 +969,15 @@ export function App() {
             </button>
             {moreOpen ? (
               <div className="more-menu">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    setLibraryOpen(true);
+                  }}
+                >
+                  Library
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -932,12 +1130,19 @@ export function App() {
               ) : null}
             </div>
           ) : null}
-          {sheet !== 'none' ? (
+          {sheet === 'palette' ? (
             <button type="button" className="sheet-dismiss" aria-label="Close panel" onClick={() => setSheet('none')} />
           ) : null}
           <div className="stage-host" ref={hostRef} />
         </div>
-        <InspectorPanel
+        <div className="inspector-dock">
+          <button
+            type="button"
+            className="inspector-handle"
+            aria-label="Close inspector"
+            onClick={() => setSheet('none')}
+          />
+          <InspectorPanel
           key={selectedId ?? 'none'}
           material={material}
           kind={selectedKind}
@@ -1137,9 +1342,9 @@ export function App() {
           onRemove={() => {
             if (selectedId) void clearStoredNodeAssets(selectedId);
             void editorRef.current?.removeSelected();
-            if (isMobile()) setSheet('none');
           }}
         />
+        </div>
       </div>
       <nav className="dock">
         <button type="button" className={sheet === 'palette' ? 'on' : ''} onClick={() => toggleSheet('palette')}>
@@ -1149,6 +1354,22 @@ export function App() {
           Inspect
         </button>
       </nav>
+      <LibraryPanel
+        open={libraryOpen}
+        currentFactory={currentFactory}
+        currentUser={currentUser}
+        suggestedSaveName={suggestedSaveName}
+        onClose={() => setLibraryOpen(false)}
+        onLoadFactory={(id) => void loadFactoryPatch(id)}
+        onLoadUser={(entry) => void loadUserEntry(entry)}
+        onSave={saveToLibrary}
+        onImport={importToLibrary}
+        onDelete={deleteFromLibrary}
+        onReset={() => {
+          setLibraryOpen(false);
+          void newPatch();
+        }}
+      />
       <SettingsPanel
         open={settingsOpen}
         settings={audioSettings}
@@ -1200,4 +1421,23 @@ function typingInField(target: EventTarget | null): boolean {
   if (!el) return false;
   const tag = el.tagName;
   return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+
+function CopyGlyph() {
+  return (
+    <svg className="nav-glyph" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
+      <rect x="2.5" y="2.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  );
+}
+
+function PasteGlyph() {
+  return (
+    <svg className="nav-glyph" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="9" height="11" rx="1" fill="none" stroke="currentColor" strokeWidth="1" />
+      <rect x="5.5" y="1.5" width="5" height="3" rx="0.75" fill="none" stroke="currentColor" strokeWidth="1" />
+      <path d="M6 8h4M6 10.5h4" fill="none" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  );
 }

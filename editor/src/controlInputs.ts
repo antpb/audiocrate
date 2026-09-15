@@ -36,15 +36,13 @@ export function controlInputs(material: AudioMaterial): string[] {
     names.add('gate');
     names.add('velocity');
   } else if (material.polyphony > 1) {
-    // `gate` only. It used to add note and velocity too, which is how the
-    // ADSR came to advertise a `note` jack: it is polyphonic and has no pitch,
-    // so the jack accepted cables and there was nothing behind it. Where a
-    // voice really does read note or velocity, the walk above finds them.
-    //
-    // `gate` is the exception that stays, because it is not read from the
-    // graph by anything: it is the voice allocator's, and a keyboard cable
-    // into it is a statement about what plays this module rather than a
-    // signal. `flattenPatch` treats it that way too, contributing no node.
+    // `note` and `gate` are the voice allocator's, not graph reads. A
+    // Keyboard cable into both is the statement that this module is what
+    // the keys play, the same way an oscillator is. `flattenPatch` drops
+    // those cables and leaves the inner voice gate in place. Velocity stays
+    // off the extra list: the walk finds it when the graph actually reads
+    // it, and a third keyboard cable into velocity is an audit hit.
+    names.add('note');
     names.add('gate');
   }
   return ['note', 'gate', 'velocity', 'clock', 'trig', 'reset'].filter((name) => names.has(name));

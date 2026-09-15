@@ -285,8 +285,9 @@ export const sequencerMaterial = new AudioMaterial({
 
 /**
  * Note-driven envelope for cabling into another AudioMaterial's params.
- * Times are live (dahdsr under the hood). Gate is the voice gate, so a
- * Keyboard note / gate cable allocates voices the same way an oscillator does.
+ * Times are live (dahdsr under the hood). `gate` is a live inlet, so a
+ * Keyboard gate cable is the same kind of signal a pulse sends into a
+ * dahdsr. noteOn still opens it when nothing is patched into gate.
  */
 export const adsrMaterial = new AudioMaterial({
   name: 'ADSR',
@@ -302,13 +303,14 @@ export const adsrMaterial = new AudioMaterial({
   polyphony: 8,
   channels: 1,
   cvPolarity: 'unipolar',
-  graph: ({ velocity, params }) =>
+  graph: ({ velocity, params, audio }) =>
     env
       .dahdsr({
         attack: params.attack,
         decay: params.decay,
         sustain: params.sustain,
         release: params.release,
+        gate: audio.input('gate'),
       })
       .mul(velocity)
       .mul(params.amount),

@@ -85,7 +85,17 @@ export type EditorChangeKind = 'view' | 'graph';
 
 export interface EditorHooks {
   onChange: (kind?: EditorChangeKind) => void;
-  onSelect: (nodeId: string | null) => void;
+  onSelect: (nodeId: string | null, origin?: 'user' | 'graph') => void;
+}
+
+function graphKeepsInspector(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('[data-testid="node"]') ||
+      target.closest('[data-testid="connection"]') ||
+      target.closest('[data-testid="input-socket"]') ||
+      target.closest('[data-testid="output-socket"]'),
+  );
 }
 
 export class PatchEditor {
@@ -97,6 +107,7 @@ export class PatchEditor {
   private readonly hooks: EditorHooks;
   private selected: string | null = null;
   private dropIndex = 0;
+  private canvasPress: { x: number; y: number; target: EventTarget | null } | null = null;
 
   constructor(container: HTMLElement, hooks: EditorHooks) {
     this.hooks = hooks;
@@ -124,7 +135,17 @@ export class PatchEditor {
     this.area.addPipe((context) => {
       if (context.type === 'nodepicked') {
         this.selected = context.data.id;
-        this.hooks.onSelect(context.data.id);
+        this.hooks.onSelect(context.data.id, 'user');
+      }
+      if (context.type === 'pointerdown') {
+        this.canvasPress = {
+          x: context.data.event.clientX,
+          y: context.data.event.clientY,
+          target: context.data.event.target,
+        };
+      }
+      if (context.type === 'pointerup') {
+        this.releaseCanvasPress(context.data.event);
       }
       if (context.type === 'nodetranslated') {
         this.hooks.onChange('view');
@@ -169,12 +190,53 @@ export class PatchEditor {
     return this.selected;
   }
 
+  private releaseCanvasPress(event: PointerEvent): void {
+    const press = this.canvasPress;
+    this.canvasPress = null;
+    if (!press) return;
+    const dx = event.clientX - press.x;
+    const dy = event.clientY - press.y;
+    if (dx * dx + dy * dy > 64) return;
+    if (graphKeepsInspector(press.target)) return;
+    this.selected = null;
+    this.hooks.onSelect(null);
+  }
+
   selectedKind(): string | null {
     return this.selected ? this.kinds.get(this.selected) ?? null : null;
   }
 
   selectedMaterial(): AudioMaterial | null {
     return this.selected ? this.materials.get(this.selected) ?? null : null;
+  }
+
+  copiedNode(): CratePatch['nodes'][number] | null {
+    if (!this.selected) return null;
+    return this.getPatch().nodes.find((node) => node.id === this.selected) ?? null;
+  }
+
+  async pasteNode(
+    saved: { kind: string; params: Record<string, number>; data?: Record<string, unknown>; x: number; y: number },
+    position?: { x: number; y: number },
+  ): Promise<string> {
+    const id = await this.addKind(saved.kind, position ?? { x: saved.x + 36, y: saved.y + 36 });
+    const material = this.materials.get(id);
+    if (material) {
+      for (const [name, value] of Object.entries(saved.params)) {
+        try {
+          material.setParam(name, value);
+        } catch {
+          /* schema drifted */
+        }
+      }
+      if (isTransportKind(saved.kind)) this.syncTransportFromGraph();
+    }
+    if (saved.data) {
+      const node = this.editor.getNodes().find((item) => item.id === id);
+      if (node instanceof PatchNode) node.nodeData = { ...(node.nodeData ?? {}), ...saved.data };
+    }
+    this.hooks.onChange();
+    return id;
   }
 
   async addKind(kind: string, position?: { x: number; y: number }): Promise<string> {
@@ -202,14 +264,14 @@ export class PatchEditor {
     this.dropIndex += 1;
     await this.area.translate(node.id, at);
     this.selected = node.id;
-    this.hooks.onSelect(node.id);
+    this.hooks.onSelect(node.id, 'user');
     this.hooks.onChange();
     return node.id;
   }
 
   select(id: string): void {
     this.selected = id;
-    this.hooks.onSelect(id);
+    this.hooks.onSelect(id, 'user');
   }
 
   graphLinks(): GraphLink[] {

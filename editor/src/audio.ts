@@ -414,9 +414,9 @@ export class PatchAudio {
     this.armSampleClips(editor, ctx);
     this.armMidiClips(editor, ctx);
     this.publishVoices();
-    this.startMeter();
     this.playing = true;
     this.markKnownGraph(editor);
+    this.startMeter();
     const monitoredLines = pendingLines.filter((id) => lineMonitorOn(editor.nodeData(id)));
     void this.attachLines(ctx, monitoredLines, token);
     void this.attachMidiIo(pendingMidiIn, pendingMidiOut, token);

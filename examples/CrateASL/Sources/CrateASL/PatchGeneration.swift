@@ -362,11 +362,50 @@ public struct CrateGenLane: Sendable, Equatable {
     public var rateHz: Double
     /// How far it moves what it is patched into, 0 to 1.
     public var depth: Double
+    /// What a notes lane plays, as wire values in -1..1.
+    ///
+    /// Empty means the sequencer keeps the module's defaults, which climb 0 to
+    /// 1 and back down. Those defaults are a fine *shape* and a terrible
+    /// *melody*, and until this existed every generated patch with a notes
+    /// lane played the same eight notes: the model was asked for a lane and
+    /// never for anything to put in it.
+    public var steps: [Double]
 
-    public init(kind: CrateGenLaneKind, rateHz: Double = 1, depth: Double = 0.5) {
+    public init(
+        kind: CrateGenLaneKind,
+        rateHz: Double = 1,
+        depth: Double = 0.5,
+        steps: [Double] = []
+    ) {
         self.kind = kind
         self.rateHz = rateHz
         self.depth = depth
+        self.steps = steps
+    }
+
+    /// A melody, written the way a person would say it, turned into the
+    /// numbers a sequencer step holds.
+    ///
+    /// `flattenPatch` maps a cable into a voice's `note` onto MIDI 48..72, so
+    /// a step of -1 is MIDI 48 and +1 is MIDI 72. Everything outside that
+    /// octave is folded rather than clamped: clamping a melody flattens its
+    /// ends into one repeated note, which is worse than transposing it.
+    ///
+    /// Snapped to a scale on the way through, so a model that answers with a
+    /// note a semitone out of key produces a patch that is still in key. The
+    /// scale index is crate's own (`quantizeToScale`): 0 major, 1 minor,
+    /// 2 pentatonic, 3 chromatic, 4 whole tone.
+    public static func melody(_ midi: [Int], root: Int = 0, scale: Int = 1) -> [Double] {
+        midi.prefix(8).map { note in
+            var folded = Double(note)
+            while folded < 48 { folded += 12 }
+            while folded > 72 { folded -= 12 }
+            let snapped = quantizeToScale(folded, Double(root), Double(scale))
+            var inRange = snapped
+            while inRange < 48 { inRange += 12 }
+            while inRange > 72 { inRange -= 12 }
+            return Swift.min(1, Swift.max(-1, (inRange - 60) / 12))
+        }
     }
 }
 
@@ -518,6 +557,21 @@ public enum CrateGenBuilder {
 
     // MARK: Lanes
 
+    /// A melody as `step0`..`step7`.
+    ///
+    /// Shorter than eight repeats rather than padding with silence, because a
+    /// sequencer holds its value between clocks: a step left at its default is
+    /// not a rest, it is whatever number the module shipped with, dropped into
+    /// the middle of the tune.
+    static func stepParams(_ steps: [Double]) -> [String: Double] {
+        guard !steps.isEmpty else { return [:] }
+        var params = [String: Double]()
+        for index in 0..<8 {
+            params["step\(index)"] = steps[index % steps.count]
+        }
+        return params
+    }
+
     /// The modules one lane needs, and where its signal comes out.
     ///
     /// Ids are prefixed with the lane's own name so two lanes of the same
@@ -662,7 +716,7 @@ public enum CrateGenBuilder {
             // cabling Synced Clock into `input` mixed pulses into the
             // audio path and the sequencer sounded like noise.
             if let clock = tick("clk"),
-               let seq = make("seq", "sequencer", [:]) {
+               let seq = make("seq", "sequencer", stepParams(lane.steps)) {
                 let out = catalog.jacks("sequencer")?.outputs.first ?? "cv"
                 return (
                     [clock, seq],
@@ -1063,16 +1117,30 @@ public enum CrateGenBuilder {
         }
 
         // The routing: this is the composition.
-        let everything = Set(routingTargets(nodes, catalog: catalog, limit: .max))
+        //
+        // Checked against what *this* lane may move, not against the union of
+        // what every lane may move. That distinction is not pedantic: the
+        // wiring prompt offers one menu built from every lane's legal targets,
+        // so the model can hand lane 1 a destination that was only ever legal
+        // for lane 2. It did, and the result was a single sequencer cabled
+        // into both `note` and `velocity` on one voice, which ties pitch to
+        // loudness: the bottom of the melody is silent and the top is loud.
+        var permitted = [String: Set<String>]()
+        for (index, lane) in lanes.enumerated() {
+            permitted["lane\(index + 1)"] = Set(
+                routingTargets(nodes, catalog: catalog, limit: .max, forLane: lane.kind)
+            )
+        }
         for route in routes {
             guard let outlet = laneOutlets[route.lane] else {
                 notes.append("no lane called \(route.lane)")
                 continue
             }
-            guard everything.contains(route.target) else {
-                notes.append("nothing called \(route.target) to move")
-                continue
-            }
+            // The specific refusals first, then the general one. Both end the
+            // same way, and the difference is what the patch says about
+            // itself: "swings too wide for source.freq" is a sentence somebody
+            // can act on, and "cannot move source.freq" is not.
+            //
             // A lane with no depth of its own may not drive a jack whose full
             // range is a siren. Dropped rather than scaled: the lane is
             // re-pointed at something bounded below, which is a patch that
@@ -1090,6 +1158,10 @@ public enum CrateGenBuilder {
                let param = route.target.split(separator: ".", maxSplits: 1).last,
                Self.pitchParams.contains(String(param)) {
                 notes.append("\(route.lane) would sweep pitch on \(route.target), so it moves something else")
+                continue
+            }
+            guard permitted[route.lane]?.contains(route.target) == true else {
+                notes.append("\(route.lane) cannot move \(route.target), so it moves something else")
                 continue
             }
             let parts = route.target.split(separator: ".", maxSplits: 1).map(String.init)
@@ -1507,10 +1579,22 @@ public enum CrateGenBuilder {
             patch.connections.contains { $0.target == target && $0.targetInput == inlet }
         }
 
+        // At the pace the rest of the patch is moving at, rather than at a
+        // fixed rate. A voice with nothing writing its note sits on one pitch,
+        // so one of these is injected when the model did not ask for it, and
+        // injecting an arpeggio into a patch whose only other lane is a 0.2 Hz
+        // drift is how somebody asking for something atmospheric gets
+        // something busy. The slowest lane the model *did* ask for is the best
+        // evidence available about how fast this patch is meant to be.
+        let pace = lanes.map(\.rateHz).min()
         var pitch = outlet(for: [.notes])
-        if pitch == nil { pitch = inject(.notes, rateHz: 5) }
+        if pitch == nil {
+            pitch = inject(.notes, rateHz: Swift.min(5, Swift.max(0.25, (pace ?? 5) * 2)))
+        }
         var amp = outlet(for: [.pulse, .euclidean, .envelope])
-        if amp == nil { amp = inject(.envelope, rateHz: 4) }
+        if amp == nil {
+            amp = inject(.envelope, rateHz: Swift.min(4, Swift.max(0.25, (pace ?? 4) * 2)))
+        }
 
         for voice in voices {
             let inputs = catalog.jacks(voice.kind)?.inputs ?? []
@@ -1763,9 +1847,37 @@ public enum CratePatchEditor {
     /// room left for the model to answer in. Parameters left at their default
     /// are omitted for the same reason: the model does not need to be told
     /// what it can look up, and a wall of defaults is where the budget goes.
-    public static func brief(_ patch: CratePatch, catalog: MaterialCatalog) -> String {
+    /// What is in this patch, in one line per module and nothing else.
+    ///
+    /// For the pass that asks *which* modules a change touches, before
+    /// anything is asked about how. No parameters, no cables, no jacks: those
+    /// are the expensive half and none of them help answer "make it darker".
+    /// About a fifth of `brief` on the same patch.
+    public static func outline(_ patch: CratePatch, catalog: MaterialCatalog) -> String {
+        patch.nodes
+            .map { "\($0.id) \(catalog.label($0.kind))" }
+            .joined(separator: "\n")
+    }
+
+    /// The brief, optionally narrowed to the modules a change is about.
+    ///
+    /// Narrowing is the whole reason the change flow fits. A patch of
+    /// twenty-three modules briefs at 464 tokens and carries a schema of 574
+    /// more, because `targetJack` and `param` are unions across every module in
+    /// it: forty-four inlets and forty-one parameters, of which a given edit
+    /// can use about five. Told which modules matter first, both collapse.
+    ///
+    /// Cables are kept when either end is in the set, so a module's context
+    /// includes what feeds it and what it feeds. That is what a person would
+    /// need to see to make the same edit.
+    public static func brief(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog,
+        only focus: Set<String>? = nil
+    ) -> String {
+        let nodes = focus.map { keep in patch.nodes.filter { keep.contains($0.id) } } ?? patch.nodes
         var lines = ["nodes:"]
-        for node in patch.nodes {
+        for node in nodes {
             let material = catalog.material(node.kind)
             let changed = node.params
                 .filter { name, value in
@@ -1779,11 +1891,45 @@ public enum CratePatchEditor {
         }
         lines.append("cables:")
         for connection in patch.connections {
+            if let focus, !focus.contains(connection.source), !focus.contains(connection.target) {
+                continue
+            }
             lines.append(
                 "  \(connection.source).\(connection.sourceOutput) > \(connection.target).\(connection.targetInput)"
             )
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The modules a change is about, plus whatever they are wired to.
+    ///
+    /// One step out from what the model named, because an edit to a filter is
+    /// almost always an edit to what feeds it or what it feeds, and a model
+    /// that named only the filter should not then be unable to say where its
+    /// output goes.
+    public static func neighbourhood(
+        _ patch: CratePatch,
+        around named: [String],
+        catalog: MaterialCatalog
+    ) -> Set<String> {
+        let named = Set(named.filter { patch.node($0) != nil })
+        guard !named.isEmpty else { return [] }
+        // One step, measured against what was named rather than against the
+        // set being built. Testing the growing set walks the whole patch: a
+        // filter pulls in its source, the source pulls in its lane, the lane
+        // pulls in its clock, and seventeen of twenty-three modules are
+        // "adjacent" to the one somebody asked about.
+        var focus = named
+        for connection in patch.connections {
+            if named.contains(connection.source) { focus.insert(connection.target) }
+            if named.contains(connection.target) { focus.insert(connection.source) }
+        }
+        // Master is always in: an edit that rewires the output needs to be
+        // able to name it, and it costs four characters.
+        if let master = patch.nodes.first(where: { $0.kind == catalog.io.master }) {
+            focus.insert(master.id)
+        }
+        return focus
     }
 
     private static func trimmed(_ value: Double) -> String {

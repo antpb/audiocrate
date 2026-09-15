@@ -13,5 +13,6 @@ describe('filterCatalog', () => {
     const tuners = filterCatalog(catalog, 'all', 'tun');
     expect(tuners.some((entry) => entry.kind === 'tuner')).toBe(true);
     expect(filterCatalog(catalog, 'Time', 'loop').some((entry) => entry.kind === 'looper')).toBe(true);
+    expect(filterCatalog(catalog, 'all', 'headphones').some((entry) => entry.kind === 'spatialmaster')).toBe(true);
   });
 });

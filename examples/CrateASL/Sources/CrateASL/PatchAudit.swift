@@ -84,6 +84,16 @@ public enum CrateGenRepair: Sendable, Equatable {
     case connect(CratePatchConnection)
     case disconnect(CratePatchConnection)
     case setParam(node: String, param: String, value: Double)
+    /// Cuts a cable and puts a constant where it was.
+    ///
+    /// One operation rather than two because it is one decision. Cutting a
+    /// wrong cable into a voice's `velocity` and stopping there leaves the
+    /// jack at zero, which is a quieter kind of broken than what was there
+    /// before: the first version of this repair did exactly that and made a
+    /// silent patch out of a wrong one. What belongs in a voice's velocity
+    /// when nothing is playing it is a constant, which is what `driveVoices`
+    /// puts there when it builds a patch from nothing.
+    case replaceWithConstant(CratePatchConnection, value: Double)
 }
 
 // MARK: - The audit
@@ -108,6 +118,8 @@ public enum CratePatchAudit {
         findings += patternsWithNothingDrivingThem(patch, catalog)
         findings += patternsThatDoNotStartWithTheSong(patch, catalog)
         findings += voicesNobodyPlays(patch, catalog)
+        findings += pitchTiedToLevel(patch, catalog)
+        findings += sequencersWithNothingInThem(patch, catalog)
         findings += modulesWiredToNothing(patch, catalog)
         findings += outputProblems(patch, catalog)
         return findings.sorted {
@@ -166,6 +178,22 @@ public enum CratePatchAudit {
         case let .setParam(id, name, value):
             guard let index = patch.nodes.firstIndex(where: { $0.id == id }) else { return false }
             patch.nodes[index].params[name] = value
+            return true
+        case let .replaceWithConstant(cable, value):
+            guard patch.connections.contains(cable) else { return false }
+            patch.connections.removeAll { $0 == cable }
+            let id = "\(cable.target)\(cable.targetInput)"
+            if patch.node(id) == nil {
+                patch.nodes.append(
+                    CratePatchNode(id: id, kind: "control", params: ["value": value])
+                )
+            }
+            patch.connections.append(
+                CratePatchConnection(
+                    source: id, sourceOutput: "audio",
+                    target: cable.target, targetInput: cable.targetInput
+                )
+            )
             return true
         }
     }
@@ -363,6 +391,83 @@ public enum CratePatchAudit {
         return findings
     }
 
+    /// One source driving both what a voice plays and how loud it plays it.
+    ///
+    /// Always wrong, and wrong in a way that sounds like a broken instrument
+    /// rather than like a mistake: the bottom of the melody is silent and the
+    /// top is loud, because the same number is being read as a pitch and as a
+    /// level. It happened because the wiring prompt offers one menu built from
+    /// every lane's legal targets, so a sequencer could be handed a
+    /// destination only a rhythmic lane should have had.
+    ///
+    /// The pitch cable is the one kept. A sequencer exists to play notes, and
+    /// a voice with no level cable still sounds: its `gain` sits at whatever
+    /// the plan chose.
+    static func pitchTiedToLevel(
+        _ patch: CratePatch,
+        _ catalog: MaterialCatalog
+    ) -> [CrateGenFinding] {
+        var findings = [CrateGenFinding]()
+        for node in patch.nodes {
+            let into = patch.connections.filter { $0.target == node.id }
+            let pitch = into.filter { $0.targetInput == "note" }
+            guard !pitch.isEmpty else { continue }
+            for cable in into where cable.targetInput == "velocity" || cable.targetInput == "gain" {
+                guard pitch.contains(where: { $0.source == cable.source }) else { continue }
+                findings.append(
+                    CrateGenFinding(
+                        rule: "voice.pitchTiedToLevel",
+                        severity: .broken,
+                        node: node.id,
+                        detail:
+                            "\(cable.source) drives both note and \(cable.targetInput) on \(node.id), "
+                            + "so the low notes are silent and the high ones are loud",
+                        // Held open rather than cut. A voice whose velocity is
+                        // cabled to nothing reads zero and is silent, which is
+                        // a worse patch than the one being repaired.
+                        repair: .replaceWithConstant(cable, value: 1)
+                    )
+                )
+            }
+        }
+        return findings
+    }
+
+    /// A sequencer still holding the eight numbers the module shipped with.
+    ///
+    /// Those defaults climb 0 to 1 and back down, which is a fine shape and a
+    /// terrible melody, and every generated patch with a notes lane played it.
+    /// The model was asked for a lane and never for anything to put in it.
+    ///
+    /// Not repairable, and deliberately: Swift can write eight numbers but it
+    /// cannot write eight numbers that suit "an atmospheric synthesizer". That
+    /// is precisely the kind of question worth spending a call on.
+    static func sequencersWithNothingInThem(
+        _ patch: CratePatch,
+        _ catalog: MaterialCatalog
+    ) -> [CrateGenFinding] {
+        patch.nodes.compactMap { node in
+            guard node.kind == "sequencer", let material = catalog.material("sequencer") else {
+                return nil
+            }
+            let stepNames = material.paramOrder.filter { $0.hasPrefix("step") }
+            let untouched = stepNames.allSatisfy { name in
+                guard let set = node.params[name] else { return true }
+                guard let descriptor = material.param(name) else { return true }
+                return abs(set - descriptor.defaultValue) < 1e-9
+            }
+            guard untouched else { return nil }
+            return CrateGenFinding(
+                rule: "sequencer.noMelody",
+                severity: .weak,
+                node: node.id,
+                detail:
+                    "\(node.id) is playing the sequencer's factory steps, which run straight up "
+                    + "and back down and are the same in every patch"
+            )
+        }
+    }
+
     /// A module whose output reaches nothing, and one whose audio inlet is fed
     /// by nothing.
     static func modulesWiredToNothing(
@@ -469,6 +574,223 @@ public enum CratePatchAudit {
             || ["pulse", "euclidean", "sequencer", "lfo", "adsr", "dahdsr", "syncedramp", "trigger",
                 "breakpoints", "randomsmooth", "randomstepped", "envfollow", "samplehold"]
                 .contains(kind)
+    }
+}
+
+// MARK: - Listening
+
+extension CratePatchAudit {
+
+    /// Whether the patch actually makes a sound, by rendering it.
+    ///
+    /// The strongest check there is, and the only one that catches the whole
+    /// class at once: a noise gate whose threshold never opens, an envelope
+    /// nothing triggers, a chain whose middle is silence. Every structural
+    /// rule above is a guess at why a patch might be silent, and this asks.
+    ///
+    /// Kept out of `run` so that `repair` can loop without rendering three
+    /// times. Half a second of audio is nothing next to a model call and a lot
+    /// next to a dictionary lookup.
+    public static func listen(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog,
+        seconds: Double = 1
+    ) -> CrateGenFinding? {
+        guard let compiled = try? CrateFlatten.flatten(patch, catalog: catalog, name: "Audit"),
+              let voice = try? CompiledVoice(document: compiled.graph)
+        else {
+            return CrateGenFinding(
+                rule: "output.willNotCompile",
+                severity: .broken,
+                detail: "the patch does not compile, so it cannot be played"
+            )
+        }
+        let frames = Int(48_000 * seconds)
+        let state = voice.makeState()
+        state.setParams(ParameterMap(compiled.params).defaults)
+        state.gate = true
+        // An insert is fed a signal, because an insert with no input is
+        // supposed to be silent and reporting that would be a false alarm.
+        var input = [Float](repeating: 0, count: frames)
+        for index in 0..<frames {
+            input[index] = Float(sin(2 * Double.pi * 220 * Double(index) / 48_000) * 0.3)
+        }
+        let insert = patch.nodes.contains { $0.kind == catalog.io.line }
+        var out = [Float](repeating: 0, count: frames)
+        var right: [Float]? = nil
+        _ = voice.renderBlock(
+            state, sampleRate: 48_000, output: &out,
+            input: insert ? input : nil, outputR: &right,
+            transport: TransportSnapshot(playing: true)
+        )
+        let peak = out.reduce(0.0) { Swift.max($0, Double(abs($1))) }
+        guard peak <= 1e-5 else { return nil }
+        // Silent. Which module made it silent is worth knowing, and the only
+        // way to find out is to listen at each one in turn.
+        if let culprit = whereItGoesQuiet(patch, catalog: catalog, insert: insert) {
+            return culprit
+        }
+        return CrateGenFinding(
+            rule: "output.rendersSilence",
+            severity: .broken,
+            detail:
+                "the patch compiles and renders nothing over \(Int(seconds * 1000)) ms: "
+                + "something in the chain is closed, or nothing is triggering the voice"
+        )
+    }
+
+    /// Listens, repairs what it heard, and listens again.
+    ///
+    /// Separate from `repair` because rendering is expensive and `repair`
+    /// loops: this runs once at the end, on a patch that is otherwise already
+    /// structurally sound. Two rounds, because opening one closed module can
+    /// reveal a second one behind it, and a third round has never been needed.
+    public static func soundCheck(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog,
+        rounds: Int = 2
+    ) -> (patch: CratePatch, fixed: [CrateGenFinding], remaining: [CrateGenFinding]) {
+        var patch = patch
+        var fixed = [CrateGenFinding]()
+        for _ in 0..<rounds {
+            guard let heard = listen(patch, catalog: catalog) else { return (patch, fixed, []) }
+            guard let repair = heard.repair, apply(repair, to: &patch) else {
+                return (patch, fixed, [heard])
+            }
+            fixed.append(heard)
+        }
+        return (patch, fixed, listen(patch, catalog: catalog).map { [$0] } ?? [])
+    }
+
+    /// The first module in the audio path that is passing silence on when what
+    /// reaches it is not silent.
+    ///
+    /// Written because of one real patch. Somebody asked for an atmospheric
+    /// synthesizer and the plan pass put a noise gate in the effects chain; the
+    /// signal arriving at it peaked at 0.046 and its threshold sat at its
+    /// default of 0.05, so the gate never opened and the whole patch was
+    /// silent. Everything about that patch validated. Nothing in it was
+    /// structurally wrong. It was a mute button with a reverb after it.
+    ///
+    /// A model cannot choose that threshold, because a threshold is a claim
+    /// about a level and the level depends on every module before it, which
+    /// does not exist yet when the effects are being chosen. So it is measured
+    /// here and repaired against what was measured.
+    ///
+    /// One render per stage of the audio path, at a quarter second, and only
+    /// ever on a patch that is already silent. That costs less than the model
+    /// call it saves.
+    static func whereItGoesQuiet(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog,
+        insert: Bool
+    ) -> CrateGenFinding? {
+        let path = audioPath(patch, catalog: catalog)
+        guard path.count > 1 else { return nil }
+
+        // The source itself making no sound is not "something in the chain is
+        // closed", it is a voice nobody is playing, and saying the right one
+        // is the difference between a useful finding and a shrug.
+        if let first = path.first, let node = patch.node(first),
+           let jack = catalog.jacks(node.kind)?.outputs.first,
+           peakTapping(patch, at: first, jack: jack, catalog: catalog, insert: insert) <= 1e-5 {
+            return CrateGenFinding(
+                rule: "source.silent",
+                severity: .broken,
+                node: first,
+                detail: "\(first) (\(node.kind)) makes no sound on its own: nothing is playing it"
+            )
+        }
+
+        var previous: (id: String, peak: Double)?
+        for id in path {
+            guard let node = patch.node(id),
+                  let jack = catalog.jacks(node.kind)?.outputs.first
+            else { continue }
+            let heard = peakTapping(patch, at: id, jack: jack, catalog: catalog, insert: insert)
+            defer { previous = (id, heard) }
+            guard heard <= 1e-5, let upstream = previous, upstream.peak > 1e-5 else { continue }
+
+            let level = String(format: "%.3f", upstream.peak)
+            // A threshold is the usual reason, and it is repairable against
+            // the level that was actually measured rather than against a guess.
+            if let material = catalog.material(node.kind),
+               let descriptor = material.param("threshold") {
+                let opened = Swift.max(descriptor.min, upstream.peak * 0.25)
+                return CrateGenFinding(
+                    rule: "chain.closed",
+                    severity: .broken,
+                    node: id,
+                    detail:
+                        "\(id) (\(node.kind)) is closing the patch: what reaches it peaks at \(level) "
+                        + "and its threshold is \(String(format: "%.3f", node.params["threshold"] ?? descriptor.defaultValue))",
+                    repair: .setParam(node: id, param: "threshold", value: CrateFlatten.quantize(descriptor, opened))
+                )
+            }
+            return CrateGenFinding(
+                rule: "chain.closed",
+                severity: .broken,
+                node: id,
+                detail:
+                    "\(id) (\(node.kind)) is closing the patch: what reaches it peaks at \(level) "
+                    + "and nothing comes out the other side"
+            )
+        }
+        return nil
+    }
+
+    /// The audio path from whatever makes sound to the output, in order.
+    static func audioPath(_ patch: CratePatch, catalog: MaterialCatalog) -> [String] {
+        guard let master = patch.nodes.first(where: { $0.kind == catalog.io.master }) else { return [] }
+        var order = [String]()
+        var seen = Set<String>()
+        func walk(_ id: String) {
+            guard seen.insert(id).inserted else { return }
+            for cable in patch.connections where cable.target == id {
+                guard let target = patch.node(id) else { continue }
+                let audio = target.kind == catalog.io.master
+                    || catalog.material(target.kind)?.isAudioInlet(cable.targetInput) == true
+                if audio { walk(cable.source) }
+            }
+            if id != master.id { order.append(id) }
+        }
+        walk(master.id)
+        return order
+    }
+
+    /// What comes out of one node, with everything downstream of it ignored.
+    static func peakTapping(
+        _ patch: CratePatch,
+        at id: String,
+        jack: String,
+        catalog: MaterialCatalog,
+        insert: Bool
+    ) -> Double {
+        guard let master = patch.nodes.first(where: { $0.kind == catalog.io.master }) else { return -1 }
+        var probe = patch
+        probe.connections.removeAll { $0.target == master.id }
+        probe.connections.append(
+            CratePatchConnection(source: id, sourceOutput: jack, target: master.id, targetInput: "input")
+        )
+        guard let compiled = try? CrateFlatten.flatten(probe, catalog: catalog, name: "Probe"),
+              let voice = try? CompiledVoice(document: compiled.graph)
+        else { return -1 }
+        let frames = 12_000
+        let state = voice.makeState()
+        state.setParams(ParameterMap(compiled.params).defaults)
+        state.gate = true
+        var input = [Float](repeating: 0, count: frames)
+        for index in 0..<frames {
+            input[index] = Float(sin(2 * Double.pi * 220 * Double(index) / 48_000) * 0.3)
+        }
+        var out = [Float](repeating: 0, count: frames)
+        var right: [Float]? = nil
+        _ = voice.renderBlock(
+            state, sampleRate: 48_000, output: &out,
+            input: insert ? input : nil, outputR: &right,
+            transport: TransportSnapshot(playing: true)
+        )
+        return out.reduce(0.0) { Swift.max($0, Double(abs($1))) }
     }
 }
 

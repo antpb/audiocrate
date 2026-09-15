@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { catalog } from '../src/catalog';
+import { catalog, missingPaletteBlurbs } from '../src/catalog';
 import { formatMaterialsCatalog, undocumentedKinds } from '../src/materialsCatalog';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -10,6 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 describe('materials catalog', () => {
   it('documents every palette kind and writes the markdown', () => {
     expect(undocumentedKinds(), 'add a MATERIAL_NOTES sentence for each new kind').toEqual([]);
+    expect(missingPaletteBlurbs(), 'add a PALETTE_BLURBS sentence for each new kind').toEqual([]);
     const markdown = formatMaterialsCatalog();
     const out = resolve(here, '../docs/materials.md');
     mkdirSync(dirname(out), { recursive: true });

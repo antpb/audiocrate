@@ -2337,7 +2337,8 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     const decay = Math.max(evalNode(node.inputs.decay!, state, sampleRate), 0);
     const sustain = Math.min(Math.max(evalNode(node.inputs.sustain!, state, sampleRate), 0), 1);
     const release = Math.max(evalNode(node.inputs.release!, state, sampleRate), 0);
-    const gated = node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : state.gate;
+    const signalGate = node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : false;
+    const gated = signalGate || state.gate;
     const mem = getMemory<AdsrMemory>(state, node.i, () => ({
       stage: 'idle',
       level: 0,

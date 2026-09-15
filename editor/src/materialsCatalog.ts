@@ -9,8 +9,9 @@ import {
 } from './catalogSnapshot';
 
 /**
- * One sentence per palette kind.
+ * One sentence per palette kind, for the generated materials page.
  * The test fails if a catalog kind is missing here.
+ * The picker uses the shorter `PALETTE_BLURBS` copy on each catalog entry.
  */
 export const MATERIAL_NOTES: Record<string, string> = {
   keyboard: 'Host note source. cv is last-note 1V/oct. note/gate/velocity cables allocate poly voices.',

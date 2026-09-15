@@ -330,6 +330,16 @@ describe('core insert materials', () => {
     expect(adsrMaterial.cvPolarity).toBe('unipolar');
   });
 
+  it('adsr opens when its gate inlet goes high, without noteOn', () => {
+    expect(adsrMaterial.audioInputs).toContain('gate');
+    const voice = compileVoice(adsrMaterial.graph);
+    const state = voice.createState();
+    state.params = { ...adsrMaterial.snapshotParams(), velocity: 1, amount: 1, gate: 1 };
+    let peak = 0;
+    for (let i = 0; i < 2400; i += 1) peak = Math.max(peak, voice.renderSample(state, SR));
+    expect(peak).toBeGreaterThan(0.5);
+  });
+
   it('lfo is a bipolar control oscillator', () => {
     expect(lfoMaterial.cvPolarity).toBe('bipolar');
     expect(lfoMaterial.params.type).toBeDefined();

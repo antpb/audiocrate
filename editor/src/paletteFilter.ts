@@ -8,7 +8,8 @@ export function matchesPaletteQuery(entry: CatalogEntry, query: string): boolean
   return (
     entry.label.toLowerCase().includes(q) ||
     entry.kind.toLowerCase().includes(q) ||
-    entry.category.toLowerCase().includes(q)
+    entry.category.toLowerCase().includes(q) ||
+    (entry.blurb ?? '').toLowerCase().includes(q)
   );
 }
 

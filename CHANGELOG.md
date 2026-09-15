@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **`adsrMaterial` reads a live `gate` inlet.** The graph is `env.dahdsr` with
+  `audio.input('gate')`, so a cable into `gate` is the same kind of signal a
+  pulse sends into `dahdsrMaterial`. `audioInputs` includes `gate`. `noteOn`
+  still opens the envelope when that inlet is silent or unconnected.
+- **`env.dahdsr` with a `gate` input still follows the voice gate.** A patched
+  gate that sits at 0 used to ignore `noteOn`, because the compiler treated
+  "gate inlet present" as "voice gate does not count." The envelope now opens
+  on the signal **or** `state.gate`.
+
 ## 0.2.0
 
 ### Added

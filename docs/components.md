@@ -146,7 +146,7 @@ None of these produce audio. They produce numbers that drive things that do.
 | `sequencerMaterial` | `step0` to `step7`, `clock` and `reset` (jacks) | Advances through eight values on a clock |
 | `randomSteppedMaterial` | `freq` | New value per tick |
 | `randomSmoothMaterial` | `freq` | Interpolated between values |
-| `adsrMaterial` | `attack`, `decay`, `sustain`, `release`, `amount` | Note-driven. Times are live |
+| `adsrMaterial` | `attack`, `decay`, `sustain`, `release`, `amount` | Note-driven. Times are live. `gate` is a live audio inlet; `noteOn` still opens it when that inlet is silent |
 | `dahdsrMaterial` | `delay`, `attack`, `hold`, `decay`, `sustain`, `release` | |
 | `syncedRampMaterial` | `division` (menu), `depth` | A 0..1 ramp locked to the grid |
 | `syncedClockMaterial` | `division` (menu) | A pulse on each division boundary, for the sequencer nodes. Reads the host snapshot. Does not set bpm |
@@ -159,13 +159,13 @@ This is the largest category.
 save it in the document, and have no effect on the sound. They are two
 different things wearing one face.
 
-`gate` on the four polyphonic voices (SynthVoice, Oscillator, Wavetable, ADSR)
-belongs to the voice allocator rather than to the graph: it is a flag on the
-render state, not a value a node can read. It stays on the canvas because a
-*keyboard* cable into it is not a signal, it is the statement that this module
-is what the keys play, and flatten reads it exactly that way while contributing
-no node. To gate a voice from inside a patch, drive its `gain` or `velocity`;
-both are live.
+`gate` on SynthVoice, Oscillator, and Wavetable belongs to the voice allocator
+rather than to the graph: it is a flag on the render state, not a value a node
+can read. It stays on the canvas because a *keyboard* cable into it is not a
+signal, it is the statement that this module is what the keys play, and flatten
+reads it exactly that way while contributing no node. To gate a voice from
+inside a patch, drive its `gain` or `velocity`; both are live. `adsrMaterial`
+is the exception: its `gate` is a live audio inlet.
 
 The five position parameters on the two spatial modules (`spatialsource.x/y/z`,
 `spatialmaster.yaw/pitch`) are real controls whose effect lives outside the
@@ -175,11 +175,11 @@ is a gap in those two modules rather than in the palette, and removing the
 jacks would hide a control that works to conceal one route into it that does
 not.
 
-To gate an envelope from inside a patch, use `dahdsrMaterial`, whose trigger is
-`input`, a real audio inlet. `breakpointEnvelopeMaterial` and
-`samplePlayerMaterial` take theirs the same way. The list is pinned by
-`DeadJackTests` in the Swift package, which measures it rather than trusting
-it: a new dead jack fails, and so does fixing one.
+To gate an envelope from inside a patch, cable into `adsrMaterial`'s `gate` or
+use `dahdsrMaterial`, whose trigger is `input`. `breakpointEnvelopeMaterial` and
+`samplePlayerMaterial` take theirs the same way. The remaining dead-jack list
+is pinned by `DeadJackTests` in the Swift package, which measures it rather
+than trusting it: a new dead jack fails, and so does fixing one.
 
 **Reset.** The five modules that carry a position in a pattern (Clock, Clock
 Divide, Clock Multiply, Euclidean, Sequencer) take a `reset` jack. A rising

@@ -831,7 +831,7 @@ Bipolar control oscillator. Same eight waves as Oscillator, at control rate.
 
 Note-driven envelope. Times are live. Output is unipolar CV.
 
-- Jacks: in gate, velocity, attack(cv), decay(cv), sustain(cv), release(cv), amount(cv) / out cv
+- Jacks: in gate, note, velocity, attack(cv), decay(cv), sustain(cv), release(cv), amount(cv) / out cv
 - Voices: 8 (oldest steal)
 - Outlet: unipolar CV (jack name cv)
 
