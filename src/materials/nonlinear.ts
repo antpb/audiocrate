@@ -37,10 +37,16 @@ export const halfRectifyMaterial = new AudioMaterial({
 
 export const WAVESHAPE_CURVES = ['Soft', 'Hard', 'Fold', 'Asym', 'Sine'] as const;
 
+// Every curve passes zero through zero. A transfer curve that does not
+// turns silence into a constant: Fold was [-1, 1, -1, 1, -1], which is -1 at
+// its centre, so a folded patch with nothing playing sat at full-scale DC and
+// its limiter clamped everything after it; Asym put 0.05 there. Fold is an odd
+// fold now (up to the top at half scale, back down past it) and Asym keeps its
+// lean with its middle point on zero.
 const SOFT_CURVE = [-1, -0.92, -0.55, 0, 0.55, 0.92, 1];
 const HARD_CURVE = [-1, -1, -0.15, 0, 0.15, 1, 1];
-const FOLD_CURVE = [-1, 1, -1, 1, -1];
-const ASYM_CURVE = [-1, -0.15, 0.05, 0.55, 1];
+const FOLD_CURVE = [1, -1, 0, 1, -1];
+const ASYM_CURVE = [-1, -0.2, 0, 0.55, 1];
 const SINE_CURVE = [-1, -0.92, -0.71, -0.38, 0, 0.38, 0.71, 0.92, 1];
 
 function pickCurve(input: ASLValue, type: ASLValue): ASLValue {

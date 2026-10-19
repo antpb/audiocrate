@@ -42,6 +42,25 @@ public enum ASLValue: Equatable, Sendable {
         return out
     }
 
+    /// The same numbers as `numbers`, straight to `[Float]`.
+    ///
+    /// A sample box holds one `Float` per frame and the only consumer is
+    /// `planTable`, which wants floats. Going through `numbers` builds a whole
+    /// `[Double]` first and then maps it: two passes and two allocations over
+    /// something that can be a million frames long, on a path a patcher hits
+    /// every time it adopts an edit. Measured at half the time and half the
+    /// peak for a long sample.
+    public var floats: [Float]? {
+        guard case .array(let items) = self else { return nil }
+        var out = [Float]()
+        out.reserveCapacity(items.count)
+        for item in items {
+            guard let value = item.number else { return nil }
+            out.append(Float(value))
+        }
+        return out
+    }
+
     public subscript(key: String) -> ASLValue? {
         if case .object(let fields) = self { return fields[key] }
         return nil
@@ -94,15 +113,22 @@ extension ASLValue: Decodable {
 /// what keeps one filter one filter; a decoder that treats each copy as its
 /// own node gives it two delay lines fed the same signal, which sounds
 /// almost right and is not.
+///
+/// Format 2 of `crate.plugin` writes a shared node in full once and as
+/// `{ "ref": id }` after that. Such a stub decodes with `isReference` set and
+/// no kind; `ASLGraphDocument` resolves every stub while decoding, so a graph
+/// handed to the compiler never contains one. See `docs/format.md`.
 public struct ASLNodeDocument: Codable, Sendable {
     public let id: Int
     public let kind: String
     public let params: [String: ASLValue]
     public let inputs: [String: ASLNodeDocument]
     public let list: [ASLNodeDocument]?
+    /// A format 2 `{ "ref": id }` that has not been resolved yet.
+    public let isReference: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, params, inputs, list
+        case id, kind, params, inputs, list, ref
     }
 
     public init(
@@ -117,6 +143,16 @@ public struct ASLNodeDocument: Codable, Sendable {
         self.params = params
         self.inputs = inputs
         self.list = list
+        self.isReference = false
+    }
+
+    fileprivate init(reference id: Int) {
+        self.id = id
+        kind = ""
+        params = [:]
+        inputs = [:]
+        list = nil
+        isReference = true
     }
 
     /// `list` is omitted when absent rather than written as null, because the
@@ -124,6 +160,10 @@ public struct ASLNodeDocument: Codable, Sendable {
     /// here should come back byte-comparable to one that did not.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if isReference {
+            try container.encode(id, forKey: .ref)
+            return
+        }
         try container.encode(id, forKey: .id)
         try container.encode(kind, forKey: .kind)
         try container.encode(params, forKey: .params)
@@ -133,11 +173,17 @@ public struct ASLNodeDocument: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        kind = try container.decode(String.self, forKey: .kind)
-        params = try container.decodeIfPresent([String: ASLValue].self, forKey: .params) ?? [:]
-        inputs = try container.decodeIfPresent([String: ASLNodeDocument].self, forKey: .inputs) ?? [:]
-        list = try container.decodeIfPresent([ASLNodeDocument].self, forKey: .list)
+        if !container.contains(.kind), let ref = try container.decodeIfPresent(Int.self, forKey: .ref) {
+            self.init(reference: ref)
+            return
+        }
+        self.init(
+            id: try container.decode(Int.self, forKey: .id),
+            kind: try container.decode(String.self, forKey: .kind),
+            params: try container.decodeIfPresent([String: ASLValue].self, forKey: .params) ?? [:],
+            inputs: try container.decodeIfPresent([String: ASLNodeDocument].self, forKey: .inputs) ?? [:],
+            list: try container.decodeIfPresent([ASLNodeDocument].self, forKey: .list)
+        )
     }
 }
 
@@ -148,11 +194,33 @@ public struct ASLGraphDocument: Codable, Sendable {
     public let output: ASLNodeDocument
     /// 1 or 2 to force the channel count; absent means decide from the graph.
     public let channels: Int?
+    /// Parameters whose host changes glide rather than jump
+    /// (`ASLGraphDescriptor.smooth`). Absent on a graph with none.
+    public let smooth: [String]?
+    /// A split instrument's voice outputs (`ASLGraphDescriptor.sends`): nodes
+    /// inside `output`, resolved to the ones `output` defines. Absent for any
+    /// graph that is not a split voice.
+    public let sends: [ASLNodeDocument]?
+    /// One element or none: a struct cannot hold itself, an array of it can.
+    private let busStorage: [ASLGraphDocument]?
+    /// What runs once on the voices' summed sends, through ports
+    /// `send0`..`sendN` (`ASLGraphDescriptor.bus`).
+    public var bus: ASLGraphDocument? { busStorage?.first }
 
-    public init(inputs: [String], output: ASLNodeDocument, channels: Int? = nil) {
+    public init(
+        inputs: [String],
+        output: ASLNodeDocument,
+        channels: Int? = nil,
+        smooth: [String]? = nil,
+        sends: [ASLNodeDocument]? = nil,
+        bus: ASLGraphDocument? = nil
+    ) {
         self.inputs = inputs
         self.output = output
         self.channels = channels
+        self.smooth = smooth
+        self.sends = sends
+        self.busStorage = bus.map { [$0] }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -160,17 +228,110 @@ public struct ASLGraphDocument: Codable, Sendable {
         try container.encode(inputs, forKey: .inputs)
         try container.encode(output, forKey: .output)
         try container.encodeIfPresent(channels, forKey: .channels)
+        try container.encodeIfPresent(smooth, forKey: .smooth)
+        // By reference, as `shareSerializedGraph` writes them: every send is
+        // defined inside `output`.
+        try container.encodeIfPresent(sends?.map { ASLNodeDocument(reference: $0.id) }, forKey: .sends)
+        try container.encodeIfPresent(bus, forKey: .bus)
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         inputs = try container.decodeIfPresent([String].self, forKey: .inputs) ?? []
-        output = try container.decode(ASLNodeDocument.self, forKey: .output)
+        output = try ASLGraphDocument.resolvingReferences(
+            container.decode(ASLNodeDocument.self, forKey: .output)
+        )
         channels = try container.decodeIfPresent(Int.self, forKey: .channels)
+        smooth = try container.decodeIfPresent([String].self, forKey: .smooth)
+        if let written = try container.decodeIfPresent([ASLNodeDocument].self, forKey: .sends) {
+            // Each send is the node `output` already defines with that id,
+            // whether it was written as a reference or in full.
+            var defined = [Int: ASLNodeDocument]()
+            func collect(_ node: ASLNodeDocument) {
+                if defined[node.id] != nil { return }
+                defined[node.id] = node
+                for child in node.inputs.values { collect(child) }
+                for child in node.list ?? [] { collect(child) }
+            }
+            collect(output)
+            sends = try written.map { send in
+                guard let node = defined[send.id] else {
+                    throw ASLCompileError("crate.plugin: a send names node \(send.id), which the graph output does not contain")
+                }
+                return node
+            }
+        } else {
+            sends = nil
+        }
+        busStorage = try container.decodeIfPresent(ASLGraphDocument.self, forKey: .bus).map { [$0] }
+    }
+
+    /// The most node appearances a resolved graph may expand to. A format 2
+    /// document is small however much it shares, and resolving it into value
+    /// types is cheap because shared children share storage, but a walker
+    /// that recurses without memoising (a catalog scan, an audit) pays per
+    /// appearance. A format 1 file of this size would be hundreds of
+    /// megabytes, so nothing legitimate comes near it.
+    static let maxResolvedAppearances = 1_000_000
+
+    /// Every `{ "ref": id }` replaced by the node it names, as
+    /// `inflateSerializedGraph` does in compiledPlugin.ts. Refuses a reference
+    /// with no definition, a node that is its own input, and a graph that
+    /// would expand past `maxResolvedAppearances`.
+    static func resolvingReferences(_ root: ASLNodeDocument) throws -> ASLNodeDocument {
+        var defined = [Int: ASLNodeDocument]()
+        var hasReference = false
+        func collect(_ node: ASLNodeDocument) {
+            if node.isReference { hasReference = true; return }
+            if defined[node.id] == nil { defined[node.id] = node }
+            for child in node.inputs.values { collect(child) }
+            for child in node.list ?? [] { collect(child) }
+        }
+        collect(root)
+        if !hasReference { return root }
+
+        var built = [Int: (node: ASLNodeDocument, appearances: Int)]()
+        var building = Set<Int>()
+        func build(_ node: ASLNodeDocument) throws -> (node: ASLNodeDocument, appearances: Int) {
+            if let done = built[node.id] { return done }
+            guard let source = defined[node.id] else {
+                throw ASLCompileError("crate.plugin: the graph refers to node \(node.id), which it never defines")
+            }
+            guard building.insert(node.id).inserted else {
+                throw ASLCompileError("crate.plugin: node \(node.id) is its own input")
+            }
+            var appearances = 1
+            var inputs = [String: ASLNodeDocument]()
+            for (key, child) in source.inputs {
+                let resolved = try build(child)
+                inputs[key] = resolved.node
+                appearances += resolved.appearances
+            }
+            var list: [ASLNodeDocument]?
+            if let children = source.list {
+                list = try children.map { child in
+                    let resolved = try build(child)
+                    appearances += resolved.appearances
+                    return resolved.node
+                }
+            }
+            if appearances > maxResolvedAppearances {
+                throw ASLCompileError(
+                    "crate.plugin: the graph expands past \(maxResolvedAppearances) node appearances"
+                )
+            }
+            building.remove(node.id)
+            let out = ASLNodeDocument(
+                id: source.id, kind: source.kind, params: source.params, inputs: inputs, list: list
+            )
+            built[node.id] = (out, appearances)
+            return (out, appearances)
+        }
+        return try build(root).node
     }
 
     private enum CodingKeys: String, CodingKey {
-        case inputs, output, channels
+        case inputs, output, channels, smooth, sends, bus
     }
 
     public static func decode(_ data: Data) throws -> ASLGraphDocument {

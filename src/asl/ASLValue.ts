@@ -29,9 +29,27 @@ export class ASLValue {
     return new ASLValue(makeNode('toFrequency', { note: this.node }, {}));
   }
 
-  /** Maps a -1..1 signal (an oscillator or lfo) onto an arbitrary [min, max] range. */
-  range(min: number, max: number): ASLValue {
-    return new ASLValue(makeNode('range', { source: this.node }, { min, max }));
+  /**
+   * Maps a -1..1 signal (an oscillator or lfo) onto an arbitrary [min, max] range.
+   *
+   * Constant bounds become one `range` node, which is what every existing
+   * graph serializes to. A bound that is itself a signal (a parameter, an
+   * envelope) cannot live in a node's params, so it lowers to the same formula
+   * in `add` and `mul`: `min + (source + 1) / 2 * (max - min)`. Before this a
+   * parameter passed here was written into params as an object and every
+   * sample came out NaN, with no error.
+   */
+  range(min: ASLValueLike, max: ASLValueLike): ASLValue {
+    if (typeof min === 'number' && typeof max === 'number') {
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        throw new RangeError(`range() bounds must be finite numbers, got [${min}, ${max}].`);
+      }
+      return new ASLValue(makeNode('range', { source: this.node }, { min, max }));
+    }
+    const lo = toNode(min);
+    const span = makeNode('add', { a: toNode(max), b: makeNode('mul', { a: lo, b: constNode(-1) }, {}) }, {});
+    const unit = makeNode('mul', { a: makeNode('add', { a: this.node, b: constNode(1) }, {}), b: constNode(0.5) }, {});
+    return new ASLValue(makeNode('add', { a: lo, b: makeNode('mul', { a: unit, b: span }, {}) }, {}));
   }
 
   /**

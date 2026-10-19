@@ -18,7 +18,7 @@ export interface LiveVoiceRenderer {
    * read off it (`asl/ports.ts`), not passed alongside it, so an AudioMaterial that
    * grows a sidechain does not also have to be wired differently here.
    */
-  createVoice(graph: ASLGraphDescriptor): Promise<VoiceHandle>;
+  createVoice(graph: ASLGraphDescriptor, options?: { params?: Record<string, number> }): Promise<VoiceHandle>;
 }
 
 /**
@@ -62,7 +62,9 @@ async function createVoiceFor(
   wasm: LiveWasmBinaries,
   registry: AudioMaterialRegistry,
 ): Promise<VoiceHandle> {
-  const voice = await renderer.createVoice(material.graph);
+  // The values go with the voice as well as with the note: the note is a
+  // message, and the first block can run before it lands.
+  const voice = await renderer.createVoice(material.graph, { params: material.snapshotParams() });
   voice.noteOn(material.snapshotParams());
   const plugin = registry.forMaterial(material);
   if (plugin?.bindLiveVoice) {
@@ -137,6 +139,15 @@ export function disposeVoiceHandle(voice: VoiceHandle): void {
   }
   try {
     voice.node.disconnect();
+  } catch {
+    /* already gone */
+  }
+  // Disconnecting does not stop a processor that keeps returning true; this
+  // does, and it is what lets the browser free it. Without it every voice a
+  // session ever built kept a place on the audio thread, and a long patching
+  // session slowly ran it out of time.
+  try {
+    voice.node.port.postMessage({ type: 'dispose' });
   } catch {
     /* already gone */
   }

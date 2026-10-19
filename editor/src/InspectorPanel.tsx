@@ -68,6 +68,22 @@ interface InspectorPanelProps {
   onNoteRelease?: (note: number) => void;
   nodeData?: Record<string, unknown>;
   onNodeData?: (patch: Record<string, unknown>) => void;
+  /**
+   * Where this module runs in an instrument (`src/patcher/voicing.ts`), or
+   * absent when that question does not arise (an insert, a module no voice
+   * reaches, a tool).
+   */
+  voicing?: VoicingView;
+  /** `instanced` to keep the module per voice, undefined for the default. */
+  onVoicing?: (voicing: 'instanced' | undefined) => void;
+}
+
+export interface VoicingView {
+  role: 'instanced' | 'summed';
+  /** Whether summing is possible at all; false greys out Summed. */
+  canSum: boolean;
+  /** Why it runs per voice, when it does. */
+  reason?: string;
 }
 
 export function InspectorPanel({
@@ -106,6 +122,8 @@ export function InspectorPanel({
   onNoteRelease,
   nodeData,
   onNodeData,
+  voicing,
+  onVoicing,
 }: InspectorPanelProps) {
   const analysis = useAnalysis(nodeId ?? null);
   if (kind && isMasterKind(kind)) {
@@ -231,6 +249,37 @@ export function InspectorPanel({
           Remove
         </button>
       </header>
+      {voicing && onVoicing ? (
+        <div className="param voicing">
+          <span>Runs</span>
+          <div className="segmented" role="group" aria-label="Runs per voice or summed">
+            <button
+              type="button"
+              className={voicing.role === 'instanced' ? 'on' : ''}
+              aria-pressed={voicing.role === 'instanced'}
+              onClick={() => onVoicing('instanced')}
+            >
+              Per voice
+            </button>
+            <button
+              type="button"
+              className={voicing.role === 'summed' ? 'on' : ''}
+              aria-pressed={voicing.role === 'summed'}
+              disabled={!voicing.canSum}
+              onClick={() => onVoicing(undefined)}
+            >
+              Summed
+            </button>
+          </div>
+          <p className="hint">
+            {voicing.role === 'summed'
+              ? 'Runs once on all the voices together, like one pedal after a polyphonic synth.'
+              : voicing.canSum
+                ? `Runs once per note${voicing.reason ? `: ${voicing.reason}` : ''}.`
+                : `Runs once per note because ${voicing.reason ?? 'the patch needs it to'}.`}
+          </p>
+        </div>
+      ) : null}
       {hasFileSlots(kind) ? (
         <div className="asset-slots">
           {kind === 'amp' && onNamFile && onNamClear ? (

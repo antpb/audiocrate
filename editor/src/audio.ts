@@ -8,6 +8,7 @@ import {
   WebAudioRenderer,
   analysisOutputs,
   barBeats,
+  connectSplitVoices,
   isAnalysisAbsoluteOutput,
   isLooperKind,
   isLooperPulseOutput,
@@ -87,6 +88,14 @@ import { prepareClipBuffer } from './resampleAudio';
 import { lineMonitorOn } from './lineInput';
 import { isLineKind, isMasterKind, isMidiClipKind, isMidiInKind, isMidiOutKind } from './tools';
 import {
+  COMPILED_LIVE_ID,
+  compiledParamName,
+  compiledPlan,
+  compiledStructureKey,
+  type CompiledPlan,
+} from './compiledPlayback';
+import { wavetableFilename } from './nodeAssets';
+import {
   drumLiveNote,
   drumPadAsset,
   ensureDrumPadBoxes,
@@ -158,6 +167,11 @@ interface LiveNode {
   mix: GainNode;
   input?: AudioNode;
   handles: VoiceHandle[];
+  /**
+   * A split instrument's bus (`flattenPatch`'s `voicing`): the summed half
+   * of the patch, run once. The voices feed it, not `mix`; it feeds `mix`.
+   */
+  bus?: VoiceHandle;
   pool: VoicePool | null;
   kernelPoly: boolean;
   nativeSetParam?: (name: string, value: number) => void;
@@ -227,7 +241,21 @@ export class PatchAudio {
   private meterQuietMs = 0;
   private lastMeterTick = 0;
   private meterTimer = 0;
+  /**
+   * Set while the patch is playing compiled: flattened into one graph and
+   * run as one voice, the way the plugin runs it (`compiledPlayback.ts`).
+   * `key` is the structure the voice was built from, so a cable change
+   * rebuilds it and a knob does not.
+   */
+  private compiled: { material: AudioMaterial; role: 'insert' | 'instrument'; key: string } | null = null;
+  /** The structure last seen while playing per module, to notice a patch becoming compilable. */
+  private moduleKey = '';
   playing = false;
+
+  /** Whether the running patch is the compiled graph, for a status line. */
+  get playsCompiled(): boolean {
+    return this.compiled !== null;
+  }
 
   attachKeyboard(analog: AnalogKeyboard): void {
     this.unsub?.();
@@ -323,6 +351,14 @@ export class PatchAudio {
       await this.armTimeline(editor, token);
       return;
     }
+    const plan = this.planCompiled(editor);
+    if (plan.ok) {
+      console.info(`[crate-patcher] play compiled (${plan.role}, ${plan.material.polyphony} voice${plan.material.polyphony === 1 ? '' : 's'})`);
+      await this.armCompiled(editor, plan, token);
+      return;
+    }
+    console.info(`[crate-patcher] play per module: ${plan.reason}`);
+    this.moduleKey = compiledStructureKey(editor.getPatch());
     const renderer = this.renderer!;
     const ctx = this.scene!.audioContext as unknown as AudioContext;
     const snapshot = this.analog?.snapshot;
@@ -420,6 +456,137 @@ export class PatchAudio {
     const monitoredLines = pendingLines.filter((id) => lineMonitorOn(editor.nodeData(id)));
     void this.attachLines(ctx, monitoredLines, token);
     void this.attachMidiIo(pendingMidiIn, pendingMidiOut, token);
+  }
+
+  private planCompiled(editor: PatchEditor): CompiledPlan {
+    return compiledPlan(editor.getPatch(), {
+      holdsFile: (id) => {
+        const material = editor.materials.get(id);
+        return material ? wavetableFilename(material) !== null : false;
+      },
+    });
+  }
+
+  /**
+   * Plays the patch as the plugin plays it: one voice running the flattened
+   * graph. See `compiledPlayback.ts` for why, and for what stays per module.
+   */
+  private async armCompiled(
+    editor: PatchEditor,
+    plan: Extract<CompiledPlan, { ok: true }>,
+    token: number,
+  ): Promise<void> {
+    const ctx = this.scene!.audioContext as unknown as AudioContext;
+    if (!(await this.buildCompiled(editor, plan, token))) return;
+    this.unlock();
+    await this.resumeIfNeeded();
+    if (token !== this.armToken) return;
+    this.rewire();
+    if (this.speaker) attachNodeToHtmlSink(this.speaker, ctx.destination);
+    this.holdCompiledGate();
+    this.startTransport(editor, ctx);
+    this.publishVoices();
+    this.playing = true;
+    this.markKnownGraph(editor);
+    this.startMeter();
+    // Lines and MIDI In keep their host plumbing; only where the audio and
+    // the notes go is different.
+    const lineIds: string[] = [];
+    const midiInIds: string[] = [];
+    for (const node of editor.editor.getNodes()) {
+      const kind = editor.kinds.get(node.id) ?? '';
+      if (isLineKind(kind) && lineMonitorOn(editor.nodeData(node.id))) lineIds.push(node.id);
+      if (isMidiInKind(kind)) {
+        this.midiInMonitors.set(node.id, new MidiInputMonitor());
+        midiInIds.push(node.id);
+      }
+    }
+    if (plan.role === 'insert') void this.attachLines(ctx, lineIds, token);
+    void this.attachMidiIo(midiInIds, [], token);
+  }
+
+  /**
+   * Builds the compiled voice and files it, replacing any previous one.
+   * Returns false when a newer Play or Stop overtook it.
+   */
+  private async buildCompiled(
+    editor: PatchEditor,
+    plan: Extract<CompiledPlan, { ok: true }>,
+    token: number,
+  ): Promise<boolean> {
+    const ctx = this.scene!.audioContext as unknown as AudioContext;
+    const live = await this.createLive(ctx, this.renderer!, plan.material, COMPILED_LIVE_ID);
+    if (token !== this.armToken) {
+      disposeLiveVoices(live);
+      return false;
+    }
+    const previous = this.lives.get(COMPILED_LIVE_ID);
+    if (previous) {
+      previous.pool?.allNotesOff();
+      disposeLiveVoices(previous);
+      try {
+        previous.mix.disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
+    this.lives.set(COMPILED_LIVE_ID, live);
+    this.compiled = { material: plan.material, role: plan.role, key: compiledStructureKey(editor.getPatch()) };
+    return true;
+  }
+
+  /**
+   * An insert, or a patch that plays itself, has nobody playing it, so its
+   * voice gate is held open for as long as it plays, which is what the
+   * plugin does with an insert. An instrument waits for keys.
+   */
+  private holdCompiledGate(): void {
+    const compiled = this.compiled;
+    const live = this.lives.get(COMPILED_LIVE_ID);
+    if (!compiled || !live || compiled.role !== 'insert') return;
+    for (const handle of live.handles) {
+      handle.noteOn({ ...compiled.material.snapshotParams(), note: 69, velocity: 0.85 });
+    }
+  }
+
+  /**
+   * An edit while compiled. A change of modules or cables rebuilds the voice
+   * (every delay line starts empty, as it does in the plugin); a patch that
+   * can no longer compile, or one that now can while playing per module,
+   * re-arms in the other mode. Values do not come here: they arrive through
+   * `setParam` and glide.
+   */
+  private async syncCompiled(editor: PatchEditor): Promise<boolean> {
+    const key = compiledStructureKey(editor.getPatch());
+    if (this.compiled) {
+      if (key === this.compiled.key) return true;
+      const plan = this.planCompiled(editor);
+      // Mid-edit and not lowering: keep the last good voice playing, and
+      // leave the key alone so the next edit tries again.
+      if (!plan.ok && plan.kind === 'unflattenable') return true;
+      if (!plan.ok || plan.role !== this.compiled.role) {
+        await this.rearm(editor);
+        return true;
+      }
+      if (!(await this.buildCompiled(editor, plan, this.armToken))) return true;
+      this.rewire(true);
+      this.holdCompiledGate();
+      const ctx = this.scene?.audioContext as AudioContext | undefined;
+      if (ctx) this.startTransport(editor, ctx);
+      this.publishVoices();
+      return true;
+    }
+    if (key === this.moduleKey) return false;
+    this.moduleKey = key;
+    if (this.timelinePlaying || !this.planCompiled(editor).ok) return false;
+    await this.rearm(editor);
+    return true;
+  }
+
+  /** Stop and Play in one step, for a change of playback mode. */
+  private async rearm(editor: PatchEditor): Promise<void> {
+    this.stop();
+    await this.play(editor);
   }
 
   /**
@@ -553,6 +720,10 @@ export class PatchAudio {
     if (bank && ctx) writeMidiInJacks(bank, monitor.snapshot, ctx.currentTime, voice?.type === 'press');
     if (!voice || !this.playing || !this.editor) return;
     const event = analogFromMidi(voice.type, voice.note, voice.velocity, monitor.snapshot);
+    if (this.compiled) {
+      this.driveCompiled(event);
+      return;
+    }
     for (const id of midiInNoteTargets(this.editor, nodeId)) {
       const live = this.lives.get(id);
       const material = this.editor.materials.get(id);
@@ -698,6 +869,7 @@ export class PatchAudio {
   private async syncGraph(): Promise<void> {
     const editor = this.editor;
     if (!editor || !this.playing) return;
+    if (await this.syncCompiled(editor)) return;
     const removed = this.forgetRemovedNodes(editor);
     const added = await this.adoptAddedNodes(editor);
     const audible = await this.adoptNewlyAudible(editor);
@@ -837,7 +1009,7 @@ export class PatchAudio {
     const live = this.lives.get(nodeId);
     if (live) {
       live.pool?.allNotesOff();
-      for (const handle of live.handles) disposeVoiceHandle(handle);
+      disposeLiveVoices(live);
       try {
         live.mix.disconnect();
       } catch {
@@ -932,7 +1104,7 @@ export class PatchAudio {
     if (!live || !material) return;
     const keyed = new Set([...keyedTargets(editor), ...midiInNoteTargets(editor)]);
     if (keyed.has(id)) return;
-    if (material.audioInputs.length === 0 && !controlInputs(material).includes('note')) {
+    if (holdsOpen(editor, id, material)) {
       live.handles[0]?.noteOn({ ...material.snapshotParams(), note: 69, velocity: 0.85 });
     }
   }
@@ -1007,6 +1179,17 @@ export class PatchAudio {
   }
 
   setParam(nodeId: string, name: string, value: number): void {
+    // Compiled: the module's parameter is the whole voice's, under the name
+    // flatten published it as. It glides there like a host's knob.
+    const compiledLive = this.compiled ? this.lives.get(COMPILED_LIVE_ID) : undefined;
+    if (compiledLive) {
+      const published = compiledParamName(nodeId, name);
+      if (published in (this.compiled?.material.params ?? {})) {
+        if (compiledLive.pool) compiledLive.pool.setParam(published, value);
+        else for (const handle of compiledLive.handles) handle.setParam(published, value);
+        compiledLive.bus?.setParam(published, value);
+      }
+    }
     const live = this.lives.get(nodeId);
     if (live) {
       if (live.nativeSetParam) {
@@ -1121,7 +1304,7 @@ export class PatchAudio {
     const material = editor?.materials.get(nodeId);
     const previous = this.lives.get(nodeId);
     if (!editor || !renderer || !ctx || !material || !previous) return;
-    for (const handle of previous.handles) disposeVoiceHandle(handle);
+    disposeLiveVoices(previous);
     try {
       previous.mix.disconnect();
     } catch {
@@ -1231,6 +1414,26 @@ export class PatchAudio {
     };
     this.taps.set('__master', tapFor(master));
 
+    // Compiled: one voice is the whole patch. Its outlet is Master, and a Line
+    // is its main input, which is the port an insert's flattened graph reads.
+    // No cable here is a Web Audio connection; they are all inside the graph.
+    const compiled = this.compiled ? this.lives.get(COMPILED_LIVE_ID) : undefined;
+    if (compiled) {
+      connectLiveOut(compiled);
+      compiled.mix.connect(master);
+      const main = compiled.handles[0];
+      if (main && this.compiled?.role === 'insert') {
+        for (const line of this.lines.values()) {
+          try {
+            line.gain.connect(main.node, 0, 0);
+          } catch {
+            /* the voice was replaced while the line opened */
+          }
+        }
+      }
+      return true;
+    }
+
     const wired: Array<{ from: AudioNode; to: AudioNode; output: number; input: number }> = [];
     const wiredParams: Array<{ from: AudioNode; to: AudioParam }> = [];
     const connectOnce = (from: AudioNode, to: AudioNode, output = 0, input = 0): void => {
@@ -1279,7 +1482,7 @@ export class PatchAudio {
     }
 
     for (const [id, live] of this.lives) {
-      for (const handle of live.handles) handle.node.connect(live.mix);
+      connectLiveOut(live);
       if (isTransportKind(editor.kinds.get(id) ?? '')) {
         const bank = this.transportJacks.get(id);
         if (!bank) continue;
@@ -1530,6 +1733,11 @@ export class PatchAudio {
       if (ctx) writeJacks(bank, event.snapshot, now, event.type === 'press');
     }
     if (!this.playing || !this.editor) return;
+    if (this.compiled) {
+      this.driveCompiled(event);
+      this.publishVoices();
+      return;
+    }
     for (const id of keyedTargets(this.editor)) {
       const live = this.lives.get(id);
       const material = this.editor.materials.get(id);
@@ -1540,6 +1748,18 @@ export class PatchAudio {
       driveLive(live, material, event);
     }
     this.publishVoices();
+  }
+
+  /**
+   * A key, from the keybed or MIDI In, on the compiled voice. Only an
+   * instrument takes notes; an insert's gate is held open for its whole life
+   * and a note off would close it.
+   */
+  private driveCompiled(event: AnalogEvent): void {
+    const compiled = this.compiled;
+    const live = this.lives.get(COMPILED_LIVE_ID);
+    if (!compiled || !live || compiled.role !== 'instrument') return;
+    driveLive(live, compiled.material, event);
   }
 
   /**
@@ -1592,7 +1812,9 @@ export class PatchAudio {
     const only = publish ? null : this.cvSourceIds();
     if (only) this.addMidiOutSourceIds(only);
     this.sampleActivity(publish, only);
-    this.applyCv();
+    // Compiled: every cable is inside the graph at audio rate, so there is
+    // nothing to poll, and writing a polled value would override the cable.
+    if (!this.compiled) this.applyCv();
     const dtSec = this.lastMidiOutMs > 0 ? Math.max(0, (now - this.lastMidiOutMs) / 1000) : METER_INTERVAL_MS / 1000;
     this.lastMidiOutMs = now;
     this.stepMidiOutputs(dtSec);
@@ -1843,7 +2065,7 @@ export class PatchAudio {
     this.analysisUnsubs = [];
     for (const live of this.lives.values()) {
       live.pool?.allNotesOff();
-      for (const handle of live.handles) disposeVoiceHandle(handle);
+      disposeLiveVoices(live);
       try {
         live.mix.disconnect();
       } catch {
@@ -1859,6 +2081,8 @@ export class PatchAudio {
       live.dispose?.();
     }
     this.lives.clear();
+    this.compiled = null;
+    this.moduleKey = '';
     for (const bank of this.jacks.values()) {
       for (const node of Object.values(bank)) {
         try {
@@ -1907,7 +2131,7 @@ export class PatchAudio {
     for (const [id, live] of this.lives) {
       const material = editor.materials.get(id);
       if (!material || keyed.has(id)) continue;
-      if (material.audioInputs.length === 0 && !controlInputs(material).includes('note')) {
+      if (holdsOpen(editor, id, material)) {
         const handle = live.handles[0];
         handle?.noteOn({ ...material.snapshotParams(), note: 69, velocity: 0.85 });
       }
@@ -2192,6 +2416,9 @@ export class PatchAudio {
   ): Promise<LiveNode> {
     const kernelPoly = material.kind === 'synth' || material.kind === 'grain';
     const count = kernelPoly ? 1 : Math.min(TESTER_VOICE_CAP, Math.max(1, material.polyphony));
+    // A split instrument: voices render only their sends, and the summed
+    // half of the patch runs once in a bus voice they all feed.
+    const sendCount = !kernelPoly && material.graph.bus && material.graph.sends ? material.graph.sends.length : 0;
     const handles: VoiceHandle[] = [];
     if (material.kind === 'drum') ensureDrumPadBoxes(material);
     for (let i = 0; i < count; i += 1) {
@@ -2199,7 +2426,11 @@ export class PatchAudio {
       // sample does not finish a worklet block in time, so the outlet stays
       // silent. The live graph is the same pads and boxes without that chain.
       const graph = material.kind === 'drum' ? liveDrumGraph(material) : material.graph;
-      const handle = await renderer.createVoice(graph);
+      // Starting values go with the voice, not after it: see createVoice.
+      const handle = await renderer.createVoice(graph, {
+        params: material.snapshotParams(),
+        ...(sendCount > 0 ? { sends: true } : {}),
+      });
       for (const [name, value] of Object.entries(material.snapshotParams())) {
         try {
           handle.setParam(name, value);
@@ -2265,7 +2496,15 @@ export class PatchAudio {
       setParam: (name, value) => handle.setParam(name, value),
     }));
     const pool = !kernelPoly && count > 1 ? new VoicePool(material, backends, material.voiceStealing ?? 'oldest') : null;
-    return { mix, handles, pool, kernelPoly };
+    let bus: VoiceHandle | undefined;
+    if (sendCount > 0) {
+      const params = material.snapshotParams();
+      bus = await renderer.createVoice(material.graph.bus!, { params });
+      // An effect on the voices' sum: its gate opens once and stays open.
+      bus.noteOn(params);
+      connectSplitVoices(handles, bus, sendCount);
+    }
+    return { mix, handles, pool, kernelPoly, ...(bus ? { bus } : {}) };
   }
 
   private publishVoices(): void {
@@ -2274,7 +2513,9 @@ export class PatchAudio {
     if (!editor || !analog) return;
     const id = keyedTargets(editor)[0];
     const material = id ? editor.materials.get(id) : null;
-    const live = id ? this.lives.get(id) : null;
+    // Compiled, the voices are the whole patch's: the lamps are its pool, and
+    // the name stays the module the keys are cabled to.
+    const live = this.compiled ? this.lives.get(COMPILED_LIVE_ID) : id ? this.lives.get(id) : null;
     analog.setVoiceView({
       polyphony: material?.polyphony ?? analog.polyphony,
       steal: stealLabel(material?.voiceStealing),
@@ -2295,6 +2536,27 @@ export class PatchAudio {
     }
     this.taps.clear();
   }
+}
+
+/**
+ * Whether a module nobody plays from a keyboard should sound anyway, with its
+ * gate held open the way the plugin holds an insert's.
+ *
+ * A source with no audio input and no note jack always has: an LFO or a
+ * noise generator on the canvas is meant to run. A voice with a note jack
+ * waits for keys, so an oscillator dropped on an empty canvas does not start
+ * droning at A4. Unless something other than a keyboard is cabled into that
+ * note: a sequencer driving an oscillator is the whole of every Plays Itself
+ * preset, and before this the oscillator's gate never opened in the browser,
+ * so Euclid Bass and Acid Sequence were silent here while the plugin played
+ * them.
+ */
+function holdsOpen(editor: PatchEditor, id: string, material: AudioMaterial): boolean {
+  if (material.audioInputs.length > 0) return false;
+  if (!controlInputs(material).includes('note')) return true;
+  return editor.editor
+    .getConnections()
+    .some((conn) => conn.target === id && conn.targetInput === 'note');
 }
 
 export function applyParam(material: AudioMaterial, name: string, value: number): void {
@@ -2689,3 +2951,18 @@ function makeTap(ctx: AudioContext, node: AudioNode, sink?: AudioNode | null, ff
 }
 
 export type { JackActivity };
+
+/** A live node's output into its `mix`: the bus when split, else every voice. */
+function connectLiveOut(live: LiveNode): void {
+  if (live.bus) {
+    live.bus.node.connect(live.mix);
+    return;
+  }
+  for (const handle of live.handles) handle.node.connect(live.mix);
+}
+
+/** Stops a live node's voices, and its bus when it has one. */
+function disposeLiveVoices(live: LiveNode): void {
+  for (const handle of live.handles) disposeVoiceHandle(handle);
+  if (live.bus) disposeVoiceHandle(live.bus);
+}

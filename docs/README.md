@@ -20,6 +20,7 @@ Read **Philosophy**, then **Scenes and time**, **AudioMaterials**, and
 | [Collaboration](collab.md) | Session state, discrete edits, the shared clock, host-local devices. |
 | [Hooks](hooks.md) | Named extension points for a host. |
 | [Conformance](conformance.md) | How the TypeScript and Swift interpreters are kept in agreement. |
+| [The crate.plugin format](format.md) | The file specification, its versions, and the compatibility promise. |
 
 Not in this folder:
 

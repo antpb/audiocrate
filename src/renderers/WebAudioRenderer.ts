@@ -116,6 +116,30 @@ export interface WebAudioRendererOptions {
   processorName?: string;
 }
 
+interface SharedWorkletLoad {
+  /** Resolves to the URL that loaded. */
+  readonly promise: Promise<string>;
+  readonly explicitUrl: string | null;
+}
+
+const WORKLET_LOADS_KEY = Symbol.for('audiocrate.workletLoads');
+
+/** The per-context ledger of worklet loads, or undefined if the context will not hold one. */
+function sharedLoads(context: AudioContext): Map<string, SharedWorkletLoad> | undefined {
+  const holder = context as unknown as Record<symbol, Map<string, SharedWorkletLoad> | undefined>;
+  let loads = holder[WORKLET_LOADS_KEY];
+  if (!loads) {
+    loads = new Map();
+    try {
+      Object.defineProperty(holder, WORKLET_LOADS_KEY, { value: loads, configurable: true });
+    } catch {
+      // A frozen or proxied context: fall back to loading per renderer.
+      return undefined;
+    }
+  }
+  return loads;
+}
+
 /**
  * Fuses an ASL graph into one AudioWorkletProcessor
  * (worklet/defineVoiceProcessor.ts). One worklet per voice. `AudioMaterial.bind`
@@ -127,6 +151,8 @@ export class WebAudioRenderer {
   private modulePromise: Promise<void> | null = null;
   private readonly workletUrls: readonly string[];
   private readonly processorName: string;
+  /** The host's own worklet URL(s), or null for crate's bundled worklet. */
+  private readonly explicitUrl: string | null;
   /** Which URL actually loaded, for a host that wants to report it. */
   loadedWorkletUrl: string | null = null;
 
@@ -138,6 +164,7 @@ export class WebAudioRenderer {
     // because minting a blob costs a copy of the worklet source and a host
     // that serves its own asset should not pay for one it will not use.
     const url = options.workletUrl;
+    this.explicitUrl = url === undefined ? null : (Array.isArray(url) ? url : [url]).join(' | ');
     this.workletUrls =
       url === undefined
         ? crateWorkletUrls()
@@ -172,9 +199,46 @@ export class WebAudioRenderer {
 
   private ensureModuleLoaded(): Promise<void> {
     if (!this.modulePromise) {
-      this.modulePromise = this.loadModule();
+      this.modulePromise = this.loadShared();
     }
     return this.modulePromise;
+  }
+
+  /**
+   * One `addModule` per context per processor name, however many renderers
+   * (or copies of audiocrate) ask. Each load recompiles about 140 kB of
+   * worklet on the audio thread, and every load after the first registers
+   * nothing (see `registerOnce.ts`), so a second one is pure cost.
+   *
+   * The ledger lives on the context under `Symbol.for`, which every copy of
+   * the package in the page resolves to the same key. A load that fails is
+   * forgotten, so the next renderer tries again rather than inheriting it.
+   */
+  private async loadShared(): Promise<void> {
+    const loads = sharedLoads(this.context);
+    const existing = loads?.get(this.processorName);
+    if (existing) {
+      if (this.explicitUrl !== null && existing.explicitUrl !== this.explicitUrl) {
+        console.warn(
+          `audiocrate: "${this.processorName}" is already loaded on this AudioContext from ` +
+            `${existing.explicitUrl ?? "audiocrate's bundled worklet"}; ${this.explicitUrl} ` +
+            'will not be loaded. Pass a distinct processorName to run a second worklet build.',
+        );
+      }
+      this.loadedWorkletUrl = await existing.promise;
+      return;
+    }
+    const promise = this.loadModule().then(() => this.loadedWorkletUrl as string);
+    const entry: SharedWorkletLoad = { promise, explicitUrl: this.explicitUrl };
+    loads?.set(this.processorName, entry);
+    try {
+      await promise;
+    } catch (error) {
+      if (loads?.get(this.processorName) === entry) loads.delete(this.processorName);
+      // Also forget it here, so this renderer's own next voice retries.
+      this.modulePromise = null;
+      throw error;
+    }
   }
 
   /**
@@ -212,22 +276,52 @@ export class WebAudioRenderer {
     );
   }
 
-  async createVoice(graph: ASLGraphDescriptor): Promise<VoiceHandle> {
+  /**
+   * `seed` fixes the voice's `noise` and `random` streams (`asl/rng.ts`), so
+   * a world generated from a seed can sound the same on every visit and every
+   * device. Omitted, each voice gets a fresh random seed, which keeps two
+   * voices of one graph (rain cells, a polyphonic pool) from playing the same
+   * noise in lockstep.
+   *
+   * `params` are the values the voice starts with. Pass them here rather than
+   * with `setParam` afterwards whenever they are known: a message arrives
+   * after the node exists, and a busy main thread lets the processor render
+   * first with every parameter at zero.
+   */
+  async createVoice(
+    graph: ASLGraphDescriptor,
+    options: {
+      seed?: number;
+      params?: Record<string, number>;
+      /**
+       * A split instrument's voice alone: one stereo output per send, for a
+       * host that sums its voices into one bus node (`connectSplitVoices`).
+       * Off, a split graph renders its own bus inside the voice.
+       */
+      sends?: boolean;
+    } = {},
+  ): Promise<VoiceHandle> {
     await this.ensureModuleLoaded();
     // Input 0 is always the main signal; the graph's other named ports get
     // one input each, in the same sorted order the processor derives from
     // the same graph (asl/ports.ts). Nothing is passed across to say so, on
     // purpose: two copies of that list could disagree.
     const auxInputs = auxAudioPorts(graph);
+    const sendOutputs = options.sends && graph.sends ? graph.sends.length : 1;
     const node = new AudioWorkletNode(this.context, this.processorName, {
       // Always at least 1 input + a silent driver. Safari skips process() for
       // a 0-input worklet and also for a 1-input worklet with nothing wired.
       numberOfInputs: 1 + auxInputs.length,
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
+      numberOfOutputs: sendOutputs,
+      outputChannelCount: new Array(sendOutputs).fill(2),
       channelCount: 2,
       channelCountMode: 'explicit',
-      processorOptions: { graph },
+      processorOptions: {
+        graph,
+        seed: options.seed ?? Math.floor(Math.random() * 4294967296),
+        ...(options.params ? { params: options.params } : {}),
+        ...(options.sends && graph.sends ? { sends: true } : {}),
+      },
     });
     const driver = this.context.createConstantSource();
     driver.offset.value = 0;
@@ -300,3 +394,4 @@ export class WebAudioRenderer {
     };
   }
 }
+

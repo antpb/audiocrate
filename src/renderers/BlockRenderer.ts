@@ -36,6 +36,12 @@ export interface BlockRendererOptions {
   kernels?: Record<string, KernelProcessor>;
   /** Applied as the opening `noteOn`, so the first block is already sounding. */
   params?: Record<string, number>;
+  /**
+   * Starts `noise` and `random` streams (`asl/rng.ts`). Defaults to
+   * `DEFAULT_VOICE_SEED`, so `reset` replays the same
+   * samples.
+   */
+  seed?: number;
 }
 
 /** One block of output. `right` aliases `left` for a mono graph. */
@@ -51,12 +57,14 @@ export class BlockRenderer {
   private readonly voice: CompiledVoice;
   private state: VoiceRuntimeState;
   private readonly kernels: Record<string, KernelProcessor>;
+  private readonly seed: number | undefined;
   private left = new Float32Array(0);
   private right = new Float32Array(0);
 
   constructor(private readonly graph: ASLGraphDescriptor, options: BlockRendererOptions = {}) {
     this.sampleRate = options.sampleRate ?? 48000;
     this.kernels = options.kernels ?? {};
+    this.seed = options.seed;
     this.voice = compileVoice(graph);
     this.state = this.freshState();
     this.voice.noteOn(this.state, options.params ?? {});
@@ -75,8 +83,9 @@ export class BlockRenderer {
     this.voice.noteOff(this.state);
   }
 
+  /** Glides a continuous parameter there, as a live voice does (`CompiledVoice.setParam`). */
   setParam(name: string, value: number): void {
-    this.voice.noteOn(this.state, { [name]: value });
+    this.voice.setParam(this.state, name, value);
   }
 
   /**
@@ -122,7 +131,7 @@ export class BlockRenderer {
   }
 
   private freshState(): VoiceRuntimeState {
-    const state = this.voice.createState();
+    const state = this.voice.createState({ seed: this.seed });
     const entries = Object.entries(this.kernels);
     if (entries.length > 0) state.kernels = new Map(entries);
     return state;

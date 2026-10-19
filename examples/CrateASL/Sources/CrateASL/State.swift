@@ -84,6 +84,9 @@ struct NodeMemory {
     /// signal is, a clock starts ready to fire), which in JavaScript is the
     /// lazily-run initialiser closure and here has to be explicit.
     var initialized = false
+
+    /// A `noise` or `random` node's stream (Rng.swift), seeded on first use.
+    var rng: UInt32 = 0
 }
 
 /// What a `tap.meter` reports for the interval since it was last read.
@@ -198,6 +201,9 @@ public final class VoiceState {
     var paramIndex: [String: Int] = [:]
     let paramValues: UnsafeMutablePointer<Double>
     let rampStep: UnsafeMutablePointer<Double>
+    /// Where each ramp ends, so a finished ramp lands on its target exactly
+    /// rather than on `base + step * frames`, which can miss by a rounding.
+    let rampTarget: UnsafeMutablePointer<Double>
     let rampFrames: UnsafeMutablePointer<Int>
     let paramCount: Int
     /// Whether any parameter is mid-ramp, so the common case costs one check.
@@ -213,6 +219,15 @@ public final class VoiceState {
     }
     var transport: TransportSnapshot?
 
+    /// The rate of the last render, 0 before the first. A glide's length is
+    /// in seconds; before a voice has rendered there is nothing to glide from,
+    /// so `CompiledVoice.setParam` lands at once. `renderedRate` in compile.ts.
+    public internal(set) var renderedRate: Double = 0
+
+    /// Where this voice's `noise` and `random` streams start. Two states with
+    /// one seed render the same samples. Set before the first render.
+    public var seed: UInt32 = defaultVoiceSeed
+
     /// Live audio for the block being rendered, one entry per port the graph
     /// reads, in `Plan.ports` order. Raw pointers, not arrays: an AUv3 render
     /// block is handed an `AudioBufferList` and has to do its work without
@@ -221,18 +236,46 @@ public final class VoiceState {
     /// the per-sample path work.
     var portL: [UnsafePointer<Float>?]
     var portR: [UnsafePointer<Float>?]
-    /// Names in the same order, for the scalar fallback only. Never read on
-    /// the per-sample path when a block is wired.
+    /// Names in the same order, for `setParam` to find a port by name. Never
+    /// read on the per-sample path.
     var portNames: [String] = []
+    /// What each port reads when no block is wired, in the same order.
+    ///
+    /// Dense and pointer-addressed rather than a lookup in `params`. Both
+    /// ends of this are per-sample: the insert path writes one for every
+    /// frame it renders, and a VoicePool, which never wires a port at all,
+    /// reads one for every frame of every voice. A dictionary there is a
+    /// string hashed at the sample rate, and worse, it is a structure the
+    /// host's thread reshapes underneath the render thread whenever a
+    /// parameter is set from a view.
+    let portScalars: UnsafeMutablePointer<Double>
+    /// Port name to index, built once, so `setParam` can keep a port's scalar
+    /// in step with the dictionary without hashing on the render thread.
+    private var portIndexByName: [String: Int] = [:]
 
     /// Bound block-rate DSP, by kernel slot. Empty is a clean passthrough.
     public var kernels: [String: KernelProcessor] = [:]
 
-    /// Live tap state, created on first use so a graph with no taps has none.
-    var meters: [String: MeterAccumulator] = [:]
-    var captures: [String: CaptureBuffer] = [:]
+    /// Live tap state, one slot per id in `Plan.tapIds`, built with the voice.
+    ///
+    /// Dense and pre-built rather than a dictionary filled on first use. Both
+    /// halves of that were wrong on an audio thread: finding a tap by id
+    /// hashed a string once per sample per tap, and the first sample through
+    /// a new tap allocated. It was also a structure the render thread grew
+    /// while `drainAnalysis` walked it from whatever thread wanted a meter
+    /// reading, which is the same shape as the port-scalar crash.
+    var tapMeters: [MeterAccumulator] = []
+    var tapCaptures: [CaptureBuffer?] = []
+    /// Ids in the same order, for `drainAnalysis` to name what it read.
+    var tapIds: [String] = []
 
-    init(slotCount: Int, portNames: [String], paramNames: [String]) {
+    init(
+        slotCount: Int,
+        portNames: [String],
+        paramNames: [String],
+        tapIds: [String] = [],
+        tapWindows: [Int] = []
+    ) {
         hot = .allocate(capacity: 1)
         hot.initialize(to: HotState())
         self.slotCount = slotCount
@@ -243,6 +286,8 @@ public final class VoiceState {
         stamps.initialize(repeating: 0, count: max(1, slotCount))
         paramValues = .allocate(capacity: max(1, paramNames.count))
         rampStep = .allocate(capacity: max(1, paramNames.count))
+        rampTarget = .allocate(capacity: max(1, paramNames.count))
+        rampTarget.initialize(repeating: 0, count: max(1, paramNames.count))
         rampFrames = .allocate(capacity: max(1, paramNames.count))
         paramValues.initialize(repeating: 0, count: max(1, paramNames.count))
         rampStep.initialize(repeating: 0, count: max(1, paramNames.count))
@@ -252,7 +297,16 @@ public final class VoiceState {
         self.portNames = portNames
         portL = Array(repeating: nil, count: portNames.count)
         portR = Array(repeating: nil, count: portNames.count)
+        portScalars = .allocate(capacity: max(1, portNames.count))
+        portScalars.initialize(repeating: 0, count: max(1, portNames.count))
         for (index, name) in paramNames.enumerated() { paramIndex[name] = index }
+        for (index, name) in portNames.enumerated() { portIndexByName[name] = index }
+        self.tapIds = tapIds
+        tapMeters = tapIds.map { _ in MeterAccumulator() }
+        tapCaptures = tapIds.indices.map { index in
+            let window = index < tapWindows.count ? tapWindows[index] : 0
+            return window > 0 ? CaptureBuffer(windowSize: window) : nil
+        }
     }
 
     deinit {
@@ -265,16 +319,30 @@ public final class VoiceState {
         }
         memory.deallocate()
         for lane in laneMemory { lane.deallocate() }
+        portScalars.deallocate()
         values.deallocate()
         stamps.deallocate()
         paramValues.deallocate()
         rampStep.deallocate()
+        rampTarget.deallocate()
         rampFrames.deallocate()
     }
 
+    /// The summed half of a split instrument, when this voice renders it
+    /// itself (`CompiledVoice.render` with no sends). Every parameter written
+    /// here is written there too. Nil for every other graph, and for a
+    /// `VoicePool`'s voices, which share one bus between them.
+    var splitBus: SplitBusRuntime?
+
     /// Sets a parameter immediately, cancelling any ramp on it.
     public func setParam(_ name: String, _ value: Double) {
+        splitBus?.state.setParam(name, value)
         params[name] = value
+        // A graph written against the old scalar `input` sets a "parameter"
+        // that is really a port. That used to work because both went into the
+        // same dictionary; now the port keeps its own slot and this is what
+        // holds the two together.
+        if let port = portIndexByName[name] { portScalars[port] = value }
         guard let index = paramIndex[name] else { return }
         paramValues[index] = value
         rampStep[index] = 0
@@ -283,6 +351,18 @@ public final class VoiceState {
 
     public func setParams(_ values: [String: Double]) {
         for (name, value) in values { setParam(name, value) }
+    }
+
+    /// Writes one port's scalar for the frame about to be rendered.
+    ///
+    /// The insert path calls this per sample, so it does exactly one store.
+    /// It deliberately does not touch `params`: that dictionary is shared
+    /// with whichever thread sets parameters, and writing it at the sample
+    /// rate from the render thread is how a slider drag and a held note
+    /// managed to corrupt it between them.
+    @inline(__always) func setPortScalar(_ index: Int, _ value: Double) {
+        guard index >= 0, index < max(1, portNames.count) else { return }
+        portScalars[index] = value
     }
 
     /// Ramps a parameter to `value` over `frames`, starting at frame 0 of the
@@ -297,8 +377,10 @@ public final class VoiceState {
             setParam(name, value)
             return
         }
+        splitBus?.state.rampParam(name, to: value, frames: frames)
         params[name] = value
         rampStep[index] = (value - paramValues[index]) / Double(frames)
+        rampTarget[index] = value
         rampFrames[index] = frames
         hasRamps = true
     }
@@ -311,6 +393,14 @@ public final class VoiceState {
         return paramValues[index] + rampStep[index] * Double(min(frame, remaining))
     }
 
+    /// Whether `name` is a declared parameter this state has been given a
+    /// value for, and that value. `CompiledVoice.setParam` glides only from a
+    /// value that exists, as compile.ts does.
+    func committedParam(_ name: String) -> (index: Int, value: Double)? {
+        guard params[name] != nil, let index = paramIndex[name] else { return nil }
+        return (index, paramValues[index])
+    }
+
     /// Advances every ramp by the frames just rendered, and lands exactly on
     /// the target rather than on an accumulation of steps.
     func commitRamps(framesRendered: Int) {
@@ -320,7 +410,7 @@ public final class VoiceState {
             let remaining = rampFrames[index]
             if remaining == 0 { continue }
             if framesRendered >= remaining {
-                paramValues[index] += rampStep[index] * Double(remaining)
+                paramValues[index] = rampTarget[index]
                 rampStep[index] = 0
                 rampFrames[index] = 0
             } else {
@@ -409,6 +499,87 @@ public struct TransportSnapshot: Sendable {
     }
 }
 
+/// Turns the position a host reports once per block into one that advances
+/// sample by sample, whatever the host's own resolution.
+///
+/// `evalTransport` derives every frame as `beats + frameIndex * perSample`,
+/// so it is only as continuous as the `beats` each block starts from. A host
+/// that reports its true position every block is fine. A host that refreshes
+/// it on a timer is not: several blocks in a row start from the same stale
+/// beat, so the same stretch of song is replayed and the stretch between
+/// refreshes is skipped. A host that never refreshes it is worse: every block
+/// starts at beat 0, frame 0 of every block reads as a downbeat crossing, and
+/// a `transport.pulse` fires once a block. A Pulse downstream re-arms on each
+/// of those, so its output never falls, the envelope it gates never
+/// releases, and a self-playing patch plays one note at Play and nothing
+/// after it. homecrate's own recorder was both hosts: its beat refreshes at
+/// 50 Hz, and not at all when no audio track is playing.
+///
+/// So the follower keeps its own count. It anchors to the host when rolling
+/// starts, then advances by the samples it actually rendered at the host's
+/// tempo. A host value is only believed over that count when it is new (it
+/// differs from the last one the host gave) and either within a sample of the
+/// count, which is a sample-accurate host and is passed through exactly, or
+/// far from it, which is a seek or a loop wrap rather than a slow refresh.
+///
+/// Render thread only. Holds two doubles and allocates nothing.
+public struct TransportFollower: Sendable {
+    /// How far, in seconds of song, a fresh host position may sit from the
+    /// count before it is taken as a jump. Wider than any timer-driven
+    /// host's lag (one refresh plus an output buffer) and narrower than a
+    /// seek or a loop anyone would make.
+    public static let defaultJumpSeconds = 0.125
+
+    public var jumpSeconds: Double
+    /// Where the next block starts by the count, or nil when not rolling.
+    private var expected: Double?
+    /// The last beat the host reported, to tell a refresh from a repeat.
+    private var lastHostBeats: Double?
+
+    public init(jumpSeconds: Double = TransportFollower.defaultJumpSeconds) {
+        self.jumpSeconds = jumpSeconds
+    }
+
+    /// Forgets the count, so the next rolling block anchors to the host.
+    public mutating func reset() {
+        expected = nil
+        lastHostBeats = nil
+    }
+
+    /// The snapshot this block should render with. `frames` is the whole
+    /// block, not a segment: segments derive their start from this with
+    /// `advanced(bySamples:sampleRate:)`.
+    public mutating func follow(
+        _ host: TransportSnapshot,
+        frames: Int,
+        sampleRate: Double
+    ) -> TransportSnapshot {
+        guard host.playing, sampleRate > 0 else {
+            // A stopped host holds its own position, and the next Play
+            // anchors to wherever it is then.
+            reset()
+            return host
+        }
+        var out = host
+        if let expected {
+            let fresh = lastHostBeats != host.beats
+            let gap = abs(host.beats - expected)
+            let beatsPerSecond = max(host.bpm, 0) / 60
+            // Within a sample, the host is the count, so its value is used
+            // as given: rounding never accumulates, and a host integrating a
+            // tempo ramp its own way is never second-guessed.
+            let agrees = gap <= beatsPerSecond / sampleRate
+            let jumped = gap > jumpSeconds * beatsPerSecond
+            if !(fresh && (agrees || jumped)) {
+                out.beats = expected
+            }
+        }
+        lastHostBeats = host.beats
+        expected = out.advanced(bySamples: frames, sampleRate: sampleRate).beats
+        return out
+    }
+}
+
 /// Block-rate DSP that is not ASL-shaped, bound into a slot the graph names.
 ///
 /// The same contract as `renderers/kernel.ts`: `Float32Array` in,
@@ -445,24 +616,17 @@ public extension KernelProcessor {
 
 
 extension VoiceState {
-    func recordMeter(_ id: String, _ value: Double) {
-        let acc: MeterAccumulator
-        if let existing = meters[id] { acc = existing } else {
-            acc = MeterAccumulator()
-            meters[id] = acc
-        }
+    @inline(__always) func recordMeter(_ index: Int, _ value: Double) {
+        guard index >= 0, index < tapMeters.count else { return }
+        let acc = tapMeters[index]
         let magnitude = value < 0 ? -value : value
         if magnitude > acc.peak { acc.peak = magnitude }
         acc.sumSq += value * value
         acc.count += 1
     }
 
-    func recordCapture(_ id: String, windowSize: Int, value: Double) {
-        let buffer: CaptureBuffer
-        if let existing = captures[id] { buffer = existing } else {
-            buffer = CaptureBuffer(windowSize: windowSize)
-            captures[id] = buffer
-        }
+    @inline(__always) func recordCapture(_ index: Int, value: Double) {
+        guard index >= 0, index < tapCaptures.count, let buffer = tapCaptures[index] else { return }
         buffer.samples[buffer.write] = Float(value)
         buffer.write += 1
         if buffer.write >= buffer.samples.count {
@@ -476,9 +640,10 @@ extension VoiceState {
     /// reader can hand one straight to a pitch detector without knowing it was
     /// a ring.
     public func drainAnalysis() -> AnalysisFrame? {
-        if meters.isEmpty && captures.isEmpty { return nil }
+        if tapIds.isEmpty { return nil }
         var readings = [String: MeterReading]()
-        for (id, acc) in meters {
+        for (index, id) in tapIds.enumerated() {
+            let acc = tapMeters[index]
             readings[id] = MeterReading(peak: acc.peak, rms: acc.count > 0 ? (acc.sumSq / acc.count).squareRoot() : 0)
             // Reset rather than decay: each frame reports its own interval,
             // and any smoothing a UI wants is a UI decision made with timing
@@ -488,7 +653,8 @@ extension VoiceState {
             acc.count = 0
         }
         var windows = [String: [Float]]()
-        for (id, buffer) in captures {
+        for (index, id) in tapIds.enumerated() {
+            guard let buffer = tapCaptures[index] else { continue }
             if buffer.filled {
                 windows[id] = Array(buffer.samples[buffer.write...]) + Array(buffer.samples[..<buffer.write])
             } else {
@@ -498,3 +664,41 @@ extension VoiceState {
         return AnalysisFrame(meters: readings, captures: windows)
     }
 }
+
+/// A split voice's own bus and the scratch its sends pass through, for a
+/// host that renders one voice. Sized on the first render; a `VoicePool`,
+/// the audio-thread path, never makes one.
+final class SplitBusRuntime {
+    let state: VoiceState
+    var sendL: [UnsafeMutablePointer<Float>] = []
+    var sendR: [UnsafeMutablePointer<Float>] = []
+    var mix: UnsafeMutablePointer<Float>?
+    private var frames = 0
+
+    init(state: VoiceState) { self.state = state }
+
+    func ensure(frames: Int, sends: Int) {
+        guard frames > self.frames else { return }
+        release()
+        func make() -> UnsafeMutablePointer<Float> {
+            let buffer = UnsafeMutablePointer<Float>.allocate(capacity: frames)
+            buffer.initialize(repeating: 0, count: frames)
+            return buffer
+        }
+        sendL = (0..<sends).map { _ in make() }
+        sendR = (0..<sends).map { _ in make() }
+        mix = make()
+        self.frames = frames
+    }
+
+    private func release() {
+        for buffer in sendL + sendR { buffer.deallocate() }
+        mix?.deallocate()
+        sendL = []
+        sendR = []
+        mix = nil
+    }
+
+    deinit { release() }
+}
+

@@ -27,7 +27,8 @@ export const MATERIAL_NOTES: Record<string, string> = {
   noise: 'Six spectral colors through a lowpass. White is flat, brown is rumble, blue and violet get brighter.',
   impulse: 'A one-sample click on a rising gate. For pinging filters and starting envelopes.',
   wavetable: 'Polyphonic scanner over eight single-cycle frames, or a loaded table of 256-sample frames.',
-  sampleplayer: 'Plays a loaded file on a gate. Silent until you choose a file. Pitch is semitones.',
+  sampleplayer:
+    'Plays a loaded file. A trig edge starts it from Start, a gate holds it and stops it on release, and reset moves the playhead without starting anything. The audio inlet triggers it too. Silent until you choose a file. Pitch is semitones.',
   SynthVoice: 'Subtractive voice: wave plus a detuned twin, a lowpass, and an amp envelope that can open the filter.',
   lowpass: 'RBJ biquad lowpass. Cutoff and Q.',
   highpass: 'RBJ biquad highpass. Cutoff and Q.',

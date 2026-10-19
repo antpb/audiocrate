@@ -75,7 +75,8 @@ export {
 } from './transportNodes';
 export { tap, DEFAULT_CAPTURE_WINDOW } from './analysis';
 export type { MeterReading, AnalysisFrame, MeterAccumulator, CaptureBuffer } from './analysis';
-export { compileVoice, type CompiledVoice, type VoiceRuntimeState, type PortBlocks } from './compile';
+export { compileVoice, SVF_MIN_DAMP, type CompiledVoice, type VoiceRuntimeState, type PortBlocks } from './compile';
+export { DEFAULT_VOICE_SEED, normalizeSeed } from './rng';
 export { quantizeToScale, euclideanPattern, QUANTIZE_SCALES, QUANTIZE_SCALE_NAMES } from './controlMath';
 export type {
   ASLNode,

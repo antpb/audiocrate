@@ -12,7 +12,7 @@ enum InputName: Int, CaseIterable {
     case duration, factor, fall, feedback, freq, gainDb, gate, hits, hold
     case index, length, mix, note, pan, phase, pitch, position, q, rate, ratio
     case record, release, reset, resonance, rise, root, rotation, scale, sidechain
-    case source, steps, sustain, threshold, timeSec, trigger, which, width
+    case source, steps, sustain, threshold, timeSec, trig, trigger, which, width
     case widthSec, windowSec, type, color
 
     static let byName: [String: InputName] = {
@@ -74,7 +74,25 @@ final class PlanNode {
     /// outlives every render that walks it, so there is nothing here for ARC
     /// to protect against.
     let inputs: UnsafeMutablePointer<ChildRef>
-    var list: [PlanNode]?
+    /// Each input's child slot, or -1, indexed by `InputName`. Reading a
+    /// child's cached value through this touches the child's slot and
+    /// nothing else: no object, so no reference count.
+    let childSlots: UnsafeMutablePointer<Int>
+    var list: [PlanNode]? {
+        didSet {
+            listSlots?.deallocate()
+            listSlots = nil
+            listCount = list?.count ?? 0
+            guard let list, !list.isEmpty else { return }
+            let slots = UnsafeMutablePointer<Int>.allocate(capacity: list.count)
+            for (i, child) in list.enumerated() { (slots + i).initialize(to: child.slot) }
+            listSlots = slots
+        }
+    }
+    /// `list`'s slots, so a `mix` sums cached values without iterating an
+    /// array of class references, which retains and releases every element.
+    private(set) var listSlots: UnsafeMutablePointer<Int>?
+    private(set) var listCount = 0
     /// A mode, shape, colour or field resolved to an integer. See `planMode`.
     let m: Int
     /// A numeric constant off `params`: window size, max delay, pole count.
@@ -100,6 +118,17 @@ final class PlanNode {
     /// Resolved for the same reason ports are: reading a parameter by name
     /// per sample means hashing a string on the audio thread.
     var paramIndex: Int = -1
+    /// For a `meter` or `capture` node, its index into `Plan.tapIds`; -1
+    /// otherwise. Resolved here for the reason `paramIndex` and `portIndex`
+    /// are: a tap records once per sample, and finding its accumulator by id
+    /// meant hashing a string at the sample rate on the audio thread.
+    var tapIndex: Int = -1
+    /// For `noise` and `random`, this node's rank among the graph's random
+    /// nodes in structural order (`randomRanks`), which picks its stream
+    /// (Rng.swift). -1 otherwise. Not the slot: slots follow a walk that
+    /// visits inputs in dictionary order here and in insertion order in
+    /// JavaScript.
+    var randomRank: Int = -1
     /// For a `port` node, its index into `Plan.ports`; -1 for anything else.
     ///
     /// Resolved here so reading a live input is an array index at render
@@ -116,6 +145,8 @@ final class PlanNode {
         self.kind = kind
         self.inputs = .allocate(capacity: InputName.count)
         self.inputs.initialize(repeating: ChildRef(), count: InputName.count)
+        self.childSlots = .allocate(capacity: InputName.count)
+        self.childSlots.initialize(repeating: -1, count: InputName.count)
         self.m = m
         self.c = c
         self.table = table
@@ -128,18 +159,25 @@ final class PlanNode {
         self.boxRate = boxRate
     }
 
-    deinit { inputs.deallocate() }
+    deinit {
+        inputs.deallocate()
+        childSlots.deallocate()
+        listSlots?.deallocate()
+    }
 
     @inline(__always) func input(_ name: InputName) -> PlanNode? {
         inputs[name.rawValue].node
     }
 
+    /// Through the slot table: testing the unowned reference for nil turns
+    /// it into a strong one first, which is a retain and a release per test.
     @inline(__always) func has(_ name: InputName) -> Bool {
-        inputs[name.rawValue].node != nil
+        childSlots[name.rawValue] >= 0
     }
 
     @inline(__always) func setInput(_ name: InputName, _ node: PlanNode) {
         inputs[name.rawValue] = ChildRef(node: node)
+        childSlots[name.rawValue] = node.slot
     }
 }
 
@@ -156,10 +194,15 @@ struct Plan {
     let seams: [PlanNode]
     /// Tap ids this graph records under, sorted.
     let tapIds: [String]
+    /// Ring size for each id in `tapIds`, 0 for a meter (which has no ring).
+    let tapWindows: [Int]
     /// Whether anything asks which channel it is on.
     let usesLane: Bool
     /// Whether a `param` node reads the main input as a scalar.
     let readsScalarInput: Bool
+    /// Each planned node's slot by its document id, so a send (a document
+    /// node inside the output) can be found in the plan.
+    let slotBySourceId: [Int: Int]
     /// Whether anything draws a random number, which is what stops two
     /// channels fed the same samples from producing the same output.
     let usesRandom: Bool
@@ -269,25 +312,63 @@ private func planConst(_ node: ASLNodeDocument, kind: NodeKind) -> Double {
     }
 }
 
-private func planTable(_ node: ASLNodeDocument, kind: NodeKind) -> (table: [Float], rate: Double) {
+private func planTable(
+    _ node: ASLNodeDocument,
+    kind: NodeKind,
+    samples: [String: CrateSampleBox]
+) -> (table: [Float], rate: Double) {
     guard kind == .wavetable || kind == .samplePlay || kind == .grain else { return ([], 0) }
-    if let box = node.params["box"], let samples = box["samples"]?.numbers, !samples.isEmpty {
-        return (samples.map { Float($0) }, box["sampleRate"]?.number ?? 0)
+    // A box naming a file the caller has already loaded wins over anything
+    // inline. This is the live path and the reason a sample never has to be
+    // written into the document at all: the table is a reference to an array
+    // the host is holding, so compiling a patch with a minute of audio in it
+    // costs the same as compiling one with none. See `SampleBox.swift`.
+    if let ref = CrateSamples.reference(of: node), let box = samples[ref], !box.isEmpty {
+        return (box.samples, box.sampleRate)
     }
-    if let table = node.params["table"]?.numbers, !table.isEmpty { return (table.map { Float($0) }, 0) }
+    // `floats` rather than `numbers`: a sample box is one value per frame and
+    // this runs on every adopt, so the intermediate `[Double]` is worth not
+    // building. See `ASLValue.floats`.
+    if let box = node.params["box"], let samples = box["samples"]?.floats, !samples.isEmpty {
+        return (samples, box["sampleRate"]?.number ?? 0)
+    }
+    if let table = node.params["table"]?.floats, !table.isEmpty { return (table, 0) }
     return ([], 0)
+}
+
+/// Which stream each `noise` and `random` node draws from, by node id:
+/// first visit in a depth-first walk from the output, inputs in sorted name
+/// order, a `mix` list in order. `randomRanks` in compile.ts, exactly. The
+/// graph's shape is the one thing both languages agree on; ids are renumbered
+/// by the catalog and minted afresh by each language's flatten.
+func randomRanks(_ root: ASLNodeDocument) -> [Int: Int] {
+    var ranks = [Int: Int]()
+    var seen = Set<Int>()
+    func visit(_ node: ASLNodeDocument) {
+        guard seen.insert(node.id).inserted else { return }
+        if node.kind == "noise" || node.kind == "random" { ranks[node.id] = ranks.count }
+        for key in node.inputs.keys.sorted() { visit(node.inputs[key]!) }
+        for child in node.list ?? [] { visit(child) }
+    }
+    visit(root)
+    return ranks
 }
 
 /// One walk of the document doing every job compiling needs: slot assignment,
 /// seam discovery, tap ids, port names, and the questions that decide how a
 /// block is rendered.
-func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
+func buildPlan(
+    _ document: ASLGraphDocument,
+    samples: [String: CrateSampleBox] = [:]
+) throws -> Plan {
     var bySourceId = [Int: PlanNode]()
     var seams = [PlanNode]()
     var portNodes = [PlanNode]()
     var paramNodes = [PlanNode]()
     var paramNameSet = Set<String>()
     var tapIds = Set<String>()
+    var tapNodes = [PlanNode]()
+    var tapWindows = [String: Int]()
     var ports = Set<String>()
     var slotCount = 0
     var usesLane = false
@@ -314,7 +395,7 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
             name = ""
         }
 
-        let (table, boxRate) = planTable(node, kind: kind)
+        let (table, boxRate) = planTable(node, kind: kind, samples: samples)
         let a: [Double]
         let b: [Double]
         switch kind {
@@ -343,6 +424,23 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
             b = []
         }
 
+        // A `range` bound that is not a finite number is refused, as in
+        // compile.ts: the old reading defaulted it to 0 here and to NaN there,
+        // and a document that disagrees across interpreters is worse than one
+        // that fails to load in both.
+        var rangeMin = 0.0
+        var rangeMax = 0.0
+        if kind == .range {
+            guard let lo = node.params["min"]?.number, lo.isFinite,
+                  let hi = node.params["max"]?.number, hi.isFinite else {
+                throw ASLCompileError(
+                    "ASL range node \(node.id): min and max must be finite numbers"
+                )
+            }
+            rangeMin = lo
+            rangeMax = hi
+        }
+
         let plan = PlanNode(
             slot: slotCount,
             kind: kind,
@@ -353,8 +451,8 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
             b: b,
             name: name,
             kernelSlot: kernelSlot,
-            rangeMin: kind == .range ? (node.params["min"]?.number ?? 0) : 0,
-            rangeMax: kind == .range ? (node.params["max"]?.number ?? 0) : 0,
+            rangeMin: rangeMin,
+            rangeMax: rangeMax,
             boxRate: boxRate
         )
         slotCount += 1
@@ -372,7 +470,14 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
             paramNodes.append(plan)
             paramNameSet.insert(name)
             if name == mainPortName { readsScalarInput = true }
-        case .meter, .capture: tapIds.insert(name)
+        case .meter, .capture:
+            tapIds.insert(name)
+            tapNodes.append(plan)
+            // A capture's ring is sized by the node that asks for it, so the
+            // widest window any node wants is what the voice allocates.
+            if kind == .capture {
+                tapWindows[name] = max(tapWindows[name] ?? 0, Int(plan.c))
+            }
         case .noise, .random: usesRandom = true
         case .kernel: if node.params["mode"]?.string == "seam" { seams.append(plan) }
         default: break
@@ -394,6 +499,9 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
     }
 
     let root = try visit(document.output)
+    if usesRandom {
+        for (id, rank) in randomRanks(document.output) { bySourceId[id]?.randomRank = rank }
+    }
     let portNames = ports.sorted()
     for node in portNodes {
         node.portIndex = portNames.firstIndex(of: node.name) ?? -1
@@ -402,14 +510,20 @@ func buildPlan(_ document: ASLGraphDocument) throws -> Plan {
     for node in paramNodes {
         node.paramIndex = paramNames.firstIndex(of: node.name) ?? -1
     }
+    let sortedTaps = tapIds.sorted()
+    for node in tapNodes {
+        node.tapIndex = sortedTaps.firstIndex(of: node.name) ?? -1
+    }
     return Plan(
         root: root,
         nodes: Array(bySourceId.values),
         slotCount: slotCount,
         seams: seams,
-        tapIds: tapIds.sorted(),
+        tapIds: sortedTaps,
+        tapWindows: sortedTaps.map { tapWindows[$0] ?? 0 },
         usesLane: usesLane,
         readsScalarInput: readsScalarInput,
+        slotBySourceId: bySourceId.mapValues(\.slot),
         usesRandom: usesRandom,
         ports: portNames,
         paramNames: paramNames

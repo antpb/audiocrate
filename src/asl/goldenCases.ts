@@ -38,6 +38,7 @@ import {
   logic,
   looper,
   mix,
+  noise,
   onset,
   pitch,
   osc,
@@ -46,6 +47,7 @@ import {
   pitchShift,
   pulse,
   quantize,
+  random,
   rectify,
   reverse,
   rms,
@@ -367,6 +369,33 @@ export const sourceCases: Record<string, ASLGraphDescriptor> = {
   'kernel source unbound silence': ASL.node(() =>
     kernel.source('nothing-is-bound-here', undefined, { fallback: 'silence' }),
   ),
+
+  // Seeded streams (`asl/rng.ts`). Until these existed both kinds called the
+  // platform's random source and were exempt from the fixture, so nothing
+  // held the two interpreters' colour filters, hold logic or interpolation to
+  // each other. One case per colour, because each is a different filter over
+  // the same draws and one case proves nothing about the other five.
+  'noise white': ASL.node(() => noise()),
+  'noise pink': ASL.node(() => noise({ color: 'pink' })),
+  'noise brown': ASL.node(() => noise({ color: 'brown' })),
+  'noise blue': ASL.node(() => noise({ color: 'blue' })),
+  'noise violet': ASL.node(() => noise({ color: 'violet' })),
+  'noise grey': ASL.node(() => noise({ color: 'grey' })),
+  // A colour switched mid-render, which is where drawing before or after the
+  // colour is read would show up.
+  'noise live color': ASL.node(() => noise({ color: clock({ freq: uniform(400) }).mul(0).add(lfo({ rate: uniform(40) }).range(0, 5)) })),
+  'random stepped': ASL.node(() => random({ freq: uniform(900) })),
+  'random smooth': ASL.node(() => random({ freq: uniform(900), mode: 'smooth' })),
+  // Two random nodes in one graph, built so that every tempting rule gives a
+  // different answer. The `random` is created first (lower id) but sits on
+  // input `b`; the `noise` is created second and sits on `a`. Streams go by
+  // structural order (`randomRanks`: inputs in sorted name order), so the
+  // noise is rank 0. Ranking by id, or by Swift's dictionary-order walk,
+  // swaps them, and the unequal weights make a swap audible.
+  'random two streams': ASL.node(() => {
+    const stepped = random({ freq: uniform(2000) });
+    return noise().mul(0.7).add(stepped.mul(0.3));
+  }),
 };
 
 /**
@@ -394,6 +423,11 @@ export const insertCases: Record<string, ASLGraphDescriptor> = {
   'svf lowpass': ASL.node(({ cutoff }) => filter.svf(audio.input(), { cutoff, q: uniform(2) })),
   'svf highpass': ASL.node(({ cutoff }) => filter.svf(audio.input(), { cutoff, q: uniform(2), mode: 'highpass' })),
   'svf bandpass': ASL.node(({ cutoff }) => filter.svf(audio.input(), { cutoff, q: uniform(2), mode: 'bandpass' })),
+  // Past the old Q 20 ceiling. A bell asks for this, and until the damping
+  // floor moved both interpreters quietly rendered it as Q 20.
+  'svf bandpass ringing': ASL.node(() =>
+    filter.svf(audio.input(), { cutoff: uniform(1500), q: uniform(400), mode: 'bandpass' }).mul(0.01),
+  ),
   ladder: ASL.node(({ cutoff }) => filter.ladder(audio.input(), { cutoff, resonance: uniform(0.6) })),
   // Drive saturates into the filter. The pair is the assertion: at 1 it must
   // be the plain ladder to the bit, and above it must not be.
@@ -492,6 +526,11 @@ export const insertCases: Record<string, ASLGraphDescriptor> = {
   // An unbound seam degrades to a plain wire; an unbound source effect passes
   // its input through. See the silence case in `sourceCases` for the other
   // half of the fallback contract.
+  // Noise in a stereo insert. Each channel runs its own node memory and so
+  // its own stream, seeded with the channel, so the two sides are two noises.
+  // An interpreter that seeded both sides alike would render them identical.
+  'noise per channel': ASL.node(() => audio.input().mul(0.5).add(noise().mul(0.1))),
+
   'kernel seam unbound': ASL.node(() => kernel.seam('nothing-is-bound-here', audio.input()).mul(0.8)),
   'kernel source unbound passthrough': ASL.node(() =>
     kernel.source('nothing-is-bound-here', audio.input()),
@@ -507,21 +546,13 @@ export function allGoldenCases(): { name: string; insert: boolean; graph: ASLGra
 }
 
 /**
- * Node kinds that have no golden case, and why.
+ * Node kinds that have no golden case, and why. Empty, and meant to stay so.
  *
- * Both entries call `Math.random()`, so two runs of the *same* implementation
- * do not agree with each other, let alone two implementations. There is
- * nothing for a sample comparison to assert.
- *
- * A graph containing `noise` or `random` cannot be reproduced, bounced twice
- * to the same file, or compared against a native render. Seeding the
- * generator from voice state would bring them inside the snapshot, and would
- * change what those nodes sound like.
+ * `noise` and `random` lived here while they called `Math.random()`. They draw
+ * from seeded streams now (`asl/rng.ts`) and have cases above like everything
+ * else.
  */
-export const COVERAGE_EXEMPT_KINDS: Readonly<Record<string, string>> = {
-  noise: 'Math.random per sample: not reproducible within one implementation, let alone across two',
-  random: 'Math.random per step: same reason as noise',
-};
+export const COVERAGE_EXEMPT_KINDS: Readonly<Record<string, string>> = {};
 
 /** Every node kind reachable from a golden case. */
 export function coveredKinds(): Set<string> {

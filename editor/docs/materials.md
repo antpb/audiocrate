@@ -152,9 +152,9 @@ Polyphonic scanner over eight single-cycle frames, or a loaded table of 256-samp
 
 ### Sample Player (`sampleplayer`)
 
-Plays a loaded file on a gate. Silent until you choose a file. Pitch is semitones.
+Plays a loaded file. A trig edge starts it from Start, a gate holds it and stops it on release, and reset moves the playhead without starting anything. The audio inlet triggers it too. Silent until you choose a file. Pitch is semitones.
 
-- Jacks: in input(audio), rate(cv), start(cv), pitch(cv), gain(cv), loop(cv) / out audio
+- Jacks: in input(audio), gate, trig, reset, rate(cv), start(cv), pitch(cv), gain(cv), loop(cv) / out audio
 - File: Sample. Silent until a file is loaded.
 
 | Param | Control | Range | Default | CV |

@@ -246,6 +246,7 @@ export { audioPortNames, auxAudioPorts } from './asl/ports';
  * authored without an AudioMaterial around it.
  */
 export { ASL } from './asl/graph';
+export { DEFAULT_VOICE_SEED, normalizeSeed } from './asl/rng';
 export type { ASLGraphDescriptor } from './asl/graph';
 export type { ASLNode, NodeKind, TransportField, LooperBox, SampleBox } from './asl/types';
 /**
@@ -728,6 +729,7 @@ export {
   flattenPatch,
   detectPatchRole,
   DEFAULT_PATCH_IO,
+  NOTE_INPUTS,
   type PatchDocument,
   type PatchDocumentNode,
   type PatchDocumentConnection,
@@ -735,8 +737,19 @@ export {
   type FlattenPatchOptions,
 } from './patcher/flattenPatch';
 export {
+  planVoicing,
+  readsVoice,
+  VOICE_GATE_KINDS,
+  type Voicing,
+  type VoicingRole,
+  type VoicingPlan,
+  type VoicingInputs,
+} from './patcher/voicing';
+export { connectSplitVoices } from './renderers/splitVoices';
+export {
   CRATE_PLUGIN_KIND,
   CRATE_PLUGIN_VERSION,
+  CRATE_PLUGIN_MAX_VERSION,
   USER_PLUGIN_MANUFACTURER,
   pluginSubtypeFromId,
   isCratePluginDocument,
@@ -748,14 +761,21 @@ export {
   type CratePluginDocumentOptions,
   type CratePluginPreset,
   type PluginFromDocumentOptions,
+  type StringifyCratePluginOptions,
 } from './patcher/cratePlugin';
 export {
   serializeGraph,
   serializeNode,
+  shareSerializedGraph,
+  inflateSerializedGraph,
+  canonicalizeSerializedGraph,
   compileMaterial,
   compileCratePlugin,
   type SerializedGraph,
   type SerializedASLNode,
+  type SerializedNodeRef,
+  type SharedSerializedGraph,
+  type SharedSerializedNode,
   type CompiledMaterialDocument,
   type CompileCratePluginOptions,
 } from './patcher/compiledPlugin';

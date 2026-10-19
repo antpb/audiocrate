@@ -1,11 +1,35 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  buildFactoryCatalog,
   FACTORY_CATEGORY_ORDER,
   FACTORY_PATCHES,
   factoryPatchById,
   factoryPatchFits,
   groupedFactoryPatches,
 } from '../src/factoryPatches';
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The library the iOS plugin loads is this file, generated from these
+ * patches. So the plugin and the browser offer the same hundred patches by
+ * construction, and this is what keeps it that way: change a patch here
+ * without regenerating and it goes red.
+ */
+describe('factory patches the iOS plugin ships', () => {
+  it('match these patches exactly', () => {
+    const onDisk = JSON.parse(
+      readFileSync(resolve(here, '../../examples/CrateASL/Sources/CrateASL/Resources/factory-patches.json'), 'utf8'),
+    );
+    expect(
+      JSON.parse(JSON.stringify(buildFactoryCatalog())),
+      'factory-patches.json is stale: run `npm run fixtures:factory`',
+    ).toEqual(onDisk);
+  });
+});
 import { applyPatchLayout } from '../src/patchLayout';
 import { isCratePatch, PATCH_KIND } from '../src/patch';
 

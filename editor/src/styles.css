@@ -297,6 +297,8 @@ button:disabled {
   padding: 8px;
   border-right: 1px solid #2a2a2a;
   background: #202020;
+  container-type: inline-size;
+  container-name: palette;
 }
 
 .palette h3 {
@@ -326,31 +328,38 @@ button:disabled {
 }
 
 .palette button.palette-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title add'
+    'blurb blurb';
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
   padding: 5px 6px;
 }
 
 .palette-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  display: contents;
 }
 
 .palette-copy strong {
+  grid-area: title;
+  min-width: 0;
   font-weight: 400;
   font-size: 11px;
   color: #c4c4c4;
+  overflow-wrap: anywhere;
 }
 
 .palette-copy em {
+  grid-area: blurb;
+  min-width: 0;
   font-style: normal;
   font-size: 9px;
   line-height: 1.35;
   color: #8a8a8a;
+  overflow-wrap: anywhere;
 }
 
 .palette-add {
@@ -365,12 +374,30 @@ button:disabled {
   font-size: 11px;
   line-height: 14px;
   text-align: center;
-  align-self: center;
+  grid-area: add;
+  align-self: start;
 }
 
 .palette button.palette-item:hover .palette-add {
   border-color: #4a4a4a;
   color: #c4c4c4;
+}
+
+@container palette (max-width: 200px) {
+  .palette-copy strong {
+    font-size: 10px;
+  }
+
+  .palette-copy em {
+    font-size: 8.5px;
+  }
+
+  .palette-add {
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+    line-height: 12px;
+  }
 }
 
 .palette-search {
@@ -1306,7 +1333,10 @@ button:disabled {
     border-bottom: 1px solid #8a8a8a;
   }
 
-  .body.sheet-palette .palette,
+  .body.sheet-palette .palette {
+    transform: none;
+  }
+
   .body.sheet-inspector .inspector-dock {
     display: flex;
     transform: none;
@@ -1377,7 +1407,37 @@ button:disabled {
     height: 20px;
     font-size: 13px;
     line-height: 18px;
-    align-self: center;
+  }
+
+  @container palette (max-width: 240px) {
+    .palette-copy strong {
+      font-size: 12px;
+    }
+
+    .palette-copy em {
+      font-size: 9.5px;
+    }
+
+    .palette-add {
+      width: 18px;
+      height: 18px;
+      font-size: 12px;
+      line-height: 16px;
+    }
+  }
+
+  @container palette (max-width: 190px) {
+    .palette-copy strong {
+      font-size: 11px;
+    }
+
+    .palette-copy em {
+      font-size: 9px;
+    }
+
+    .palette button.palette-item {
+      padding: 6px;
+    }
   }
 
   .palette-pills button {
@@ -1798,4 +1858,30 @@ button:disabled {
     font-size: 16px;
     min-height: 36px;
   }
+}
+
+/* Per voice / Summed, on a module after an instrument's voices. Same
+   on-state as the time-signature presets. */
+.voicing .segmented {
+  display: flex;
+  gap: 6px;
+}
+
+.voicing .segmented button {
+  padding: 4px 8px;
+  border: 1px solid #4a4a4a;
+  background: #1c1c1c;
+  color: #b8b8b8;
+  font-size: 11px;
+}
+
+.voicing .segmented button.on {
+  border-color: #8a8a8a;
+  background: #2c2c2c;
+  color: #f0f0f0;
+}
+
+.voicing .segmented button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

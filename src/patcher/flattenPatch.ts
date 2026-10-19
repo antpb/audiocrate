@@ -44,11 +44,18 @@ import { AudioMaterial, type VoiceStealingPolicy } from '../graph/AudioMaterial'
 import { isAnalysisKind } from '../materials/meters';
 import { isLooperKind, isLooperPulseOutput } from '../materials/time';
 import type { ParamDescriptor } from '../graph/param';
+import { planVoicing, type Voicing, type VoicingRole } from './voicing';
 
 export interface PatchDocumentNode {
   id: string;
   kind: string;
   params?: Record<string, number>;
+  /**
+   * In an instrument, whether this module runs per voice or once on the sum
+   * of the voices (`voicing.ts`). Omitted means summed wherever the patch
+   * allows it. Ignored where it cannot apply.
+   */
+  voicing?: Voicing;
 }
 
 export interface PatchDocumentConnection {
@@ -88,7 +95,7 @@ export const DEFAULT_PATCH_IO: PatchIoKinds = {
 };
 
 /** Inlets a keyboard drives per note rather than per sample. */
-const NOTE_INPUTS = new Set(['note', 'gate', 'velocity', 'trig', 'clock', 'reset']);
+export const NOTE_INPUTS: ReadonlySet<string> = new Set(['note', 'gate', 'velocity', 'trig', 'clock', 'reset']);
 
 export interface FlattenPatchOptions {
   /**
@@ -161,8 +168,56 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
 
   const order = topoSort(patch, materials, kinds, io);
 
-  const flattened = new Map<string, ASLNode>();
-  for (const id of order) {
+  // Which modules run per voice and which once on the voices' sum. An
+  // insert has no voices, and an instrument with nothing to sum flattens
+  // exactly as it always did: one graph, copied per voice.
+  const voicing = role === 'instrument'
+    ? planVoicing({
+        nodes: patch.nodes,
+        connections: patch.connections,
+        materials,
+        voiceSourceKinds: new Set([io.keyboard, io.midiIn]),
+        noteInputs: NOTE_INPUTS,
+      })
+    : null;
+  const roleOf = (id: string): VoicingRole => voicing?.role.get(id) ?? 'instanced';
+  const split = voicing !== null && summedReachesMaster(patch, kinds, io, (id) => roleOf(id) === 'summed');
+
+  // `voice` is every module when nothing is split. Split, it is the
+  // instanced and global modules, and `bus` the summed and global ones.
+  const voiceFlat = new Map<string, ASLNode>();
+  const busFlat = new Map<string, ASLNode>();
+  /** Per-voice signals handed to the bus, in first-use order. */
+  const sends: ASLNode[] = [];
+  const sendPorts: ASLNode[] = [];
+  const sendPort = (node: ASLNode): ASLNode => {
+    let k = sends.indexOf(node);
+    if (k === -1) {
+      k = sends.length;
+      sends.push(node);
+      sendPorts.push(makeNode('port', {}, { name: `send${k}` }));
+    }
+    return sendPorts[k]!;
+  };
+
+  /**
+   * A cable's upstream value on the side being built. On the bus, a
+   * per-voice source is not available as a node: it arrives as the sum of
+   * every voice's copy, through that signal's send port.
+   */
+  const upstream = (side: 'voice' | 'bus', source: string, field?: (audio: ASLNode) => ASLNode | null): ASLNode | null => {
+    if (side === 'bus' && roleOf(source) === 'instanced') {
+      const audio = voiceFlat.get(source);
+      if (!audio) return null;
+      const node = field ? field(audio) : audio;
+      return node ? sendPort(node) : null;
+    }
+    const audio = (side === 'voice' ? voiceFlat : busFlat).get(source);
+    if (!audio) return null;
+    return field ? field(audio) : audio;
+  };
+
+  const build = (id: string, side: 'voice' | 'bus'): ASLNode => {
     const material = materials.get(id)!;
     const audioSources = new Map<string, ASLNode[]>();
     const cvSources = new Map<string, ASLNode[]>();
@@ -183,9 +238,7 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
         continue;
       }
       if (sourceKind && isAnalysisKind(sourceKind) && conn.sourceOutput !== 'audio') {
-        const audio = flattened.get(conn.source);
-        if (!audio) continue;
-        const field = analysisOutletNode(conn.sourceOutput, audio);
+        const field = upstream(side, conn.source, (audio) => analysisOutletNode(conn.sourceOutput, audio));
         if (!field) continue;
         if (material.audioInputs.includes(inlet)) {
           push(audioSources, inlet, field);
@@ -195,9 +248,7 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
         continue;
       }
       if (sourceKind && isLooperKind(sourceKind) && isLooperPulseOutput(conn.sourceOutput)) {
-        const audio = flattened.get(conn.source);
-        if (!audio) continue;
-        const field = looperOutletNode(conn.sourceOutput, audio);
+        const field = upstream(side, conn.source, (audio) => looperOutletNode(conn.sourceOutput, audio));
         if (!field) continue;
         if (material.audioInputs.includes(inlet)) {
           push(audioSources, inlet, field);
@@ -207,12 +258,12 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
         continue;
       }
       if (material.audioInputs.includes(inlet)) {
-        const node = sourceKind === io.line ? insertInputNode() : flattened.get(conn.source);
+        const node = sourceKind === io.line ? insertInputNode() : upstream(side, conn.source);
         if (node) push(audioSources, inlet, node);
         continue;
       }
       if (NOTE_INPUTS.has(inlet) && sourceKind !== io.line) {
-        const node = flattened.get(conn.source);
+        const node = upstream(side, conn.source);
         if (node) {
           const polarity = materials.get(conn.source)?.cvPolarity ?? 'bipolar';
           cvAbsolute.set(inlet, voiceJackNode(asBipolar(node, polarity), inlet));
@@ -220,7 +271,7 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
         continue;
       }
       if (inlet in material.params && sourceKind !== io.line) {
-        const node = flattened.get(conn.source);
+        const node = upstream(side, conn.source);
         if (node) {
           const polarity = materials.get(conn.source)?.cvPolarity ?? 'bipolar';
           push(cvSources, inlet, asBipolar(node, polarity));
@@ -236,16 +287,23 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
       const descriptor = material.params[param]!;
       cv.set(param, makeNode('range', { source: mixNodes(sources) }, { min: descriptor.min, max: descriptor.max }));
     }
-    flattened.set(id, rewrite(material.graph.output, {
+    return rewrite(material.graph.output, {
       audio: audioSources,
       cv,
       declared: material.params,
       prefix: id,
       memo: new Map(),
       renamed: new Map(),
-    }));
+    });
+  };
+
+  for (const id of order) {
+    const r = roleOf(id);
+    if (!split || r !== 'summed') voiceFlat.set(id, build(id, 'voice'));
+    if (split && r !== 'instanced') busFlat.set(id, build(id, 'bus'));
   }
 
+  const outputSide: 'voice' | 'bus' = split ? 'bus' : 'voice';
   const outputs: ASLNode[] = [];
   for (const conn of patch.connections) {
     if (kinds.get(conn.target) !== io.master) continue;
@@ -256,8 +314,8 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
         : sourceKind === io.transport
           ? transportOutletNode(conn.sourceOutput)
           : sourceKind && isLooperKind(sourceKind) && isLooperPulseOutput(conn.sourceOutput)
-            ? looperOutletNode(conn.sourceOutput, flattened.get(conn.source))
-            : flattened.get(conn.source);
+            ? upstream(outputSide, conn.source, (audio) => looperOutletNode(conn.sourceOutput, audio))
+            : upstream(outputSide, conn.source);
     if (node) outputs.push(node);
   }
   if (outputs.length === 0) {
@@ -285,6 +343,29 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
     ? options.polyphony ?? Math.max(1, ...[...materials.values()].map((m) => m.polyphony))
     : 1;
 
+  // No send means nothing per voice reaches the bus: nothing to sum.
+  if (!split || sends.length === 0) {
+    return new AudioMaterial({
+      name,
+      kind: options.kind ?? name,
+      params: published,
+      automatable: Object.keys(published),
+      polyphony,
+      voiceStealing: options.voiceStealing,
+      graph: () => new ASLValue(output),
+    });
+  }
+
+  // Split: the voices render their sends, and `output` (built on the bus
+  // side) is what runs once on their sum.
+  const bus = new AudioMaterial({
+    name: `${name} (summed)`,
+    kind: options.kind ?? name,
+    params: published,
+    automatable: Object.keys(published),
+    graph: () => new ASLValue(output),
+  });
+  const voiceOutput = mixNodes(sends);
   return new AudioMaterial({
     name,
     kind: options.kind ?? name,
@@ -292,8 +373,47 @@ export function flattenPatch(patch: PatchDocument, options: FlattenPatchOptions)
     automatable: Object.keys(published),
     polyphony,
     voiceStealing: options.voiceStealing,
-    graph: () => new ASLValue(output),
+    graph: () => new ASLValue(voiceOutput),
+    sends,
+    bus,
   });
+}
+
+/**
+ * Whether any summed module is actually heard. A summed module that reaches
+ * Master only through nothing (a dead end) does not justify a bus, and
+ * splitting for it would change a patch's graph for no sound at all.
+ */
+function summedReachesMaster(
+  patch: PatchDocument,
+  kinds: Map<string, string>,
+  io: PatchIoKinds,
+  summed: (id: string) => boolean,
+): boolean {
+  const feeds = new Map<string, string[]>();
+  for (const conn of patch.connections) {
+    const list = feeds.get(conn.source);
+    if (list) list.push(conn.target);
+    else feeds.set(conn.source, [conn.target]);
+  }
+  const reaches = new Map<string, boolean>();
+  const visit = (id: string, path: Set<string>): boolean => {
+    const known = reaches.get(id);
+    if (known !== undefined) return known;
+    if (path.has(id)) return false;
+    path.add(id);
+    let result = false;
+    for (const next of feeds.get(id) ?? []) {
+      if (kinds.get(next) === io.master || visit(next, path)) {
+        result = true;
+        break;
+      }
+    }
+    path.delete(id);
+    reaches.set(id, result);
+    return result;
+  };
+  return patch.nodes.some((node) => summed(node.id) && visit(node.id, new Set()));
 }
 
 function push(map: Map<string, ASLNode[]>, key: string, node: ASLNode): void {

@@ -84,18 +84,89 @@ public final class VoicePool {
     private var mixL: [Float] = []
     private var mixR: [Float] = []
 
-    public init(voice: CompiledVoice, polyphony: Int, policy: VoiceStealingPolicy = .oldest) {
+    // MARK: Split instrument (`voicing` in flattenPatch)
+    //
+    // A patch whose effects run once on the sum of the voices compiles to a
+    // voice graph with sends and a bus graph (`CompiledVoice.bus`). Each
+    // voice renders only its sends; they are summed per send here, and the
+    // bus runs once on the sums. A pool of eight playing a chord through a
+    // reverb costs one reverb, not eight, and a limiter limits the chord.
+    private let busState: VoiceState?
+    /// Per voice, per send: where one voice writes its sends this block.
+    private var voiceSendL: [UnsafeMutablePointer<Float>] = []
+    private var voiceSendR: [UnsafeMutablePointer<Float>] = []
+    /// Per send: the sum over every voice, which the bus reads as a port.
+    private var sumSendL: [UnsafeMutablePointer<Float>] = []
+    private var sumSendR: [UnsafeMutablePointer<Float>] = []
+    private var sendFrames = 0
+    /// The bus's port index for each send, in send order.
+    private let busSendPorts: [Int]
+    /// Consecutive blocks the bus has rendered silence with nothing feeding
+    /// it. Past `quietBlocksToRetire` it stops rendering until a voice sounds,
+    /// the way an idle voice is skipped: a reverb tail under -100 dBFS is not
+    /// worth a reverb's arithmetic per block.
+    private var busQuietBlocks = 0
+
+    /// `seed` makes the pool reproducible: voice `i` is seeded `seed + i`, as
+    /// `AudioMaterial.bind` does, so the voices stay independent of each other
+    /// and identical across runs. Omitted, each voice gets a random seed, so
+    /// a chord of noisy voices is not one noise in lockstep.
+    public init(
+        voice: CompiledVoice,
+        polyphony: Int,
+        policy: VoiceStealingPolicy = .oldest,
+        seed: UInt32? = nil
+    ) {
         precondition(polyphony > 0, "VoicePool: polyphony must be at least 1")
         self.voice = voice
         self.policy = policy
-        self.states = (0..<polyphony).map { _ in voice.makeState() }
+        self.states = (0..<polyphony).map { index in
+            voice.makeState(seed: seed.map { $0 &+ UInt32(index) } ?? UInt32.random(in: .min ... .max), withBus: false)
+        }
         self.slots = (0..<polyphony).map {
             VoiceSnapshot(index: $0, note: nil, velocity: 0, startedAt: 0, held: false)
         }
         self.quietBlocks = Array(repeating: 0, count: polyphony)
+        self.polyphony = polyphony
+        if let bus = voice.bus {
+            // Seeded like voice 0, as a one-voice host seeds the bus it carries.
+            let state = bus.makeState(seed: seed ?? UInt32.random(in: .min ... .max))
+            // An effect on the voices' sum: its gate opens once and stays open.
+            state.gate = true
+            self.busState = state
+            self.busSendPorts = (0..<voice.sendCount).map { bus.portIndex(of: "send\($0)") }
+        } else {
+            self.busState = nil
+            self.busSendPorts = []
+        }
     }
 
-    public var polyphony: Int { slots.count }
+    deinit {
+        for buffer in voiceSendL + voiceSendR + sumSendL + sumSendR { buffer.deallocate() }
+    }
+
+    /// Sized on the first render and only grown, never on the steady path.
+    private func ensureSendBuffers(frames: Int) {
+        guard frames > sendFrames else { return }
+        for buffer in voiceSendL + voiceSendR + sumSendL + sumSendR { buffer.deallocate() }
+        let count = voice.sendCount
+        func make() -> [UnsafeMutablePointer<Float>] {
+            (0..<count).map { _ in
+                let buffer = UnsafeMutablePointer<Float>.allocate(capacity: frames)
+                buffer.initialize(repeating: 0, count: frames)
+                return buffer
+            }
+        }
+        voiceSendL = make()
+        voiceSendR = make()
+        sumSendL = make()
+        sumSendR = make()
+        sendFrames = frames
+    }
+
+    /// Stored rather than read off `slots`, because an editor asks for it
+    /// from the main thread while the render thread is writing `slots`.
+    public let polyphony: Int
 
     /// Slots currently sounding or releasing.
     public var activeVoiceCount: Int { slots.reduce(0) { $0 + ($1.note == nil ? 0 : 1) } }
@@ -105,16 +176,28 @@ public final class VoicePool {
     /// Seeds every voice with the graph's parameter defaults.
     public func setParams(_ values: [String: Double]) {
         for state in states { state.setParams(values) }
+        busState?.setParams(values)
     }
 
     /// A parameter change applies to every voice, sounding or not, so a note
     /// struck after the knob moved starts where the knob is.
     public func setParam(_ name: String, _ value: Double) {
         for state in states { state.setParam(name, value) }
+        busState?.setParam(name, value)
+    }
+
+    /// A host's change, gliding a continuous parameter there
+    /// (`CompiledVoice.setParam`). **Render thread only**: a glide writes a
+    /// ramp the render reads and commits, so starting one from another thread
+    /// is a torn write. `setParam` stays a plain store for callers elsewhere.
+    public func glideParam(_ name: String, _ value: Double) {
+        for state in states { voice.setParam(state, name, value) }
+        if let bus = voice.bus, let busState { bus.setParam(busState, name, value) }
     }
 
     public func rampParam(_ name: String, to value: Double, frames: Int) {
         for state in states { state.rampParam(name, to: value, frames: frames) }
+        busState?.rampParam(name, to: value, frames: frames)
     }
 
     public func noteOn(note: Int, velocity: Double) {
@@ -175,6 +258,10 @@ public final class VoicePool {
         outL.update(repeating: 0, count: frames)
         outR?.update(repeating: 0, count: frames)
 
+        if let bus = voice.bus, let busState {
+            return renderSplit(bus, busState, sampleRate: sampleRate, frames: frames, outL: outL, outR: outR, transport: transport)
+        }
+
         var rendered = 0
         for index in slots.indices where slots[index].note != nil {
             rendered += 1
@@ -227,5 +314,78 @@ public final class VoicePool {
             slots[index].velocity = 0
             quietBlocks[index] = 0
         }
+    }
+
+    /// `render` for a split instrument: voices into summed sends, then the
+    /// bus once on the sums.
+    private func renderSplit(
+        _ bus: CompiledVoice,
+        _ busState: VoiceState,
+        sampleRate: Double,
+        frames: Int,
+        outL: UnsafeMutablePointer<Float>,
+        outR: UnsafeMutablePointer<Float>?,
+        transport: TransportSnapshot?
+    ) -> Int {
+        ensureSendBuffers(frames: frames)
+        let count = voice.sendCount
+        for k in 0..<count {
+            sumSendL[k].update(repeating: 0, count: frames)
+            sumSendR[k].update(repeating: 0, count: frames)
+        }
+
+        var rendered = 0
+        var anyRight = false
+        voiceSendL.withUnsafeBufferPointer { sendsL in
+            voiceSendR.withUnsafeBufferPointer { sendsR in
+                mixL.withUnsafeMutableBufferPointer { mix in
+                    for index in slots.indices where slots[index].note != nil {
+                        rendered += 1
+                        let wroteRight = voice.render(
+                            states[index], sampleRate: sampleRate, frames: frames,
+                            outL: mix.baseAddress!, outR: nil,
+                            transport: transport,
+                            sendsL: sendsL.baseAddress!, sendsR: sendsR.baseAddress!
+                        )
+                        if wroteRight { anyRight = true }
+                        for k in 0..<count {
+                            let l = sendsL[k], r = sendsR[k], sumL = sumSendL[k], sumR = sumSendR[k]
+                            for i in 0..<frames {
+                                sumL[i] += l[i]
+                                sumR[i] += wroteRight ? r[i] : l[i]
+                            }
+                        }
+                        // A voice is retired on its own signal, before the
+                        // bus: its share of a reverb tail is the bus's now.
+                        var peak: Float = 0
+                        for i in 0..<frames {
+                            let value = mix[i]
+                            let magnitude = value < 0 ? -value : value
+                            if magnitude > peak { peak = magnitude }
+                        }
+                        retire(index, peak: peak)
+                    }
+                }
+            }
+        }
+
+        if rendered == 0 && busQuietBlocks >= quietBlocksToRetire { return 0 }
+
+        for k in 0..<count where busSendPorts[k] >= 0 {
+            busState.portL[busSendPorts[k]] = UnsafePointer(sumSendL[k])
+            // Left only when no voice wrote a right channel, so a mono pool
+            // lets a mirrorable bus run once and copy.
+            busState.portR[busSendPorts[k]] = anyRight ? UnsafePointer(sumSendR[k]) : nil
+        }
+        let busRight = bus.render(busState, sampleRate: sampleRate, frames: frames, outL: outL, outR: outR, transport: transport)
+        if let outR, !busRight { outR.update(from: outL, count: frames) }
+
+        var busPeak: Float = 0
+        for i in 0..<frames {
+            let magnitude = outL[i] < 0 ? -outL[i] : outL[i]
+            if magnitude > busPeak { busPeak = magnitude }
+        }
+        busQuietBlocks = rendered == 0 && busPeak <= silenceFloor ? busQuietBlocks + 1 : 0
+        return rendered
     }
 }

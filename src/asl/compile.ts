@@ -29,6 +29,7 @@ import {
   type TransportSnapshot,
 } from './transportNodes';
 import { audioPortNames } from './ports';
+import { DEFAULT_VOICE_SEED, nextUniform, normalizeSeed, streamSeed, type RngState } from './rng';
 import { MAIN_PORT } from './builders';
 import type { AnalysisFrame, CaptureBuffer, MeterAccumulator, MeterReading } from './analysis';
 import type { KernelBindings } from '../renderers/kernel';
@@ -47,6 +48,11 @@ interface AdsrMemory {
   stageElapsed: number;
   stageStartLevel: number;
   lastGate: boolean;
+  /** The current stage's duration as last seen, NaN at a stage's start. DAHDSR only. */
+  dur?: number;
+  /** The gate cable last sample, and whether it has ever risen. DAHDSR only. */
+  lastSignal?: boolean;
+  signalDriven?: boolean;
 }
 
 /**
@@ -166,6 +172,12 @@ interface PlanNode {
   /** `range` bounds, read off params once instead of destructured per sample. */
   readonly rangeMin: number;
   readonly rangeMax: number;
+  /**
+   * For `noise` and `random`, this node's rank among the graph's random
+   * nodes in structural order (`randomRanks`), which picks its stream
+   * (`asl/rng.ts`). -1 for every other kind.
+   */
+  readonly r: number;
   /**
    * 1 when this node's value cannot change within a block, so it is computed
    * once per block instead of once per sample per channel. See
@@ -401,6 +413,118 @@ function planConst(node: ASLNode): number {
   }
 }
 
+/**
+ * Which stream each `noise` and `random` node draws from, by node id.
+ *
+ * The rank is the order of first visit in a depth-first walk from the output
+ * that takes a node's inputs in sorted name order and a `mix` list in order.
+ * That is a property of the graph's shape alone, which is the point: ids are
+ * renumbered by the palette catalog and minted afresh by `flattenPatch` in
+ * each language, and Swift walks a node's inputs in dictionary order, so
+ * neither ids nor the compiler's own walk mean the same thing on both sides.
+ * Matched by `randomRanks` in Plan.swift.
+ */
+export function randomRanks(root: ASLNode): Map<number, number> {
+  const ranks = new Map<number, number>();
+  const seen = new Set<number>();
+  const visit = (node: ASLNode): void => {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    if (node.kind === 'noise' || node.kind === 'random') ranks.set(node.id, ranks.size);
+    for (const key of Object.keys(node.inputs).sort()) visit(node.inputs[key]!);
+    for (const child of node.list ?? []) visit(child);
+  };
+  visit(root);
+  return ranks;
+}
+
+/**
+ * How long a smoothed parameter takes to reach a new value, in seconds.
+ *
+ * Short on purpose. The point is to take the step out of a change, not to lag
+ * it: a change lands within a couple of render quanta however large it is,
+ * so a deliberate jump feels as immediate as it did, while a knob's stream of
+ * small steps becomes a line. Chosen as the shortest length that clears every
+ * zipper finding in `editor/test/paramMotion.test.ts`. Matched in State.swift.
+ */
+export const PARAM_RAMP_SECONDS = 0.005;
+
+/** A glide's length in frames at `sampleRate`: never zero. */
+export function paramRampFrames(sampleRate: number): number {
+  return Math.max(1, Math.round(PARAM_RAMP_SECONDS * sampleRate));
+}
+
+/**
+ * A parameter on its way somewhere. The same arithmetic as CrateASL's
+ * `rampParam`, so the two interpreters glide to the bit: the value at frame
+ * `i` of a block is `base + step * min(i, remaining)`, a pure function of the
+ * frame (both passes of a seam graph agree), committed once per block.
+ */
+export interface ParamRamp {
+  name: string;
+  base: number;
+  target: number;
+  step: number;
+  remaining: number;
+}
+
+function applyRamps(state: VoiceRuntimeState, frame: number): void {
+  const ramps = state.ramps!;
+  for (let k = 0; k < ramps.length; k++) {
+    const ramp = ramps[k]!;
+    state.params[ramp.name] = ramp.base + ramp.step * Math.min(frame, ramp.remaining);
+  }
+  // A block-constant subtree over a gliding parameter is not constant.
+  state.blockGen -= 1;
+}
+
+/** Advances every ramp by `frames`, landing exactly on its target when it arrives. */
+function commitRamps(state: VoiceRuntimeState, frames: number): void {
+  const ramps = state.ramps!;
+  let write = 0;
+  for (let k = 0; k < ramps.length; k++) {
+    const ramp = ramps[k]!;
+    if (frames >= ramp.remaining) {
+      state.params[ramp.name] = ramp.target;
+      continue;
+    }
+    ramp.base += ramp.step * frames;
+    ramp.remaining -= frames;
+    state.params[ramp.name] = ramp.base;
+    ramps[write++] = ramp;
+  }
+  ramps.length = write;
+}
+
+/** A shelf's radicand floor, 1/Q^2 at Q 10. Matched in NodeHelpers.swift. */
+export const SHELF_MIN_RADICAND = 0.01;
+
+/**
+ * The SVF's stability bound: `f^2 + 2 f damp` stays at or below this, 1% under
+ * the 4 at which the poles reach the unit circle. Matched in NodeHelpers.swift.
+ */
+export const SVF_STABILITY = 3.96;
+
+/** The SVF's damping floor: Q up to 10,000. Matched in NodeHelpers.swift. */
+export const SVF_MIN_DAMP = 1e-4;
+
+/**
+ * A `range` bound, refused unless it is a finite number. The builder lowers a
+ * signal bound to `add`/`mul` itself, so this only fires on a graph that was
+ * written some other way (hand-built JSON, another tool's export), where the
+ * old behaviour was a voice that rendered NaN forever with nothing said.
+ */
+function rangeBound(node: ASLNode, key: 'min' | 'max'): number {
+  const value = node.params[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(
+      `ASL range node ${node.id}: "${key}" must be a finite number, got ${JSON.stringify(value)}. ` +
+        'A bound that changes over time is built as add/mul, which `.range()` does for you.',
+    );
+  }
+  return value;
+}
+
 /** A sample or wavetable, resolved once instead of on every sample. */
 function planTable(node: ASLNode): Float32Array {
   if (node.kind !== 'wavetable' && node.kind !== 'samplePlay' && node.kind !== 'grain') {
@@ -424,6 +548,8 @@ function planNames(node: ASLNode): { name: string; slot: string } {
 
 interface Plan {
   readonly root: PlanNode;
+  /** Every planned node by its graph node id. */
+  readonly bySourceId: ReadonlyMap<number, PlanNode>;
   /** How many slots a state has to allocate. */
   readonly count: number;
   /** Seam-kernel nodes, in discovery order, each appearing once. */
@@ -484,8 +610,9 @@ function buildPlan(root: ASLNode): Plan {
       b: node.kind === 'breakpoints' ? ((node.params.levels as number[]) ?? [0, 1]) : EMPTY_NUMBERS,
       name,
       slot,
-      rangeMin: node.kind === 'range' ? (node.params.min as number) : 0,
-      rangeMax: node.kind === 'range' ? (node.params.max as number) : 0,
+      rangeMin: node.kind === 'range' ? rangeBound(node, 'min') : 0,
+      rangeMax: node.kind === 'range' ? rangeBound(node, 'max') : 0,
+      r: -1,
       hoist: 0,
     };
     // Registered before the children are visited, so a graph that somehow
@@ -535,8 +662,12 @@ function buildPlan(root: ASLNode): Plan {
   }
 
   const planned = visit(root);
+  if (usesRandom) {
+    for (const [id, rank] of randomRanks(root)) (bySourceId.get(id) as { r: number }).r = rank;
+  }
   return {
     root: planned,
+    bySourceId,
     count,
     seams,
     tapIds: [...tapIds].sort(),
@@ -592,6 +723,24 @@ export interface VoiceRuntimeState {
   laneMemory?: unknown[][];
   params: Record<string, number>;
   gate: boolean;
+  /**
+   * Where this voice's `noise` and `random` streams start, as an unsigned
+   * 32-bit integer (`asl/rng.ts`). Two states with one seed render the same
+   * samples; two voices meant to sound independent want two seeds.
+   */
+  seed: number;
+  /**
+   * Parameters gliding toward a value set through `CompiledVoice.setParam`.
+   * Empty or absent almost always, and the render loop checks the length
+   * once per block.
+   */
+  ramps?: ParamRamp[];
+  /**
+   * The rate of the last render, 0 before the first. A ramp's length is in
+   * seconds and needs a rate to become frames; before a voice has rendered
+   * there is nothing to glide from, so every `setParam` lands at once.
+   */
+  renderedRate?: number;
   /** Live audio for the block being rendered. Absent on the per-sample path. */
   portBlocks?: PortBlocks;
   /**
@@ -674,8 +823,21 @@ export interface CompiledVoice {
    * taps, which is the common case and must stay allocation-free.
    */
   drainAnalysis(state: VoiceRuntimeState): AnalysisFrame | null;
-  createState(): VoiceRuntimeState;
+  /**
+   * `seed` makes `noise` and `random` reproducible: the same graph, seed and
+   * inputs render the same samples, here and in CrateASL. Omitted means
+   * `DEFAULT_VOICE_SEED`, so an offline render bounces identically twice.
+   */
+  createState(options?: { seed?: number }): VoiceRuntimeState;
   noteOn(state: VoiceRuntimeState, params: Record<string, number>): void;
+  /**
+   * A host's parameter change: a knob, an automation value, a message from
+   * the main thread. A parameter the graph lists in `smooth` glides there
+   * over `PARAM_RAMP_SECONDS`; anything else, and anything set before the
+   * voice first renders, lands at once. `noteOn` never glides, because the
+   * values that arrive with a note (pitch above all) are meant exactly.
+   */
+  setParam(state: VoiceRuntimeState, name: string, value: number): void;
   noteOff(state: VoiceRuntimeState): void;
   renderSample(state: VoiceRuntimeState, sampleRate: number): number;
   /**
@@ -704,8 +866,16 @@ export interface CompiledVoice {
        * that sets it once per voice does not have to repeat it per block.
        */
       transport?: TransportSnapshot;
+      /**
+       * One block per `graph.sends` entry, filled with that send's value
+       * frame by frame (`right` on the second pass of a stereo graph). The
+       * return value says whether `right` was written, as for `outputR`.
+       */
+      sends?: { left: readonly Float32Array[]; right?: readonly Float32Array[] };
     },
   ): boolean;
+  /** How many sends this graph hands a summed bus. 0 for any other graph. */
+  readonly sendCount: number;
 }
 
 /** `shape` is one of the SHAPE_ constants. Plaits-style extras use `width` as shapeMod. */
@@ -947,9 +1117,127 @@ type LooperRuntime = {
   mem: LooperMem;
 };
 
-export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
+/**
+ * Compiles a graph into something that renders it.
+ *
+ * A split instrument's voice graph (`graph.bus` present, `flattenPatch`'s
+ * `voicing`) compiles to a voice that renders itself and then its bus, so a
+ * host that runs one voice (an offline bounce, a scene instrument, a test)
+ * hears the whole patch without knowing it was split. A host that runs many
+ * voices passes `{ sends: true }` for the voice alone, renders each voice's
+ * `extras.sends`, sums them, and runs `graph.bus` once on the sum: that is
+ * the point of the split.
+ */
+export function compileVoice(graph: ASLGraphDescriptor, options: { sends?: boolean } = {}): CompiledVoice {
+  if (!graph.bus || options.sends) return compileGraph(graph);
+  return compileSplitVoice(compileGraph(graph), compileGraph(graph.bus));
+}
+
+/** Per-state scratch for a split voice rendered with its own bus. */
+interface SplitRuntime {
+  bus: VoiceRuntimeState;
+  left: Float32Array[];
+  right: Float32Array[];
+  voiceOut: Float32Array;
+  ports: Record<string, (Float32Array | undefined)[]>;
+}
+
+const splitRuntimes = new WeakMap<VoiceRuntimeState, SplitRuntime>();
+
+function compileSplitVoice(voice: CompiledVoice, bus: CompiledVoice): CompiledVoice {
+  const sendCount = voice.sendCount;
+  const runtime = (state: VoiceRuntimeState): SplitRuntime => {
+    const found = splitRuntimes.get(state);
+    if (!found) throw new Error('compileVoice: a split voice was handed a state it did not create');
+    return found;
+  };
+  return {
+    sourceSlot: null,
+    seamSlots: [],
+    stereo: voice.stereo || bus.stereo,
+    ports: voice.ports,
+    taps: [...new Set([...voice.taps, ...bus.taps])].sort(),
+    blockConstantNodes: voice.blockConstantNodes + bus.blockConstantNodes,
+    sendCount: 0,
+    drainAnalysis(state) {
+      const own = voice.drainAnalysis(state);
+      const summed = bus.drainAnalysis(runtime(state).bus);
+      if (!own) return summed;
+      if (!summed) return own;
+      return { meters: { ...own.meters, ...summed.meters }, captures: { ...own.captures, ...summed.captures } };
+    },
+    createState(options) {
+      const state = voice.createState(options);
+      // The bus is an effect on the voice's sum: its gate is open for good,
+      // as an insert's is, and only the voice follows notes.
+      const busState = bus.createState(options);
+      busState.gate = true;
+      splitRuntimes.set(state, {
+        bus: busState,
+        left: Array.from({ length: sendCount }, () => new Float32Array(0)),
+        right: Array.from({ length: sendCount }, () => new Float32Array(0)),
+        voiceOut: new Float32Array(0),
+        ports: {},
+      });
+      return state;
+    },
+    noteOn(state, params) {
+      voice.noteOn(state, params);
+      const busState = runtime(state).bus;
+      for (const [name, value] of Object.entries(params)) busState.params[name] = value;
+    },
+    setParam(state, name, value) {
+      voice.setParam(state, name, value);
+      bus.setParam(runtime(state).bus, name, value);
+    },
+    noteOff(state) {
+      voice.noteOff(state);
+    },
+    renderSample(state, sampleRate) {
+      const out = new Float32Array(1);
+      this.renderBlock(state, sampleRate, out);
+      return out[0]!;
+    },
+    renderBlock(state, sampleRate, out, input, extras) {
+      const frames = out.length;
+      const split = runtime(state);
+      if (split.voiceOut.length !== frames) {
+        split.voiceOut = new Float32Array(frames);
+        for (let k = 0; k < sendCount; k++) {
+          split.left[k] = new Float32Array(frames);
+          split.right[k] = new Float32Array(frames);
+        }
+      }
+      const wroteRight = voice.renderBlock(state, sampleRate, split.voiceOut, input, {
+        ...(extras?.inputR ? { inputR: extras.inputR } : {}),
+        ...(extras?.ports ? { ports: extras.ports } : {}),
+        ...(extras?.transport ? { transport: extras.transport } : {}),
+        sends: { left: split.left, right: split.right },
+      });
+      for (let k = 0; k < sendCount; k++) {
+        split.ports[`send${k}`] = [split.left[k], wroteRight ? split.right[k] : undefined];
+      }
+      const busState = split.bus;
+      busState.transport = state.transport;
+      return bus.renderBlock(busState, sampleRate, out, undefined, {
+        ...(extras?.outputR ? { outputR: extras.outputR } : {}),
+        ports: split.ports,
+      });
+    },
+  };
+}
+
+function compileGraph(graph: ASLGraphDescriptor): CompiledVoice {
   const plan = buildPlan(graph.output);
   const root = plan.root;
+  /** Plan slot of each send, in `graph.sends` order. */
+  const sendSlots = (graph.sends ?? []).map((node) => {
+    const planned = plan.bySourceId.get(node.id);
+    if (!planned) throw new Error('compileVoice: a send is not reachable from the graph output');
+    return planned.i;
+  });
+  /** Parameters whose `setParam` glides. See `ASLGraphDescriptor.smooth`. */
+  const smoothed: ReadonlySet<string> = new Set(graph.smooth ?? []);
   const slotCount = plan.count;
   const seamNodes: PlanNode[] = [...plan.seams];
   const ports = audioPortNames(graph);
@@ -1573,16 +1861,24 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
   }
 
   function evalNoise(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
-    const white = Math.random() * 2 - 1;
+    const mem = getMemory<
+      RngState & { b0: number; b1: number; b2: number; brown: number; lastWhite: number; lastPink: number }
+    >(state, node.i, () => ({
+      rng: streamSeed(state.seed, node.r, state.lane),
+      b0: 0,
+      b1: 0,
+      b2: 0,
+      brown: 0,
+      lastWhite: 0,
+      lastPink: 0,
+    }));
+    // Drawn before the colour is read, so changing colour mid-note does not
+    // shift the stream.
+    const white = nextUniform(mem) * 2 - 1;
     const color = node.inputs.color
       ? Math.min(5, Math.max(0, Math.round(evalNode(node.inputs.color, state, sampleRate))))
       : node.m;
     if (color === 0) return white;
-    const mem = getMemory<{ b0: number; b1: number; b2: number; brown: number; lastWhite: number; lastPink: number }>(
-      state,
-      node.i,
-      () => ({ b0: 0, b1: 0, b2: 0, brown: 0, lastWhite: 0, lastPink: 0 }),
-    );
     const pink = () => {
       mem.b0 = 0.99886 * mem.b0 + white * 0.0555179;
       mem.b1 = 0.99332 * mem.b1 + white * 0.0750759;
@@ -1761,7 +2057,16 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       const omega = (2 * Math.PI * clampedFreq) / sampleRate;
       const sinw = Math.sin(omega);
       const cosw = Math.cos(omega);
-      const alpha = (sinw / 2) * Math.sqrt((a + 1 / a) * (1 / Math.max(q, 1e-4) - 1) + 2);
+      // The cookbook's slope form, with `q` as the slope S. Past S = 1 the
+      // radicand falls as the gain grows, and on a deep cut with a high `q`
+      // (-17 dB at 3.96, well inside the material's ranges) it went negative:
+      // alpha was NaN, the NaN latched into the biquad state, and the channel
+      // stayed dead. The radicand is 1/Q^2 of the equivalent resonance, so
+      // flooring it at SHELF_MIN_RADICAND caps that resonance at Q 10 instead.
+      // Every setting that rendered before renders the same bits; zero would
+      // not do, because it puts the poles on the unit circle.
+      const alpha =
+        (sinw / 2) * Math.sqrt(Math.max(SHELF_MIN_RADICAND, (a + 1 / a) * (1 / Math.max(q, 1e-4) - 1) + 2));
       const sqA = Math.sqrt(a);
 
       let b0: number;
@@ -1845,11 +2150,16 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     const input = evalNode(node.inputs.input!, state, sampleRate);
     const cutoff = evalNode(node.inputs.cutoff!, state, sampleRate);
     const q = evalNode(node.inputs.q!, state, sampleRate);
-    const mem = getMemory<{ low: number; band: number; k: number; sr: number; f: number; damp: number }>(
-      state,
-      node.i,
-      () => ({ low: 0, band: 0, k: NaN, sr: NaN, f: 0, damp: 0 }),
-    );
+    const mem = getMemory<{
+      low: number;
+      band: number;
+      k: number;
+      sr: number;
+      f: number;
+      damp: number;
+      kd: number;
+      fMax: number;
+    }>(state, node.i, () => ({ low: 0, band: 0, k: NaN, sr: NaN, f: 0, damp: 0, kd: NaN, fMax: 0 }));
 
     if (mem.k !== cutoff || mem.sr !== sampleRate) {
       const clampedCutoff = Math.min(Math.max(cutoff, 1), sampleRate * 0.25);
@@ -1858,8 +2168,27 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       mem.sr = sampleRate;
     }
     // Cheap enough to keep unconditional; there is no transcendental in it.
-    const damp = Math.min(1.98, Math.max(0.05, 1 / Math.max(q, 0.05)));
-    const f = mem.f;
+    //
+    // The floor is SVF_MIN_DAMP, Q 10,000. It used to be 0.05, which capped Q
+    // at 20: a bell or a tine asked for Q 500 and rang for a few milliseconds.
+    // This topology is stable for any damping above zero at every cutoff the
+    // clamp above allows (spectral radius < 1 down to 1e-5, checked at sr/4),
+    // so the old floor bought no safety. Gain at resonance is roughly Q, so a
+    // ringing filter wants a quiet excitation.
+    const damp = Math.min(1.98, Math.max(SVF_MIN_DAMP, 1 / Math.max(q, 0.05)));
+    // This topology is stable only while f^2 + 2 f damp < 4, and the cutoff
+    // clamp above (sr / 4) is only inside that for Q above about 1.4. At the
+    // palette's default Q of 0.5 it failed from 6.6 kHz: the output grew
+    // without bound and went NaN, with the knob standing still, on a filter
+    // whose cutoff knob goes to 20 kHz. Found by sweeping every palette
+    // parameter. `f` is capped at SVF_STABILITY of the limit's radicand, so
+    // every setting that was stable renders the same bits and only the ones
+    // that exploded change. Recomputed when `damp` moves, not per sample.
+    if (mem.kd !== damp) {
+      mem.fMax = -damp + Math.sqrt(damp * damp + SVF_STABILITY);
+      mem.kd = damp;
+    }
+    const f = Math.min(mem.f, mem.fMax);
     mem.low += f * mem.band;
     const high = input - mem.low - damp * mem.band;
     mem.band += f * high;
@@ -1894,7 +2223,11 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     // identity at d = 1, so the default is a branch rather than a formula:
     // a ladder that already exists must sound like itself.
     const drive = node.inputs.drive ? evalNode(node.inputs.drive, state, sampleRate) : 1;
-    const driven = drive === 1 ? input : Math.tanh(input * drive) / Math.tanh(drive);
+    // Drive near zero is the identity too (the limit of the formula), and is
+    // what an unset parameter reads: 0/0 there is a NaN the filter would keep
+    // for the rest of the voice's life.
+    const driven =
+      drive === 1 || Math.abs(drive) < 1e-6 ? input : Math.tanh(input * drive) / Math.tanh(drive);
     const x = driven - k * Math.tanh(mem.y4);
     mem.y1 += g * (x - mem.y1);
     mem.y2 += g * (mem.y1 - mem.y2);
@@ -2093,7 +2426,12 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       // A boundary was crossed between the previous sample and this one.
       // Comparing floors rather than testing a wrapped phase against a small
       // window means the pulse lands on exactly one sample at any tempo.
-      const previous = beats - perSample;
+      // The previous sample's position is computed the way that sample
+      // computed its own, not as `beats - perSample`: the two differ by
+      // rounding, and when a boundary falls within that rounding of a sample
+      // both floors agree, the edge is lost, and a sequencer clocked from it
+      // is a step behind for the rest of the song.
+      const previous = snapshot.beats + (state.frameIndex - 1) * perSample;
       return Math.floor(beats / length) !== Math.floor(previous / length) ? 1 : 0;
     }
 
@@ -2293,7 +2631,8 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
 
   function evalRandom(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const freq = Math.max(evalNode(node.inputs.freq!, state, sampleRate), 0);
-    const mem = getMemory<{ phase: number; prev: number; next: number }>(state, node.i, () => ({
+    const mem = getMemory<RngState & { phase: number; prev: number; next: number }>(state, node.i, () => ({
+      rng: streamSeed(state.seed, node.r, state.lane),
       phase: 1,
       prev: 0,
       next: 0,
@@ -2302,7 +2641,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     if (mem.phase >= 1) {
       mem.phase -= Math.floor(mem.phase);
       mem.prev = mem.next;
-      mem.next = Math.random() * 2 - 1;
+      mem.next = nextUniform(mem) * 2 - 1;
     }
     if (node.m === 1) return mem.prev + (mem.next - mem.prev) * mem.phase;
     return mem.next;
@@ -2338,7 +2677,6 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     const sustain = Math.min(Math.max(evalNode(node.inputs.sustain!, state, sampleRate), 0), 1);
     const release = Math.max(evalNode(node.inputs.release!, state, sampleRate), 0);
     const signalGate = node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : false;
-    const gated = signalGate || state.gate;
     const mem = getMemory<AdsrMemory>(state, node.i, () => ({
       stage: 'idle',
       level: 0,
@@ -2346,17 +2684,50 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       stageElapsed: 0,
       stageStartLevel: 0,
       lastGate: false,
+      dur: NaN,
+      lastSignal: false,
+      signalDriven: false,
     }));
 
-    if (gated && !mem.lastGate) {
+    // Which gate drives this envelope. The voice's, until the gate cable
+    // first rises; the cable's, from then on. A keyboard-played envelope with
+    // nothing on its input never sees the cable rise and follows the voice as
+    // it always has. A pulse-driven envelope in an insert or a self-playing
+    // patch has its voice gate held open by the host for its whole life, and
+    // `cable || voice` there was true forever: one hit at load and silence
+    // after, which is what every Plays Itself preset did in the plugin. A
+    // rise on the cable also retriggers outright, so the first pulse
+    // restarts an envelope the held voice gate had already opened.
+    const rose = signalGate && !mem.lastSignal;
+    mem.lastSignal = signalGate;
+    if (rose) mem.signalDriven = true;
+    const gated = mem.signalDriven ? signalGate : state.gate;
+
+    // A stage's duration can move while the stage runs (a knob, a lane, a
+    // cable). The level is start + span * elapsed / duration, so a new
+    // duration used to teleport the level: changing attack mid-attack jumped
+    // by up to 0.55. Keeping the fraction done instead, and scaling elapsed to
+    // the new duration, makes the level continuous and lets the rest of the
+    // stage take the new time. It fires only when the duration changes, so an
+    // envelope whose times hold still renders exactly what it always did.
+    // `dur` is NaN at the start of each stage: the first sample only notes it.
+    const follow = (dur: number): void => {
+      if (mem.dur === dur) return;
+      if (mem.dur === mem.dur) mem.stageElapsed = (mem.stageElapsed / mem.dur!) * dur;
+      mem.dur = dur;
+    };
+
+    if ((gated && !mem.lastGate) || rose) {
       mem.peak = velocity;
       mem.stageElapsed = 0;
       mem.stageStartLevel = mem.level;
       mem.stage = delay > 1e-6 ? 'delay' : 'attack';
+      mem.dur = NaN;
     } else if (!gated && mem.lastGate) {
       mem.stage = 'release';
       mem.stageElapsed = 0;
       mem.stageStartLevel = mem.level;
+      mem.dur = NaN;
     }
     mem.lastGate = gated;
 
@@ -2371,16 +2742,19 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         mem.stage = 'attack';
         mem.stageElapsed = 0;
         mem.stageStartLevel = mem.level;
+        mem.dur = NaN;
       }
     }
     if (mem.stage === 'attack') {
       const dur = Math.max(attack, 1e-6);
+      follow(dur);
       const t = Math.min(mem.stageElapsed / dur, 1);
       mem.level = mem.stageStartLevel + (mem.peak - mem.stageStartLevel) * t;
       if (t >= 1) {
         mem.stage = hold > 1e-6 ? 'hold' : 'decay';
         mem.stageElapsed = 0;
         mem.stageStartLevel = mem.level;
+        mem.dur = NaN;
       }
     }
     if (mem.stage === 'hold') {
@@ -2389,11 +2763,13 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         mem.stage = 'decay';
         mem.stageElapsed = 0;
         mem.stageStartLevel = mem.level;
+        mem.dur = NaN;
       }
     }
     if (mem.stage === 'decay') {
       const target = sustain * mem.peak;
       const dur = Math.max(decay, 1e-6);
+      follow(dur);
       const t = Math.min(mem.stageElapsed / dur, 1);
       mem.level = mem.stageStartLevel + (target - mem.stageStartLevel) * t;
       if (t >= 1) mem.stage = 'sustain';
@@ -2403,6 +2779,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     }
     if (mem.stage === 'release') {
       const dur = Math.max(release, 1e-6);
+      follow(dur);
       const t = Math.min(mem.stageElapsed / dur, 1);
       mem.level = mem.stageStartLevel * (1 - t);
       if (t >= 1) {
@@ -2995,7 +3372,17 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
 
   function evalSamplePlay(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const rate = evalNode(node.inputs.rate!, state, sampleRate);
-    const gated = node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : state.gate;
+    // The level gate, ORed with the voice's own. A sampler with a keyboard on
+    // it should play from the keys, and before this the material wired `gate`
+    // to its audio port, which meant `state.gate` was never consulted and no
+    // note could ever reach it. An insert's gate is held open for its whole
+    // life, so there it reads as one rise at load and nothing after.
+    const gated =
+      (node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : false) || state.gate;
+    // Edge jacks. `trig` restarts the sample, `reset` only moves the playhead:
+    // the difference is whether something that has finished starts again.
+    const trig = node.inputs.trig ? evalNode(node.inputs.trig, state, sampleRate) > 0.5 : false;
+    const reset = node.inputs.reset ? evalNode(node.inputs.reset, state, sampleRate) > 0.5 : false;
     const box = node.params.box as SampleBox | undefined;
     const table = box?.samples?.length ? box.samples : node.table;
     const srcRate = box?.sampleRate ?? sampleRate;
@@ -3005,16 +3392,35 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       : 0;
     const looping = node.inputs.length ? evalNode(node.inputs.length, state, sampleRate) > 0.5 : false;
     const pitchSt = node.inputs.pitch ? evalNode(node.inputs.pitch, state, sampleRate) : 0;
-    const mem = getMemory<{ pos: number; prev: boolean; playing: boolean }>(state, node.i, () => ({
+    const mem = getMemory<{
+      pos: number;
+      prev: boolean;
+      prevTrig: boolean;
+      prevReset: boolean;
+      playing: boolean;
+    }>(state, node.i, () => ({
       pos: 0,
       prev: false,
+      prevTrig: false,
+      prevReset: false,
       playing: false,
     }));
     if (gated && !mem.prev) {
       mem.pos = startPos;
       mem.playing = table.length > 0;
     }
+    // Releasing the gate stops it. An edge on `trig` does not arm this: a
+    // one-shot triggered by a pulse would be cut off by the pulse's own
+    // falling edge a millisecond later.
+    if (!gated && mem.prev) mem.playing = false;
+    if (trig && !mem.prevTrig) {
+      mem.pos = startPos;
+      mem.playing = table.length > 0;
+    }
+    if (reset && !mem.prevReset) mem.pos = startPos;
     mem.prev = gated;
+    mem.prevTrig = trig;
+    mem.prevReset = reset;
     if (!mem.playing || table.length < 2) return 0;
     if (mem.pos >= last) {
       if (looping && last > startPos) {
@@ -3122,6 +3528,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
     ports,
     taps,
     blockConstantNodes: plan.blockConstantNodes,
+    sendCount: sendSlots.length,
 
     drainAnalysis(state): AnalysisFrame | null {
       if (taps.length === 0) return null;
@@ -3156,7 +3563,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       return { meters, captures };
     },
 
-    createState(): VoiceRuntimeState {
+    createState(options): VoiceRuntimeState {
       return {
         values: new Float64Array(slotCount),
         // Stamps start at 0 and `gen` at 1, so nothing reads as cached before
@@ -3167,6 +3574,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
         memory: new Array<unknown>(slotCount).fill(undefined),
         params: {},
         gate: false,
+        seed: normalizeSeed(options?.seed ?? DEFAULT_VOICE_SEED),
         frameIndex: 0,
         lane: 0,
       };
@@ -3181,20 +3589,47 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       state.gate = false;
     },
 
+    setParam(state, name, value): void {
+      const ramps = state.ramps;
+      const existing = ramps ? ramps.findIndex((ramp) => ramp.name === name) : -1;
+      const from = state.params[name];
+      const rate = state.renderedRate ?? 0;
+      if (!smoothed.has(name) || rate <= 0 || typeof from !== 'number' || from === value) {
+        if (existing >= 0) ramps!.splice(existing, 1);
+        state.params[name] = value;
+        return;
+      }
+      // `from` is the committed value: between blocks `state.params` holds
+      // where a ramp in flight has got to, so retargeting mid-glide is
+      // continuous.
+      const frames = paramRampFrames(rate);
+      const ramp: ParamRamp = { name, base: from, target: value, step: (value - from) / frames, remaining: frames };
+      if (existing >= 0) ramps![existing] = ramp;
+      else (state.ramps ??= []).push(ramp);
+    },
+
     renderSample(state, sampleRate): number {
       state.gen += 1;
       // One sample is its own block here: a caller feeding values one at a
       // time may change a parameter between any two of them.
       state.blockGen -= 1;
-      return evalNode(root, state, sampleRate);
+      state.renderedRate = sampleRate;
+      const ramping = state.ramps !== undefined && state.ramps.length > 0;
+      if (ramping) applyRamps(state, 0);
+      const out = evalNode(root, state, sampleRate);
+      if (ramping) commitRamps(state, 1);
+      return out;
     },
 
     renderBlock(state, sampleRate, out, input, extras): boolean {
       const frames = out.length;
       // Invalidates every block-constant value. Parameters move between
-      // blocks and nowhere else, so this is the whole invalidation.
+      // blocks and nowhere else, so this is the whole invalidation, except
+      // while a parameter glides: then `applyRamps` invalidates per frame.
       state.blockGen -= 1;
+      state.renderedRate = sampleRate;
       if (extras?.transport) state.transport = extras.transport;
+      const ramping = state.ramps !== undefined && state.ramps.length > 0;
 
       // A source kernel replaces the graph outright. Nothing downstream of it
       // exists (it is the output node), so the ASL tree is never walked.
@@ -3210,6 +3645,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
             out.set(input.subarray(0, frames));
             if (extras?.outputR) extras.outputR.set((extras.inputR ?? input).subarray(0, frames));
           }
+          if (ramping) commitRamps(state, frames);
           return extras?.outputR !== undefined;
         }
         processor.applyParams?.(state.params);
@@ -3226,6 +3662,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
           source = state.sourceScratch;
         }
         processor.processSource(source, extras?.inputR ?? null, out, extras?.outputR ?? null);
+        if (ramping) commitRamps(state, frames);
         return extras?.outputR !== undefined;
       }
 
@@ -3285,27 +3722,37 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       }
 
       if (boundSeamCount === 0) {
-        const outR = stereo && !allInputsMono ? extras?.outputR : undefined;
+        const sendsL = sendSlots.length > 0 ? extras?.sends?.left : undefined;
+        // A split voice can be stereo with no `outputR`: its sends carry the
+        // channels. Either asks for the second pass.
+        const wantsRight = stereo && !allInputsMono;
+        const outR = wantsRight ? extras?.outputR : undefined;
+        const sendsR = wantsRight && sendsL ? extras?.sends?.right : undefined;
         // No block-rate stage in play: the plain per-sample path, which is
         // also what an unbound seam slot correctly degrades to.
         for (let i = 0; i < frames; i++) {
           state.frameIndex = i;
           state.lane = 0;
+          if (ramping) applyRamps(state, i);
           if (scalarInput) state.params.input = scalarInput[i] ?? 0;
           state.gen += 1;
           out[i] = evalNode(root, state, sampleRate);
-          if (outR) {
+          if (sendsL) for (let k = 0; k < sendSlots.length; k++) sendsL[k]![i] = state.values[sendSlots[k]!]!;
+          if (outR || sendsR) {
             // A second full pass, with its own node memory (`memoryFor`), is
             // what makes a filter written once a true stereo filter rather
             // than two mono filters.
             state.lane = 1;
             state.gen += 1;
-            outR[i] = evalNode(root, state, sampleRate);
+            const right = evalNode(root, state, sampleRate);
+            if (outR) outR[i] = right;
+            if (sendsR) for (let k = 0; k < sendSlots.length; k++) sendsR[k]![i] = state.values[sendSlots[k]!]!;
           }
         }
         state.lane = 0;
         state.portBlocks = undefined;
-        return outR !== undefined;
+        if (ramping) commitRamps(state, frames);
+        return sendsL ? sendsR !== undefined : outR !== undefined;
       }
 
       let block = state.seamBlock;
@@ -3338,6 +3785,7 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       for (let i = 0; i < frames; i++) {
         block.index = i;
         state.frameIndex = i;
+        if (ramping) applyRamps(state, i);
         if (scalarInput) state.params.input = scalarInput[i] ?? 0;
         state.gen += 1;
         evalNode(root, state, sampleRate);
@@ -3359,12 +3807,14 @@ export function compileVoice(graph: ASLGraphDescriptor): CompiledVoice {
       for (let i = 0; i < frames; i++) {
         block.index = i;
         state.frameIndex = i;
+        if (ramping) applyRamps(state, i);
         if (scalarInput) state.params.input = scalarInput[i] ?? 0;
         state.gen += 1;
         out[i] = evalNode(root, state, sampleRate);
       }
       block.phase = 'sample';
       state.portBlocks = undefined;
+      if (ramping) commitRamps(state, frames);
       return false;
     },
   };

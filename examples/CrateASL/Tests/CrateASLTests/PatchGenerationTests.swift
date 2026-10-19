@@ -606,6 +606,157 @@ final class PatchEditingTests: XCTestCase {
         XCTAssertEqual(result.applied, 0)
         XCTAssertNil(result.patch.node("looper"))
     }
+
+    // MARK: Adding a modulator
+
+    private func instrument(_ catalog: MaterialCatalog) -> CratePatch {
+        CratePatch(
+            nodes: [
+                CratePatchNode(id: "keys", kind: catalog.io.keyboard, x: 40, y: 40),
+                CratePatchNode(id: "osc", kind: "oscillator", x: 260, y: 40),
+                CratePatchNode(id: "lp", kind: "lowpass", x: 480, y: 40, params: ["cutoff": 900, "q": 0.9]),
+                CratePatchNode(id: "master", kind: catalog.io.master, x: 700, y: 40),
+            ],
+            connections: [
+                CratePatchConnection(source: "keys", sourceOutput: "cv", target: "osc", targetInput: "note"),
+                CratePatchConnection(source: "keys", sourceOutput: "gate", target: "osc", targetInput: "gate"),
+                CratePatchConnection(source: "osc", sourceOutput: "audio", target: "lp", targetInput: "input"),
+                CratePatchConnection(source: "lp", sourceOutput: "audio", target: "master", targetInput: "input"),
+            ]
+        )
+    }
+
+    /// What reaches `node.inlet`, followed back through trim stages.
+    private func origin(of node: String, _ inlet: String, in patch: CratePatch) -> String? {
+        var id = patch.connections.first { $0.target == node && $0.targetInput == inlet }?.source
+        while let current = id, let found = patch.node(current), found.kind == "gain" || found.kind == "offset" {
+            id = patch.connections.first { $0.target == current && $0.targetInput == "input" }?.source
+        }
+        return id
+    }
+
+    /// Where the cutoff can travel once it is driven, in Hz.
+    private func reach(of patch: CratePatch, catalog: MaterialCatalog, swing: (Double, Double)) throws -> (lo: Double, hi: Double) {
+        let descriptor = try XCTUnwrap(catalog.material("lowpass")?.param("cutoff"))
+        var lo = swing.0
+        var hi = swing.1
+        var id = try XCTUnwrap(patch.connections.first { $0.target == "lp" && $0.targetInput == "cutoff" }?.source)
+        var chain = [CratePatchNode]()
+        while let found = patch.node(id), found.kind == "gain" || found.kind == "offset" {
+            chain.insert(found, at: 0)
+            id = try XCTUnwrap(patch.connections.first { $0.target == found.id && $0.targetInput == "input" }?.source)
+        }
+        for stage in chain {
+            if stage.kind == "gain" {
+                let g = stage.params["gain"] ?? 1
+                (lo, hi) = (lo * g, hi * g)
+            } else {
+                let a = stage.params["amount"] ?? 0
+                (lo, hi) = (lo + a, hi + a)
+            }
+        }
+        func hz(_ wire: Double) -> Double {
+            descriptor.min + (wire + 1) / 2 * (descriptor.max - descriptor.min)
+        }
+        return (hz(lo), hz(hi))
+    }
+
+    func testTheAddedModuleIsReadOffTheRequest() throws {
+        let catalog = try catalog()
+        XCTAssertEqual(CratePatchEditor.requestedKinds("add a lfo to modulate the filter", catalog: catalog), ["lfo"])
+        XCTAssertEqual(
+            CratePatchEditor.requestedKinds(
+                "add an adsr and connect it to the main gate and output to the filter cutoff cv control",
+                catalog: catalog
+            ),
+            ["adsr"]
+        )
+        XCTAssertEqual(CratePatchEditor.requestedKinds("add an LFO and a reverb", catalog: catalog), ["lfo", "reverb"])
+        XCTAssertEqual(CratePatchEditor.requestedKinds("make it darker", catalog: catalog), [])
+        XCTAssertFalse(CratePatchEditor.asksToAdd("make it darker"))
+        XCTAssertTrue(CratePatchEditor.asksToAdd("add some wobble"))
+    }
+
+    /// The regression: "add a lfo to modulate the filter" left an LFO on the
+    /// canvas wired to nothing, because the model could not name it.
+    func testAnAddedLfoModulatesTheFilterItWasAskedTo() throws {
+        let catalog = try catalog()
+        let request = "add a lfo to modulate the filter"
+        let added = CratePatchEditor.apply(
+            [CrateGenEdit(op: .addModule, kind: "lfo")], to: instrument(catalog), catalog: catalog
+        )
+        let done = CratePatchEditor.completeAdditions(
+            added.patch, added: ["lfo"], request: request, catalog: catalog
+        )
+        XCTAssertEqual(origin(of: "lp", "cutoff", in: done.patch), "lfo", "the LFO does not reach the cutoff")
+        XCTAssertNotEqual(
+            done.patch.connections.first { $0.target == "lp" && $0.targetInput == "cutoff" }?.source, "lfo",
+            "the LFO reaches the cutoff unscaled and sweeps 20 Hz to 20 kHz"
+        )
+        let amount = try XCTUnwrap(done.patch.node("lfo")?.params["amount"])
+        let travel = try reach(of: done.patch, catalog: catalog, swing: (-amount, amount))
+        XCTAssertLessThan(travel.lo, 900)
+        XCTAssertGreaterThan(travel.hi, 900)
+        XCTAssertLessThan(travel.hi, 6000, "the sweep is not centred on the cutoff the patch was voiced at")
+        XCTAssertNoThrow(try CrateFlatten.flatten(done.patch, catalog: catalog, name: "LFO"))
+        // Nobody's module moved.
+        for id in ["keys", "osc", "lp", "master"] {
+            XCTAssertEqual(done.patch.node(id)?.x, instrument(catalog).node(id)?.x)
+        }
+    }
+
+    func testAnAddedAdsrIsGatedByTheKeyboardAndOpensTheCutoff() throws {
+        let catalog = try catalog()
+        let request = "add an adsr and connect it to the main gate and output to the filter cutoff cv control"
+        let added = CratePatchEditor.apply(
+            [CrateGenEdit(op: .addModule, kind: "adsr")], to: instrument(catalog), catalog: catalog
+        )
+        let done = CratePatchEditor.completeAdditions(
+            added.patch, added: ["adsr"], request: request, catalog: catalog
+        )
+        XCTAssertTrue(
+            done.patch.connections.contains(
+                CratePatchConnection(source: "keys", sourceOutput: "gate", target: "adsr", targetInput: "gate")
+            ),
+            "the envelope is not on the keyboard's gate"
+        )
+        XCTAssertEqual(origin(of: "lp", "cutoff", in: done.patch), "adsr")
+        let travel = try reach(of: done.patch, catalog: catalog, swing: (0, 1))
+        // An envelope rests at zero: closed below the planned cutoff, open
+        // above it.
+        XCTAssertLessThan(travel.lo, 900)
+        XCTAssertGreaterThan(travel.hi, 900)
+        XCTAssertNoThrow(try CrateFlatten.flatten(done.patch, catalog: catalog, name: "ADSR"))
+    }
+
+    /// The model's own cable goes through the same door as the rule's.
+    func testAModelDrawnCableOntoACutoffIsScaled() throws {
+        let catalog = try catalog()
+        let result = CratePatchEditor.apply(
+            [
+                CrateGenEdit(op: .addModule, kind: "lfo"),
+                CrateGenEdit(op: .connect, node: "lfo", jack: "", target: "lp", targetJack: "cutoff"),
+            ],
+            to: instrument(catalog), catalog: catalog
+        )
+        XCTAssertEqual(result.applied, 2)
+        XCTAssertEqual(origin(of: "lp", "cutoff", in: result.patch), "lfo")
+        XCTAssertNotEqual(
+            result.patch.connections.first { $0.target == "lp" && $0.targetInput == "cutoff" }?.source, "lfo"
+        )
+        // And a second pass over what the model already wired adds nothing.
+        let again = CratePatchEditor.completeAdditions(
+            result.patch, added: ["lfo"], request: "add an lfo to the cutoff", catalog: catalog
+        )
+        XCTAssertEqual(again.patch, result.patch)
+    }
+
+    func testTheKeyboardIsAlwaysInFocus() throws {
+        let catalog = try catalog()
+        let focus = CratePatchEditor.neighbourhood(instrument(catalog), around: ["lp"], catalog: catalog)
+        XCTAssertTrue(focus.contains("keys"))
+        XCTAssertTrue(focus.contains("master"))
+    }
 }
 
 // MARK: - Composition

@@ -51,6 +51,7 @@ export function parseNodeClip(text: string): PatchNode | null {
     y: typeof node.y === 'number' && Number.isFinite(node.y) ? node.y : 0,
     params,
     ...(data ? { data } : {}),
+    ...(node.voicing === 'instanced' || node.voicing === 'summed' ? { voicing: node.voicing } : {}),
   };
 }
 

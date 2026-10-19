@@ -22,8 +22,8 @@ extension CompiledVoice {
             // meter. A stereo graph evaluates once per channel, so recording
             // on both would interleave a capture into nonsense.
             if seamPhase == .collect || state.lane != 0 { return value }
-            if node.kind == .meter { state.recordMeter(node.name, value) }
-            else { state.recordCapture(node.name, windowSize: Int(node.c), value: value) }
+            if node.kind == .meter { state.recordMeter(node.tapIndex, value) }
+            else { state.recordCapture(node.tapIndex, value: value) }
             return value
 
         case .toFrequency:
@@ -51,7 +51,7 @@ extension CompiledVoice {
                 return (master + slave) * 0.5
             }
             let out = oscillatorSample(shape, mem.pointee.phase, width, freq, sr)
-            mem.pointee.phase = jsMod(mem.pointee.phase + increment, 1)
+            mem.pointee.phase = wrapMod(mem.pointee.phase + increment, 1)
             return out
 
         case .lfo:
@@ -75,7 +75,7 @@ extension CompiledVoice {
             // same clock. Zero is exact: stored phase is always in 0..1.
             func shift(_ phase: Double) -> Double {
                 if offset == 0 { return phase }
-                let shifted = jsMod(phase + offset, 1)
+                let shifted = wrapMod(phase + offset, 1)
                 return shifted < 0 ? shifted + 1 : shifted
             }
             let increment = rate / sr
@@ -93,7 +93,7 @@ extension CompiledVoice {
                 return (master + slave) * 0.5
             }
             let out = oscillatorSample(shape, shift(mem.pointee.phase), width, rate, sr)
-            mem.pointee.phase = jsMod(mem.pointee.phase + increment, 1)
+            mem.pointee.phase = wrapMod(mem.pointee.phase + increment, 1)
             return out
 
         case .adsr: return evalAdsr(node, state, sr)
@@ -318,7 +318,7 @@ extension CompiledVoice {
             let rose = clockIn > 0.5 && mem.pointee.prev <= 0.5
             mem.pointee.prev = clockIn
             if steps.isEmpty { return 0 }
-            if rose { mem.pointee.index = jsMod(mem.pointee.index + 1, Double(steps.count)) }
+            if rose { mem.pointee.index = wrapMod(mem.pointee.index + 1, Double(steps.count)) }
             if mem.pointee.index < 0 { return 0 }
             return eval(steps[Int(mem.pointee.index)], state, sr)
 
@@ -348,9 +348,15 @@ extension CompiledVoice {
         }
     }
 
+    /// An input's value: a load from the cache when this frame already has
+    /// it, which under `runFrame` is every unconditional input, and the
+    /// recursive `eval` otherwise. The same stamp test `eval` opens with, so
+    /// the answer is the same either way; the load just skips the call.
     @inline(__always) func ev(_ node: PlanNode, _ name: InputName, _ state: VoiceState, _ sr: Double) -> Double {
-        guard let child = node.input(name) else { return 0 }
-        return eval(child, state, sr)
+        let slot = node.childSlots[name.rawValue]
+        if slot < 0 { return 0 }
+        if state.stamps[slot] == state.generation { return state.values[slot] }
+        return eval(node.inputs[name.rawValue].node!, state, sr)
     }
 
     /// Whether a rising edge arrived on `reset` this sample.

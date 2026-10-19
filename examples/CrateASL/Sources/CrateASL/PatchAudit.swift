@@ -608,6 +608,12 @@ extension CratePatchAudit {
         let frames = Int(48_000 * seconds)
         let state = voice.makeState()
         state.setParams(ParameterMap(compiled.params).defaults)
+        // What the AUv3's note-on does. The gate alone is not a note: a voice
+        // scaled by velocity, which is most of the factory instruments, plays
+        // silence at the default velocity of zero, and an audit that hears
+        // that reports a working instrument as broken and "repairs" it.
+        state.setParam("note", 57)
+        state.setParam("velocity", 100.0 / 127.0)
         state.gate = true
         // An insert is fed a signal, because an insert with no input is
         // supposed to be silent and reporting that would be a false alarm.

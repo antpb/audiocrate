@@ -33,7 +33,7 @@ import { compileMaterial, type SerializedASLNode } from '../../src/patcher/compi
 import type { ParamDescriptor } from '../../src/graph/param';
 import { resolveKind } from './pluginDoc';
 
-export const FLATTEN_CONFORMANCE_VERSION = 1;
+export const FLATTEN_CONFORMANCE_VERSION = 2;
 
 export interface CanonicalNode {
   id: number;
@@ -47,8 +47,14 @@ export interface CanonicalNode {
 export interface CanonicalGraph {
   inputs: string[];
   channels?: number;
+  /** Published parameters that glide, in published order. */
+  smooth?: string[];
   output: number;
   nodes: CanonicalNode[];
+  /** A split instrument's voice outputs, as canonical ids in `nodes`. */
+  sends?: number[];
+  /** The summed half of a split instrument, canonicalised on its own. */
+  bus?: CanonicalGraph;
 }
 
 export interface FlattenExpectation {
@@ -87,6 +93,9 @@ export function canonicalGraph(graph: {
   inputs: readonly string[];
   output: SerializedASLNode;
   channels?: number;
+  smooth?: readonly string[];
+  sends?: readonly SerializedASLNode[];
+  bus?: Parameters<typeof canonicalGraph>[0];
 }): CanonicalGraph {
   const nodes: CanonicalNode[] = [];
   const seen = new Map<number, number>();
@@ -113,13 +122,16 @@ export function canonicalGraph(graph: {
   return {
     inputs: [...graph.inputs],
     ...(graph.channels ? { channels: graph.channels } : {}),
+    ...(graph.smooth ? { smooth: [...graph.smooth] } : {}),
     output,
     nodes,
+    ...(graph.sends ? { sends: graph.sends.map(visit) } : {}),
+    ...(graph.bus ? { bus: canonicalGraph(graph.bus) } : {}),
   };
 }
 
-function node(id: string, kind: string, params?: Record<string, number>) {
-  return params ? { id, kind, params } : { id, kind };
+function node(id: string, kind: string, params?: Record<string, number>, voicing?: 'instanced' | 'summed') {
+  return { id, kind, ...(params ? { params } : {}), ...(voicing ? { voicing } : {}) };
 }
 
 function wire(source: string, sourceOutput: string, target: string, targetInput: string) {
@@ -425,6 +437,135 @@ const CASES: CaseSpec[] = [
         wire('lp', 'audio', 'r', 'input'),
         wire('l', 'audio', 'out', 'input'),
         wire('r', 'audio', 'out', 'input'),
+      ],
+    },
+  },
+  {
+    name: 'an instrument sums its voices into the effects after them',
+    proves:
+      'everything after the oscillator runs once, on the voices\' sum: the voice graph ' +
+      'carries one send and the bus reads it through port `send0`. A port that copies the ' +
+      'whole chain per voice has no bus at all.',
+    patch: {
+      nodes: [
+        node('keys', KEYBOARD),
+        node('osc', 'oscillator', { type: 5, gain: 0.34, width: 0.3 }),
+        node('lp', 'lowpass', { cutoff: 1597, q: 4.8 }),
+        node('rev', 'reverb', { decay: 0.55, mix: 0.22 }),
+        node('lim', 'limiter', { threshold: 0.6 }),
+        node('out', MASTER),
+      ],
+      connections: [
+        wire('keys', 'cv', 'osc', 'note'),
+        wire('keys', 'gate', 'osc', 'gate'),
+        wire('osc', 'audio', 'lp', 'input'),
+        wire('lp', 'audio', 'rev', 'input'),
+        wire('rev', 'audio', 'lim', 'input'),
+        wire('lim', 'audio', 'out', 'input'),
+      ],
+    },
+  },
+  {
+    name: 'a per-voice control keeps its module per voice',
+    proves:
+      'an envelope into a filter\'s cutoff makes that filter per voice, and only what comes ' +
+      'after it is summed. A port that sums every module after the first voice source ' +
+      'sums the filter too, and its bus reads the envelope it cannot have.',
+    patch: {
+      nodes: [
+        node('keys', KEYBOARD),
+        node('osc', 'oscillator', { type: 1 }),
+        node('env', 'adsr', { attack: 0.01, decay: 0.3, sustain: 0.2, release: 0.4 }),
+        node('lp', 'lowpass', { cutoff: 900, q: 2 }),
+        node('dly', 'delay', { mix: 0.3 }),
+        node('out', MASTER),
+      ],
+      connections: [
+        wire('keys', 'cv', 'osc', 'note'),
+        wire('keys', 'gate', 'osc', 'gate'),
+        wire('keys', 'gate', 'env', 'gate'),
+        wire('osc', 'audio', 'lp', 'input'),
+        wire('env', 'cv', 'lp', 'cutoff'),
+        wire('lp', 'audio', 'dly', 'input'),
+        wire('dly', 'audio', 'out', 'input'),
+      ],
+    },
+  },
+  {
+    name: 'voicing instanced keeps a module and its feeders per voice',
+    proves:
+      "`voicing: 'instanced'` on the reverb keeps it per voice and pulls the filter feeding " +
+      'it along, while the limiter after it is still summed. A port that ignores the flag ' +
+      'sums the reverb; one that does not propagate it sums the filter into a per-voice reverb.',
+    patch: {
+      nodes: [
+        node('keys', KEYBOARD),
+        node('osc', 'oscillator', { type: 2 }),
+        node('lp', 'lowpass', { cutoff: 1400, q: 1 }),
+        node('rev', 'reverb', { mix: 0.4 }, 'instanced'),
+        node('lim', 'limiter', { threshold: 0.5 }),
+        node('out', MASTER),
+      ],
+      connections: [
+        wire('keys', 'cv', 'osc', 'note'),
+        wire('keys', 'gate', 'osc', 'gate'),
+        wire('osc', 'audio', 'lp', 'input'),
+        wire('lp', 'audio', 'rev', 'input'),
+        wire('rev', 'audio', 'lim', 'input'),
+        wire('lim', 'audio', 'out', 'input'),
+      ],
+    },
+  },
+  {
+    name: 'two voice signals become two sends, in first-use order',
+    proves:
+      'two oscillators into one reverb are two sends, and a dry cable from one of them to ' +
+      'Master reuses its send rather than minting a third. Send order is first use, which ' +
+      'a port that sorts or dedupes differently numbers differently.',
+    patch: {
+      nodes: [
+        node('keys', KEYBOARD),
+        node('a', 'oscillator', { type: 1 }),
+        node('b', 'oscillator', { type: 3 }),
+        node('rev', 'reverb', { mix: 0.5 }),
+        node('out', MASTER),
+      ],
+      connections: [
+        wire('keys', 'cv', 'a', 'note'),
+        wire('keys', 'gate', 'a', 'gate'),
+        wire('keys', 'cv', 'b', 'note'),
+        wire('keys', 'gate', 'b', 'gate'),
+        wire('b', 'audio', 'rev', 'input'),
+        wire('a', 'audio', 'rev', 'input'),
+        wire('rev', 'audio', 'out', 'input'),
+        wire('a', 'audio', 'out', 'input'),
+      ],
+    },
+  },
+  {
+    name: 'a module combining two voice signals stays per voice',
+    proves:
+      'two oscillators into a multiply\'s two inputs keep the multiply per voice (a product of ' +
+      'two sums multiplies every voice by every other), and the reverb after it is still summed. ' +
+      'A port that only looks at control inputs sums the multiply.',
+    patch: {
+      nodes: [
+        node('keys', KEYBOARD),
+        node('car', 'oscillator', { type: 0 }),
+        node('mod', 'oscillator', { type: 0, octave: 1 }),
+        node('ring', 'audiomultiply', {}),
+        node('rev', 'reverb', { mix: 0.3 }),
+        node('out', MASTER),
+      ],
+      connections: [
+        wire('keys', 'cv', 'car', 'note'),
+        wire('keys', 'gate', 'car', 'gate'),
+        wire('keys', 'cv', 'mod', 'note'),
+        wire('keys', 'gate', 'mod', 'gate'),
+        wire('car', 'audio', 'ring', 'input'),
+        wire('mod', 'audio', 'ring', 'sidechain'),
+        wire('ring', 'audio', 'rev', 'input'),
+        wire('rev', 'audio', 'out', 'input'),
       ],
     },
   },

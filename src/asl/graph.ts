@@ -13,6 +13,28 @@ export interface ASLGraphDescriptor {
    * output is a control signal, where a second pass would be pure cost.
    */
   readonly channels?: 1 | 2;
+  /**
+   * Parameter names whose changes glide rather than jump, when set through
+   * `CompiledVoice.setParam` (`PARAM_RAMP_SECONDS`). `AudioMaterial` fills it
+   * from its descriptors (`isSmoothedParam`); a graph built with `ASL.node`
+   * has none, and every parameter jumps as it always did.
+   */
+  readonly smooth?: readonly string[];
+  /**
+   * The voice half of a split instrument (`flattenPatch`, `voicing`): one
+   * node per signal a voice hands to the summed bus. `output` is their mix
+   * and contains every one of them, so the plan that renders `output` holds
+   * them all; `renderBlock`'s `extras.sends` reads each one out per frame.
+   * Absent for every graph that is not a split voice.
+   */
+  readonly sends?: readonly ASLNode[];
+  /**
+   * What runs once on the sum of every voice's sends: a graph whose ports
+   * `send0`..`sendN` read them. Present exactly when `sends` is. A host that
+   * renders one voice (an offline bounce, a scene instrument) runs it
+   * straight after the voice; a polyphonic host sums its voices first.
+   */
+  readonly bus?: ASLGraphDescriptor;
 }
 
 /**

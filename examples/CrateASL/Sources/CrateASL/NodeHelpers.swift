@@ -121,18 +121,38 @@ extension CompiledVoice {
         let sustain = min(max(ev(node, .sustain, state, sr), 0), 1)
         let release = max(ev(node, .release, state, sr), 0)
         let signalGate = node.has(.gate) ? ev(node, .gate, state, sr) > 0.5 : false
-        let gated = signalGate || state.gate
         let mem = state.memory(for: node.slot)
+        // The voice's gate until the gate cable first rises, the cable's
+        // after, and a rise on the cable retriggers outright. See evalDahdsr
+        // in compile.ts: `cable || voice` under a host that holds an insert's
+        // voice gate open was one hit at load and silence after. `prevGate`
+        // is the cable last sample and `armed` whether it has ever risen.
+        let rose = signalGate && !mem.pointee.prevGate
+        mem.pointee.prevGate = signalGate
+        if rose { mem.pointee.armed = true }
+        let gated = mem.pointee.armed ? signalGate : state.gate
+        // Keeps a stage's fraction done when its duration moves, as `follow`
+        // in compile.ts: the level stays continuous instead of jumping. `k3`
+        // is the stage's duration as last seen, NaN at a stage's start.
+        func follow(_ dur: Double) {
+            if mem.pointee.k3 == dur { return }
+            if !mem.pointee.k3.isNaN {
+                mem.pointee.stageElapsed = (mem.pointee.stageElapsed / mem.pointee.k3) * dur
+            }
+            mem.pointee.k3 = dur
+        }
 
-        if gated && !mem.pointee.lastGate {
+        if (gated && !mem.pointee.lastGate) || rose {
             mem.pointee.peak = velocity
             mem.pointee.stageElapsed = 0
             mem.pointee.stageStartLevel = mem.pointee.level
             mem.pointee.stage = delay > 1e-6 ? .delay : .attack
+            mem.pointee.k3 = .nan
         } else if !gated && mem.pointee.lastGate {
             mem.pointee.stage = .release
             mem.pointee.stageElapsed = 0
             mem.pointee.stageStartLevel = mem.pointee.level
+            mem.pointee.k3 = .nan
         }
         mem.pointee.lastGate = gated
 
@@ -146,15 +166,18 @@ extension CompiledVoice {
                 mem.pointee.stage = .attack
                 mem.pointee.stageElapsed = 0
                 mem.pointee.stageStartLevel = mem.pointee.level
+                mem.pointee.k3 = .nan
             }
         }
         if mem.pointee.stage == .attack {
+            follow(max(attack, 1e-6))
             let t = min(mem.pointee.stageElapsed / max(attack, 1e-6), 1)
             mem.pointee.level = mem.pointee.stageStartLevel + (mem.pointee.peak - mem.pointee.stageStartLevel) * t
             if t >= 1 {
                 mem.pointee.stage = hold > 1e-6 ? .hold : .decay
                 mem.pointee.stageElapsed = 0
                 mem.pointee.stageStartLevel = mem.pointee.level
+                mem.pointee.k3 = .nan
             }
         }
         if mem.pointee.stage == .hold {
@@ -163,10 +186,12 @@ extension CompiledVoice {
                 mem.pointee.stage = .decay
                 mem.pointee.stageElapsed = 0
                 mem.pointee.stageStartLevel = mem.pointee.level
+                mem.pointee.k3 = .nan
             }
         }
         if mem.pointee.stage == .decay {
             let target = sustain * mem.pointee.peak
+            follow(max(decay, 1e-6))
             let t = min(mem.pointee.stageElapsed / max(decay, 1e-6), 1)
             mem.pointee.level = mem.pointee.stageStartLevel + (target - mem.pointee.stageStartLevel) * t
             if t >= 1 { mem.pointee.stage = .sustain }
@@ -175,6 +200,7 @@ extension CompiledVoice {
             mem.pointee.level = sustain * mem.pointee.peak
         }
         if mem.pointee.stage == .release {
+            follow(max(release, 1e-6))
             let t = min(mem.pointee.stageElapsed / max(release, 1e-6), 1)
             mem.pointee.level = mem.pointee.stageStartLevel * (1 - t)
             if t >= 1 {
@@ -366,7 +392,10 @@ extension CompiledVoice {
             let omega = (2 * Double.pi * clamped) / sr
             let sinw = sin(omega)
             let cosw = cos(omega)
-            let alpha = (sinw / 2) * ((a + 1 / a) * (1 / max(q, 1e-4) - 1) + 2).squareRoot()
+            // Radicand floored at 0.01 (Q 10), as SHELF_MIN_RADICAND in
+            // compile.ts: a deep cut with a high slope drove it negative, alpha
+            // was NaN, and the NaN latched into the filter state for good.
+            let alpha = (sinw / 2) * max(0.01, (a + 1 / a) * (1 / max(q, 1e-4) - 1) + 2).squareRoot()
             let sqA = a.squareRoot()
             var a0 = 0.0, a1 = 0.0, a2 = 0.0, b0 = 0.0, b1 = 0.0, b2 = 0.0
             if low {
@@ -433,8 +462,18 @@ extension CompiledVoice {
             mem.pointee.k1 = sr
         }
         // Cheap enough to keep unconditional; there is no transcendental in it.
-        let damp = min(1.98, max(0.05, 1 / max(q, 0.05)))
-        let f = mem.pointee.c0
+        // Floor 1e-4 (Q 10,000), matching SVF_MIN_DAMP in compile.ts. The old
+        // 0.05 capped Q at 20 and bought no stability.
+        let damp = min(1.98, max(1e-4, 1 / max(q, 0.05)))
+        // Stable only while f^2 + 2 f damp < 4; the sr/4 cutoff clamp is
+        // inside that only above Q ~1.4, and at Q 0.5 the filter went NaN from
+        // 6.6 kHz. Capped at 3.96 (SVF_STABILITY in compile.ts), so settings
+        // that were stable are unchanged. `k2` keys `c1` on the damping.
+        if mem.pointee.k2 != damp {
+            mem.pointee.c1 = -damp + (damp * damp + 3.96).squareRoot()
+            mem.pointee.k2 = damp
+        }
+        let f = min(mem.pointee.c0, mem.pointee.c1)
         mem.pointee.s0 += f * mem.pointee.s1
         let high = input - mem.pointee.s0 - damp * mem.pointee.s1
         mem.pointee.s1 += f * high
@@ -461,7 +500,9 @@ extension CompiledVoice {
         // the identity at d = 1, so the default is a branch rather than a
         // formula: a ladder that already exists must sound like itself.
         let drive = node.has(.drive) ? ev(node, .drive, state, sr) : 1
-        let driven = drive == 1 ? input : tanh(input * drive) / tanh(drive)
+        // Drive near zero is the identity too, the formula's limit; 0/0 there
+        // is a NaN the filter would keep. As compile.ts.
+        let driven = drive == 1 || abs(drive) < 1e-6 ? input : tanh(input * drive) / tanh(drive)
         let x = driven - k * tanh(mem.pointee.s3)
         mem.pointee.s0 += g * (x - mem.pointee.s0)
         mem.pointee.s1 += g * (mem.pointee.s0 - mem.pointee.s1)
@@ -503,6 +544,33 @@ extension CompiledVoice {
         return x
     }
 
+    /// The read pointer's glide toward `target`, `delay` and `comb` alike.
+    ///
+    /// Line for line with compile.ts. A delay time or comb frequency that
+    /// steps moves the read pointer to an unrelated part of the buffer, and
+    /// the output leaps: one click per parameter update, which is continuous
+    /// crackle while a knob is dragged. JavaScript fixed that by gliding the
+    /// pointer over ~20 ms; this interpreter was never given the fix, and the
+    /// motion fixture is what found it. The first sample takes the target
+    /// exactly, so a delay whose time never moves is what it always was.
+    ///
+    /// Memory: `pos` the glided pointer, `c0` the coefficient, `k1` the rate
+    /// it was computed for, `initialized` whether the first sample has run.
+    @inline(__always)
+    func glideReadPointer(_ mem: UnsafeMutablePointer<NodeMemory>, toward target: Double, _ sr: Double) -> Double {
+        if mem.pointee.k1 != sr {
+            mem.pointee.c0 = 1 - exp(-1 / (0.02 * sr))
+            mem.pointee.k1 = sr
+        }
+        if !mem.pointee.initialized {
+            mem.pointee.pos = target
+            mem.pointee.initialized = true
+        } else {
+            mem.pointee.pos += (target - mem.pointee.pos) * mem.pointee.c0
+        }
+        return mem.pointee.pos
+    }
+
     func evalComb(_ node: PlanNode, _ state: VoiceState, _ sr: Double) -> Double {
         let input = ev(node, .input, state, sr)
         let freq = ev(node, .freq, state, sr)
@@ -513,9 +581,9 @@ extension CompiledVoice {
             mem.pointee.buf = [Float](repeating: 0, count: Int(max(2, (sr / 20).rounded(.up) + 2)))
         }
         let len = Double(mem.pointee.buf.count)
-        let delaySamples = min(max(sr / max(freq, 20), 1), len - 2)
-        let read = Double(mem.pointee.writeIdx) - delaySamples
-        let i0 = Int(jsMod(jsMod(read.rounded(.down), len) + len, len))
+        let target = min(max(sr / max(freq, 20), 1), len - 2)
+        let read = Double(mem.pointee.writeIdx) - glideReadPointer(mem, toward: target, sr)
+        let i0 = Int(jsWrap(read.rounded(.down), len))
         let i1 = (i0 + 1) % mem.pointee.buf.count
         let frac = read - read.rounded(.down)
         let delayed = Double(mem.pointee.buf[i0]) * (1 - frac) + Double(mem.pointee.buf[i1]) * frac
@@ -538,9 +606,9 @@ extension CompiledVoice {
             mem.pointee.buf = [Float](repeating: 0, count: Int(max(2, (maxTimeSec * sr).rounded(.up) + 2)))
         }
         let len = Double(mem.pointee.buf.count)
-        let delaySamples = min(max(timeSec, 0) * sr, len - 2)
-        let read = Double(mem.pointee.writeIdx) - delaySamples
-        let i0 = Int(jsMod(jsMod(read.rounded(.down), len) + len, len))
+        let target = min(max(timeSec, 0) * sr, len - 2)
+        let read = Double(mem.pointee.writeIdx) - glideReadPointer(mem, toward: target, sr)
+        let i0 = Int(jsWrap(read.rounded(.down), len))
         let i1 = (i0 + 1) % mem.pointee.buf.count
         let frac = read - read.rounded(.down)
         let delayed = Double(mem.pointee.buf[i0]) * (1 - frac) + Double(mem.pointee.buf[i1]) * frac
@@ -855,7 +923,7 @@ extension CompiledVoice {
         mem.pointee.prev = input
         if !rose { return 0 }
         let n = max(1, steps.rounded(.down))
-        mem.pointee.index = jsMod(mem.pointee.index + 1, n)
+        mem.pointee.index = wrapMod(mem.pointee.index + 1, n)
         // The pattern only depends on the three settings, so rebuilding it on
         // every hit was allocating on the audio thread for an answer that had
         // not changed since the last bar.
@@ -874,6 +942,7 @@ extension CompiledVoice {
         let mem = state.memory(for: node.slot)
         if !mem.pointee.initialized {
             mem.pointee.phase = 1
+            mem.pointee.rng = streamSeed(state.seed, rank: node.randomRank, lane: state.lane)
             mem.pointee.initialized = true
         }
         mem.pointee.phase += freq / sr
@@ -881,7 +950,7 @@ extension CompiledVoice {
             mem.pointee.phase -= mem.pointee.phase.rounded(.down)
             // s0 is the value being left, s1 the one being approached.
             mem.pointee.s0 = mem.pointee.s1
-            mem.pointee.s1 = Double.random(in: 0..<1) * 2 - 1
+            mem.pointee.s1 = nextUniform(&mem.pointee.rng) * 2 - 1
         }
         if node.m == 1 { return mem.pointee.s0 + (mem.pointee.s1 - mem.pointee.s0) * mem.pointee.phase }
         return mem.pointee.s1
@@ -890,12 +959,17 @@ extension CompiledVoice {
     // MARK: Sources
 
     func evalNoise(_ node: PlanNode, _ state: VoiceState, _ sr: Double) -> Double {
-        let white = Double.random(in: 0..<1) * 2 - 1
+        let mem = state.memory(for: node.slot)
+        if !mem.pointee.initialized {
+            mem.pointee.rng = streamSeed(state.seed, rank: node.randomRank, lane: state.lane)
+            mem.pointee.initialized = true
+        }
+        // Drawn before the colour is read, as in compile.ts.
+        let white = nextUniform(&mem.pointee.rng) * 2 - 1
         let color = node.has(.color)
             ? min(5, max(0, Int(jsRound(ev(node, .color, state, sr)))))
             : node.m
         if color == 0 { return white }
-        let mem = state.memory(for: node.slot)
         func pink() -> Double {
             mem.pointee.s0 = 0.99886 * mem.pointee.s0 + white * 0.0555179
             mem.pointee.s1 = 0.99332 * mem.pointee.s1 + white * 0.0750759
@@ -936,7 +1010,7 @@ extension CompiledVoice {
         func lookup(_ frame: Int) -> Double {
             let base = frame * frameSize
             let idx = mem.pointee.phase * Double(frameSize)
-            let i0 = Int(jsMod(jsMod(idx.rounded(.down), Double(frameSize)) + Double(frameSize), Double(frameSize)))
+            let i0 = Int(jsWrap(idx.rounded(.down), Double(frameSize)))
             let i1 = (i0 + 1) % frameSize
             let frac = idx - idx.rounded(.down)
             return Double(table[base + i0]) * (1 - frac) + Double(table[base + i1]) * frac
@@ -950,15 +1024,24 @@ extension CompiledVoice {
             let frac = f - Double(f0)
             out = lookup(f0) * (1 - frac) + lookup(f1) * frac
         }
-        mem.pointee.phase = jsMod(mem.pointee.phase + freq / sr, 1)
+        mem.pointee.phase = wrapMod(mem.pointee.phase + freq / sr, 1)
         return out
     }
 
     func evalSamplePlay(_ node: PlanNode, _ state: VoiceState, _ sr: Double) -> Double {
         let rate = ev(node, .rate, state, sr)
-        let gated = node.has(.gate)
-            ? ev(node, .gate, state, sr) > 0.5
-            : state.gate
+        // The level gate, ORed with the voice's own. A sampler with a keyboard
+        // on it should play from the keys, and before this the material wired
+        // `gate` to its audio port, which meant `state.gate` was never
+        // consulted and no note could ever reach it. An insert holds its gate
+        // open for its whole life, so there this reads as one rise at load and
+        // nothing after.
+        let gated = (node.has(.gate) ? ev(node, .gate, state, sr) > 0.5 : false) || state.gate
+        // Edge jacks. `trig` restarts the sample and `reset` only moves the
+        // playhead: the difference between them is whether something that has
+        // already finished starts again.
+        let trig = node.has(.trig) ? ev(node, .trig, state, sr) > 0.5 : false
+        let reset = node.has(.reset) ? ev(node, .reset, state, sr) > 0.5 : false
         let table = node.table
         let srcRate = node.boxRate > 0 ? node.boxRate : sr
         let last = Double(max(table.count - 1, 0))
@@ -972,12 +1055,23 @@ extension CompiledVoice {
             mem.pointee.pos = startPos
             mem.pointee.playing = !table.isEmpty
         }
+        // Releasing the gate stops it. An edge on `trig` deliberately does not
+        // arm this: a one-shot fired by a pulse would be cut off by the
+        // pulse's own falling edge a millisecond later.
+        if !gated && mem.pointee.prevGate { mem.pointee.playing = false }
+        if trig && mem.pointee.prev <= 0.5 {
+            mem.pointee.pos = startPos
+            mem.pointee.playing = !table.isEmpty
+        }
+        if reset && mem.pointee.prevReset <= 0.5 { mem.pointee.pos = startPos }
         mem.pointee.prevGate = gated
+        mem.pointee.prev = trig ? 1 : 0
+        mem.pointee.prevReset = reset ? 1 : 0
         if !mem.pointee.playing || table.count < 2 { return 0 }
         if mem.pointee.pos >= last {
             if looping && last > startPos {
                 let span = last - startPos
-                mem.pointee.pos = startPos + jsMod(mem.pointee.pos - startPos, span)
+                mem.pointee.pos = startPos + wrapMod(mem.pointee.pos - startPos, span)
             } else {
                 mem.pointee.playing = false
                 return 0
@@ -1039,17 +1133,17 @@ extension CompiledVoice {
         mem.pointee.buf[mem.pointee.writeIdx] = Float(input)
         let len = Double(mem.pointee.buf.count)
         func readAt(_ offset: Double) -> Double {
-            let pos = jsMod(Double(mem.pointee.writeIdx) - offset + len * 8, len)
+            let pos = wrapMod(Double(mem.pointee.writeIdx) - offset + len * 8, len)
             let i0 = Int(pos.rounded(.down))
             let i1 = (i0 + 1) % mem.pointee.buf.count
             let frac = pos - pos.rounded(.down)
             return Double(mem.pointee.buf[i0]) * (1 - frac) + Double(mem.pointee.buf[i1]) * frac
         }
         func hann(_ t: Double) -> Double { 0.5 * (1 - cos(2 * Double.pi * t)) }
-        let o1 = jsMod(mem.pointee.phase, grain)
-        let o2 = jsMod(mem.pointee.phase + grain / 2, grain)
+        let o1 = wrapMod(mem.pointee.phase, grain)
+        let o2 = wrapMod(mem.pointee.phase + grain / 2, grain)
         let out = readAt(o1) * hann(o1 / grain) + readAt(o2) * hann(o2 / grain)
-        mem.pointee.phase = jsMod(mem.pointee.phase + pitch, grain * 2)
+        mem.pointee.phase = wrapMod(mem.pointee.phase + pitch, grain * 2)
         mem.pointee.writeIdx = (mem.pointee.writeIdx + 1) % mem.pointee.buf.count
         return out
     }
@@ -1103,8 +1197,13 @@ extension CompiledVoice {
             // A boundary was crossed between the previous sample and this one.
             // Comparing floors rather than testing a wrapped phase against a
             // small window means the pulse lands on exactly one sample at any
-            // tempo.
-            let previous = beats - perSample
+            // tempo. The previous sample's position is computed the way that
+            // sample computed its own, not as `beats - perSample`: the two
+            // differ by rounding, and when a boundary falls within that
+            // rounding of a sample both floors agree, the edge is lost, and a
+            // sequencer clocked from it is a step behind for the rest of the
+            // song. Same formula as `compile.ts`.
+            let previous = snapshot.beats + Double(state.frameIndex - 1) * perSample
             return (beats / length).rounded(.down) != (previous / length).rounded(.down) ? 1 : 0
         }
         return 0

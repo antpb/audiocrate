@@ -54,6 +54,9 @@ beforeEach(() => {
   globals.registerProcessor = (_name: string, cls: unknown) => {
     registered = cls as ProcessorClass;
   };
+  // Each test stands in for a fresh worklet global, which has no processors
+  // registered yet (`registerOnce.ts` keeps its ledger on the global).
+  delete (globalThis as unknown as Record<symbol, unknown>)[Symbol.for('audiocrate.registeredProcessors')];
   clearKernelBinaryCache();
 });
 

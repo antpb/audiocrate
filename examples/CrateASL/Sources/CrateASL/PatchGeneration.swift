@@ -969,14 +969,43 @@ public enum CrateGenBuilder {
         catalog: MaterialCatalog,
         ordinal: Int
     ) -> (nodes: [CratePatchNode], cables: [CratePatchConnection]) {
+        guard let lane else {
+            return (
+                [],
+                [
+                    CratePatchConnection(
+                        source: outlet.node, sourceOutput: outlet.jack,
+                        target: target.id, targetInput: param
+                    )
+                ]
+            )
+        }
+        return routeCables(
+            from: outlet, swing: lane.kind.swing(depth: lane.depth), depth: lane.depth,
+            to: target, param: param, catalog: catalog, ordinal: ordinal
+        )
+    }
+
+    /// The same scaling for a signal that is not a lane: a module somebody
+    /// asked to have added and pointed at a parameter. All the arithmetic
+    /// needs is how far the signal swings and how far it should move the
+    /// parameter, and a lane is only one way of knowing those.
+    static func routeCables(
+        from outlet: (node: String, jack: String),
+        swing: (lo: Double, hi: Double),
+        depth: Double,
+        to target: CratePatchNode,
+        param: String,
+        catalog: MaterialCatalog,
+        ordinal: Int
+    ) -> (nodes: [CratePatchNode], cables: [CratePatchConnection]) {
         let direct = [
             CratePatchConnection(
                 source: outlet.node, sourceOutput: outlet.jack,
                 target: target.id, targetInput: param
             )
         ]
-        guard let lane,
-              !Self.voiceJacks.contains(param),
+        guard !Self.voiceJacks.contains(param),
               let material = catalog.material(target.kind),
               let descriptor = material.param(param),
               descriptor.max > descriptor.min,
@@ -986,13 +1015,12 @@ public enum CrateGenBuilder {
               let biasParam = biasMaterial.param("amount")
         else { return ([], direct) }
 
-        let swing = lane.kind.swing(depth: lane.depth)
         guard swing.hi > swing.lo else { return ([], direct) }
 
         let value = target.params[param] ?? descriptor.defaultValue
         let window = Self.window(
             value: value, descriptor: descriptor, param: param,
-            depth: lane.depth, restsAtZero: swing.lo >= 0
+            depth: depth, restsAtZero: swing.lo >= 0
         )
 
         // The wire's own coordinates: -1 arrives as the parameter's minimum
@@ -1870,14 +1898,26 @@ public enum CratePatchEditor {
     /// Cables are kept when either end is in the set, so a module's context
     /// includes what feeds it and what it feeds. That is what a person would
     /// need to see to make the same edit.
+    ///
+    /// Modules in `added` were put there for this request and nothing is
+    /// wired to them yet, so they carry their jacks. A model that is told an
+    /// ADSR exists and not that its trigger is called `gate` is a model that
+    /// guesses, and the guess that ships is the module wired to nothing.
     public static func brief(
         _ patch: CratePatch,
         catalog: MaterialCatalog,
-        only focus: Set<String>? = nil
+        only focus: Set<String>? = nil,
+        added: Set<String> = []
     ) -> String {
         let nodes = focus.map { keep in patch.nodes.filter { keep.contains($0.id) } } ?? patch.nodes
         var lines = ["nodes:"]
-        for node in nodes {
+        for node in nodes where added.contains(node.id) {
+            let jacks = catalog.jacks(node.kind)
+            let ins = (jacks?.inputs ?? []).joined(separator: ",")
+            let outs = (jacks?.outputs ?? []).joined(separator: ",")
+            lines.append("  \(node.id) \(node.kind) NEW, not wired: in \(ins.isEmpty ? "-" : ins) | out \(outs.isEmpty ? "-" : outs)")
+        }
+        for node in nodes where !added.contains(node.id) {
             let material = catalog.material(node.kind)
             let changed = node.params
                 .filter { name, value in
@@ -1925,9 +1965,12 @@ public enum CratePatchEditor {
             if named.contains(connection.target) { focus.insert(connection.source) }
         }
         // Master is always in: an edit that rewires the output needs to be
-        // able to name it, and it costs four characters.
-        if let master = patch.nodes.first(where: { $0.kind == catalog.io.master }) {
-            focus.insert(master.id)
+        // able to name it, and it costs four characters. So is the rest of
+        // the host I/O, for the same reason: "connect it to the main gate"
+        // means the keyboard's gate, and a keyboard left out of the focus is
+        // a gate nobody can name.
+        for node in patch.nodes where catalog.isHostTool(node.kind) {
+            focus.insert(node.id)
         }
         return focus
     }
@@ -1979,8 +2022,30 @@ public enum CratePatchEditor {
                     notes.append("kept \(node.id): removing \(node.kind) would disconnect the patch")
                     continue
                 }
+                // A module in the signal path is taken out the way a pedal is:
+                // what fed it now feeds what it fed. "Remove the ladder" from
+                // Acid Line otherwise left the voice wired to nothing.
+                var bridges = [CratePatchConnection]()
+                if let material = catalog.material(node.kind), !material.audioInputs.isEmpty {
+                    let feeds = next.connections.filter { $0.target == node.id && material.audioInputs.contains($0.targetInput) }
+                    let outs = next.connections.filter { cable in
+                        guard cable.source == node.id, let target = next.node(cable.target) else { return false }
+                        return catalog.material(target.kind)?.isAudioInlet(cable.targetInput) ?? catalog.isHostTool(target.kind)
+                    }
+                    for feed in feeds {
+                        for out in outs {
+                            bridges.append(CratePatchConnection(
+                                source: feed.source, sourceOutput: feed.sourceOutput,
+                                target: out.target, targetInput: out.targetInput
+                            ))
+                        }
+                    }
+                }
                 next.nodes.removeAll { $0.id == edit.node }
                 next.connections.removeAll { $0.source == edit.node || $0.target == edit.node }
+                for bridge in bridges where !next.connections.contains(bridge) {
+                    next.connections.append(bridge)
+                }
                 applied += 1
 
             case .connect:
@@ -1988,22 +2053,26 @@ public enum CratePatchEditor {
                     notes.append("cannot connect \(edit.node) to \(edit.target)")
                     continue
                 }
-                guard catalog.jacks(source.kind)?.outputs.contains(edit.jack) == true else {
-                    notes.append("\(source.id) has no outlet \(edit.jack)")
+                // An outlet left empty on a module that has only one is not a
+                // question. LFO and ADSR both have exactly one, and a model
+                // that leaves the field blank meant it.
+                var jack = edit.jack
+                if jack.isEmpty, let outputs = catalog.jacks(source.kind)?.outputs, outputs.count == 1 {
+                    jack = outputs[0]
+                }
+                guard catalog.jacks(source.kind)?.outputs.contains(jack) == true else {
+                    notes.append("\(source.id) has no outlet \(jack)")
                     continue
                 }
                 guard catalog.jacks(target.kind)?.inputs.contains(edit.targetJack) == true else {
                     notes.append("\(target.id) has no inlet \(edit.targetJack)")
                     continue
                 }
-                let connection = CratePatchConnection(
-                    source: edit.node, sourceOutput: edit.jack,
-                    target: edit.target, targetInput: edit.targetJack
+                let added = connect(
+                    (source.id, jack), to: target, inlet: edit.targetJack,
+                    in: &next, catalog: catalog
                 )
-                if !next.connections.contains(connection) {
-                    next.connections.append(connection)
-                    applied += 1
-                }
+                if added { applied += 1 }
 
             case .disconnect:
                 let before = next.connections.count
@@ -2040,6 +2109,705 @@ public enum CratePatchEditor {
         return (next, notes, applied)
     }
 
+    // MARK: Adding a module somebody asked for
+
+    /// Runs one cable, through a trim when it is control landing on a
+    /// parameter. Returns whether the patch changed.
+    ///
+    /// A cable into a parameter replaces it across its whole declared range
+    /// (see `CrateGenBuilder.window`), so an LFO cabled straight into a
+    /// lowpass cutoff sweeps 20 Hz to 20 kHz and the filter the patch was
+    /// voiced around is gone. The generator scales its own lanes; a module
+    /// somebody asked to have added gets the same, and the result is the
+    /// gain-then-offset pair the factory patches use, which a person can read
+    /// and retune on the canvas afterwards.
+    @discardableResult
+    static func connect(
+        _ outlet: (node: String, jack: String),
+        to target: CratePatchNode,
+        inlet: String,
+        in patch: inout CratePatch,
+        catalog: MaterialCatalog,
+        depth: Double = 0.5
+    ) -> Bool {
+        let direct = CratePatchConnection(
+            source: outlet.node, sourceOutput: outlet.jack,
+            target: target.id, targetInput: inlet
+        )
+        guard let source = patch.node(outlet.node),
+              let swing = controlSwing(source, catalog: catalog) ?? hostSwing(source, outlet.jack, catalog: catalog),
+              let material = catalog.material(target.kind),
+              !material.isAudioInlet(inlet),
+              material.param(inlet) != nil,
+              !CrateGenBuilder.voiceJacks.contains(inlet)
+        else {
+            if patch.connections.contains(direct) { return false }
+            patch.connections.append(direct)
+            return true
+        }
+        // Asked twice is not two trims in series.
+        if alreadyRouted(outlet.node, into: target.id, inlet: inlet, in: patch, catalog: catalog) {
+            return false
+        }
+
+        let prefix = CrateGenBuilder.lanePrefix(source.id)
+        let routed = CrateGenBuilder.routeCables(
+            from: outlet, swing: swing, depth: depth,
+            to: target, param: inlet, catalog: catalog,
+            ordinal: CrateGenBuilder.nextTrim(patch.nodes, prefix: prefix)
+        )
+        // Between the two ends and a little below the target, so the trim
+        // reads as belonging to that cable and lands on nobody's module.
+        for (index, var node) in routed.nodes.enumerated() {
+            let from = source.x
+            let span = target.x - from
+            let step = span / Double(routed.nodes.count + 1)
+            node.x = from + step * Double(index + 1)
+            node.y = target.y + CratePatchLayout.row * 0.6
+            patch.nodes.append(node)
+        }
+        for cable in routed.cables where !patch.connections.contains(cable) {
+            patch.connections.append(cable)
+        }
+        return true
+    }
+
+    /// Whether `source` already reaches this parameter, directly or through
+    /// the trim stages `connect` builds.
+    private static func alreadyRouted(
+        _ source: String,
+        into target: String,
+        inlet: String,
+        in patch: CratePatch,
+        catalog: MaterialCatalog
+    ) -> Bool {
+        var frontier = patch.connections
+            .filter { $0.target == target && $0.targetInput == inlet }
+            .map(\.source)
+        for _ in 0..<3 {
+            if frontier.contains(source) { return true }
+            frontier = frontier.flatMap { id -> [String] in
+                guard let node = patch.node(id), node.kind == "gain" || node.kind == "offset" else { return [] }
+                return patch.connections.filter { $0.target == id && $0.targetInput == "input" }.map(\.source)
+            }
+        }
+        return frontier.contains(source)
+    }
+
+    /// How far a control module's outlet swings, in wire units, or nil when
+    /// it is not control.
+    ///
+    /// The same claim `CrateGenLaneKind.swing` makes for a lane, read off the
+    /// module instead: a unipolar envelope rests at zero and rises to its
+    /// `amount`, an LFO swings either side of zero by its `amount`, and
+    /// anything with no such knob is taken to use the whole of its polarity.
+    static func controlSwing(_ node: CratePatchNode, catalog: MaterialCatalog) -> (lo: Double, hi: Double)? {
+        guard CratePatchAudit.isControlSource(node.kind),
+              !CratePatchAudit.isClockLike(node.kind),
+              let material = catalog.material(node.kind)
+        else { return nil }
+        var reach = 1.0
+        if let amount = material.param("amount"), amount.min >= 0, amount.max <= 1 {
+            reach = node.params["amount"] ?? amount.defaultValue
+        }
+        guard reach > 1e-6 else { return nil }
+        return material.isUnipolar ? (0, reach) : (-reach, reach)
+    }
+
+    /// A keyboard's velocity is control too: 0 to 1, resting at nothing.
+    /// Its pitch and gate are not; those are what a voice reads.
+    static func hostSwing(_ node: CratePatchNode, _ jack: String, catalog: MaterialCatalog) -> (lo: Double, hi: Double)? {
+        guard node.kind == catalog.io.keyboard || node.kind == catalog.io.midiIn, jack == "velocity" else { return nil }
+        return (0, 1)
+    }
+
+    /// Wires what the model added and then left loose.
+    ///
+    /// The failure this exists for is the one that shipped: "add an LFO to
+    /// modulate the filter" produced an LFO sitting on the canvas connected to
+    /// nothing. Whatever the model managed is kept; this only fills in the two
+    /// cables a modulator cannot do without and that have one right answer
+    /// in nearly every patch:
+    ///
+    /// - an envelope with nothing on its `gate` takes the patch's main gate,
+    ///   the keyboard's when there is one and otherwise whatever already
+    ///   gates the voice;
+    /// - a modulator with nothing leaving it is pointed at the parameter the
+    ///   request names, or failing that the most audible one there is, which
+    ///   in a patch with a filter is its cutoff.
+    public static func completeAdditions(
+        _ patch: CratePatch,
+        added: [String],
+        request: String,
+        catalog: MaterialCatalog
+    ) -> (patch: CratePatch, notes: [String]) {
+        var next = patch
+        var notes = [String]()
+        let fresh = Set(added)
+
+        for id in added {
+            guard let node = next.node(id), let material = catalog.material(node.kind) else { continue }
+
+            if material.inputs.contains("gate"),
+               CratePatchAudit.isControlSource(node.kind),
+               !next.connections.contains(where: { $0.target == id && $0.targetInput == "gate" }),
+               let gate = mainGate(next, excluding: fresh, catalog: catalog) {
+                next.connections.append(
+                    CratePatchConnection(
+                        source: gate.node, sourceOutput: gate.jack, target: id, targetInput: "gate"
+                    )
+                )
+                notes.append("\(id) is triggered by \(gate.node).\(gate.jack)")
+            }
+
+            // An effect nobody patched in goes just before the output, after
+            // the last thing that shapes the sound and before the limiter
+            // that protects it, which is where "with a reverb" means.
+            //
+            // What counts is whether its sound is in the path, not whether
+            // anything touches it. "Add a reverb and modulate the decay" got
+            // an LFO on the decay and nothing into the input; another run fed
+            // it from the voice and sent it nowhere. Either way it is a
+            // reverb nobody hears, so its audio cables are taken out and it
+            // is placed where "add a reverb" means.
+            let fed = next.connections.contains { $0.target == id && material.audioInputs.contains($0.targetInput) }
+            if material.audioInputs.contains("input"),
+               material.outputs.contains("audio"),
+               !CratePatchAudit.isControlSource(node.kind),
+               !fed || !reachesOutput(id, in: next, catalog: catalog) {
+                let loose = next.connections.filter { cable in
+                    (cable.target == id && material.audioInputs.contains(cable.targetInput))
+                        || (cable.source == id && cable.sourceOutput == "audio")
+                }
+                var trial = next
+                trial.connections.removeAll { loose.contains($0) }
+                guard let feed = outputFeed(trial, excluding: fresh, catalog: catalog) else { continue }
+                next = trial
+                next.connections.removeAll { $0 == feed }
+                next.connections.append(
+                    CratePatchConnection(source: feed.source, sourceOutput: feed.sourceOutput, target: id, targetInput: "input")
+                )
+                next.connections.append(
+                    CratePatchConnection(source: id, sourceOutput: "audio", target: feed.target, targetInput: feed.targetInput)
+                )
+                notes.append("\(id) goes in before \(feed.target)")
+                continue
+            }
+
+            guard controlSwing(node, catalog: catalog) != nil,
+                  !next.connections.contains(where: { $0.source == id }),
+                  let outlet = catalog.jacks(node.kind)?.outputs.first
+            else { continue }
+            guard let aim = target(for: request, in: next, excluding: fresh, catalog: catalog),
+                  let target = next.node(aim.node)
+            else {
+                notes.append("\(id) was added, and there was nothing in the patch for it to move")
+                continue
+            }
+            if connect((id, outlet), to: target, inlet: aim.param, in: &next, catalog: catalog) {
+                notes.append("\(id) now moves \(aim.node).\(aim.param)")
+            }
+        }
+
+        let check = CratePatchCheck.validate(next, catalog: catalog)
+        guard check.ok else { return (patch, []) }
+        return (next, notes)
+    }
+
+    /// Whether a module's sound gets to Master, along any path.
+    static func reachesOutput(_ id: String, in patch: CratePatch, catalog: MaterialCatalog) -> Bool {
+        var frontier = [id]
+        var seen = Set<String>()
+        while let current = frontier.popLast() {
+            guard seen.insert(current).inserted else { continue }
+            if patch.node(current)?.kind == catalog.io.master { return true }
+            for cable in patch.connections where cable.source == current {
+                guard let target = patch.node(cable.target) else { continue }
+                let audio = catalog.material(target.kind)?.isAudioInlet(cable.targetInput) ?? catalog.isHostTool(target.kind)
+                if audio { frontier.append(cable.target) }
+            }
+        }
+        return false
+    }
+
+    /// The one cable into the output stage: into the limiter in front of
+    /// Master when there is one, otherwise into Master. Nil when that inlet
+    /// has more than one feed, because then there is no single "before the
+    /// output" to put something.
+    private static func outputFeed(
+        _ patch: CratePatch,
+        excluding fresh: Set<String>,
+        catalog: MaterialCatalog
+    ) -> CratePatchConnection? {
+        guard let master = patch.nodes.first(where: { $0.kind == catalog.io.master }) else { return nil }
+        let intoMaster = patch.sources(into: master.id, inlet: "input").filter { !fresh.contains($0.source) }
+        guard intoMaster.count == 1 else { return nil }
+        if let limiter = patch.node(intoMaster[0].source), limiter.kind == "limiter" {
+            let intoLimiter = patch.sources(into: limiter.id, inlet: "input")
+            if intoLimiter.count == 1 { return intoLimiter[0] }
+        }
+        return intoMaster[0]
+    }
+
+    /// The gate the patch is played by.
+    private static func mainGate(
+        _ patch: CratePatch,
+        excluding fresh: Set<String>,
+        catalog: MaterialCatalog
+    ) -> (node: String, jack: String)? {
+        for kind in [catalog.io.keyboard, catalog.io.midiIn] {
+            if let host = patch.nodes.first(where: { $0.kind == kind }),
+               catalog.jacks(kind)?.outputs.contains("gate") == true {
+                return (host.id, "gate")
+            }
+        }
+        // No keyboard: a generative patch gates its voice from a lane, and
+        // the new envelope should open on the same hits.
+        if let cable = patch.connections.first(where: {
+            $0.targetInput == "gate" && !fresh.contains($0.source) && !fresh.contains($0.target)
+        }) {
+            return (cable.source, cable.sourceOutput)
+        }
+        return nil
+    }
+
+    /// The parameter a request is about, as a node and a parameter name.
+    ///
+    /// Scored against the words of the request: naming the parameter
+    /// (`cutoff`) counts most, naming the module (`filter`, `lowpass`, its
+    /// id) next. Ties and silence fall back on `routingTargets`' own order,
+    /// which puts the most audible movement first.
+    static func target(
+        for request: String,
+        in patch: CratePatch,
+        excluding fresh: Set<String>,
+        catalog: MaterialCatalog
+    ) -> (node: String, param: String)? {
+        let words = Set(requestWords(request))
+        let synonyms: [String: [String]] = [
+            "cutoff": ["brightness", "bright", "dark", "tone", "sweep", "wah", "wobble", "frequency"],
+            "gain": ["volume", "level", "loudness", "amp", "tremolo"],
+            "mix": ["wet", "dry"],
+            "resonance": ["res", "reso", "peak"],
+            "q": ["resonance", "res", "reso"],
+            "pan": ["panning", "stereo"],
+        ]
+        // A module just added is a target when it makes or shapes sound:
+        // "add a reverb and modulate the decay" means the new reverb's decay.
+        // A modulator just added is what does the moving, not what is moved.
+        let candidates = CrateGenBuilder.routingTargets(
+            patch.nodes.filter {
+                !(fresh.contains($0.id) && CratePatchAudit.isControlSource($0.kind)) && !isTrimStage($0)
+            },
+            catalog: catalog,
+            limit: 200
+        )
+        var best: (score: Int, node: String, param: String)?
+        for candidate in candidates {
+            let parts = candidate.split(separator: ".", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let node = patch.node(parts[0]) else { continue }
+            let param = parts[1]
+            if CrateGenBuilder.voiceJacks.contains(param) { continue }
+            // Pitch only when it was asked for: a continuous swing on a
+            // frequency jack is a siren, which is `allowsPitch` again.
+            let named = words.contains(param.lowercased())
+            if CrateGenBuilder.pitchParams.contains(param), !named, !words.contains("pitch"), !words.contains("vibrato") {
+                continue
+            }
+            var score = 0
+            if named { score += 4 }
+            if synonyms[param]?.contains(where: words.contains) == true { score += 2 }
+            let material = catalog.material(node.kind)
+            let names = [node.id, node.kind, catalog.label(node.kind), material?.category ?? ""]
+                .flatMap(requestWords)
+            if names.contains(where: words.contains) { score += 3 }
+            // On a tie, the module the sentence just added is what it is
+            // about.
+            if fresh.contains(node.id), score > 0 { score += 1 }
+            if best == nil || score > best!.score {
+                best = (score, node.id, param)
+            }
+        }
+        return best.map { ($0.node, $0.param) }
+    }
+
+    private static func isTrimStage(_ node: CratePatchNode) -> Bool {
+        guard node.kind == "gain" || node.kind == "offset" else { return false }
+        return node.id.range(of: #"(trim|bias)\d+$"#, options: .regularExpression) != nil
+    }
+
+    /// Lowercased words, with a plural `s` taken off so "filters" is "filter".
+    static func requestWords(_ text: String) -> [String] {
+        text.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map { word in
+                word.count > 3 && word.hasSuffix("s") && !word.hasSuffix("ss") ? String(word.dropLast()) : String(word)
+            }
+    }
+
+    /// The modules a request asks to have added, read straight off the words
+    /// when it names them.
+    ///
+    /// Deterministic first, because "add an ADSR" is not a question worth a
+    /// model call and a model asked it can answer with three modules. Only
+    /// the words after an add verb count, and only up to where the sentence
+    /// starts saying what to do with them, so "add an LFO to modulate the
+    /// filter" adds an LFO and not a lowpass.
+    ///
+    /// `alsoAfter` adds words that start a list for this caller only. A new
+    /// patch described as "a pad with an LFO on the filter" is asking for the
+    /// LFO with `with`; a change request saying "with" usually is not.
+    public static func requestedKinds(
+        _ request: String,
+        catalog: MaterialCatalog,
+        alsoAfter extra: Set<String> = []
+    ) -> [String] {
+        var byName = [String: String]()
+        for material in catalog.materials where catalog.canCompile(material.kind) {
+            byName[material.kind.lowercased()] = material.kind
+            byName[material.label.lowercased()] = material.kind
+        }
+        let synonyms: [String: String] = [
+            "envelope": "adsr", "env": "adsr", "eg": "adsr",
+            "echo": "delay", "verb": "reverb", "room": "reverb",
+            "distortion": "softclip", "saturation": "softclip", "overdrive": "softclip",
+            "vca": "gain", "osc": "oscillator", "seq": "sequencer",
+            "random": "randomsmooth", "crusher": "bitcrush", "bitcrusher": "bitcrush",
+            "compression": "compressor", "comp": "compressor",
+            "filter": "lowpass", "low pass": "lowpass", "high pass": "highpass", "band pass": "bandpass",
+            "sample and hold": "samplehold", "s&h": "samplehold",
+            "envelope follower": "envfollow", "follower": "envfollow",
+        ]
+        for (word, kind) in synonyms where catalog.canCompile(kind) && byName[word] == nil {
+            byName[word] = kind
+        }
+
+        let verbs: Set<String> = Set(["add", "insert", "put", "include", "throw", "bring"]).union(extra)
+        let stops: Set<String> = [
+            "to", "into", "onto", "that", "which", "so", "connect", "connected", "connecting",
+            "wire", "wired", "route", "routed", "patch", "patched", "modulate", "modulating",
+            "driving", "on", "for", "then", "controlling", "control", "output", "send", "use",
+            "make", "it", "at", "before", "after", "between", "in", "with",
+        ]
+        let filler: Set<String> = [
+            "a", "an", "the", "and", "or", "not", "some", "another", "more", "new",
+            "little", "bit", "of", "also", "too", "my", "its", "xor",
+        ]
+        // Punctuation ends a clause, so it is kept as its own token.
+        let tokens = request.lowercased()
+            .replacingOccurrences(of: ",", with: " , ")
+            .replacingOccurrences(of: ".", with: " . ")
+            .replacingOccurrences(of: ";", with: " ; ")
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+
+        var found = [String]()
+        var index = 0
+        while index < tokens.count {
+            guard verbs.contains(tokens[index]) else { index += 1; continue }
+            index += 1
+            // "throw in", "bring in": the `in` belongs to the verb.
+            if index < tokens.count, tokens[index] == "in" { index += 1 }
+            while index < tokens.count {
+                let token = tokens[index]
+                if stops.contains(token) || [",", ".", ";"].contains(token) || verbs.contains(token) { break }
+                // Words of the sentence, not modules, though the logic
+                // modules are labelled AND, OR and NOT.
+                if filler.contains(token) { index += 1; continue }
+                var matched: String?
+                for length in [3, 2, 1] where index + length <= tokens.count {
+                    let phrase = tokens[index..<(index + length)].joined(separator: " ")
+                    let singular = phrase.count > 3 && phrase.hasSuffix("s") && !phrase.hasSuffix("ss")
+                        ? String(phrase.dropLast()) : phrase
+                    if let kind = byName[phrase] ?? byName[singular] {
+                        matched = kind
+                        index += length
+                        break
+                    }
+                }
+                if let matched { found.append(matched) } else { index += 1 }
+            }
+        }
+        return found
+    }
+
+    /// Whether a request is asking for something to be added at all. The
+    /// additions pass is only spent on one that is.
+    public static func asksToAdd(_ request: String) -> Bool {
+        let words = Set(request.lowercased().split { !$0.isLetter }.map(String.init))
+        return !words.isDisjoint(with: ["add", "insert", "put", "include", "throw", "bring", "another"])
+    }
+
+    /// Whether a request asks for something to move without naming what
+    /// moves it: "modulate the decay", "animate the filter". That wants an
+    /// LFO, and nothing in the words would add one.
+    public static func asksToModulate(_ request: String) -> Bool {
+        let words = Set(requestWords(request))
+        return !words.isDisjoint(with: ["modulate", "modulated", "modulating", "modulation", "animate", "automate", "wobble", "lfo"])
+    }
+
+    /// A module the request needs without naming: "make it more spacious"
+    /// on a patch with no reverb or delay has no knob to turn, and the space
+    /// it asks for is a reverb.
+    public static func impliedKinds(_ request: String, patch: CratePatch) -> [String] {
+        // Raw words as well as `requestWords`', which takes the s off
+        // "spacious".
+        let words = Set(requestWords(request)).union(request.lowercased().split { !$0.isLetter }.map(String.init))
+        let spatial: Set<String> = ["spacious", "space", "roomy", "room", "ambient", "ambience", "wetter", "washy", "reverberant", "hall"]
+        let hasSpace = patch.nodes.contains { ["reverb", "delay", "synceddelay"].contains($0.kind) }
+        return !words.isDisjoint(with: spatial) && !hasSpace ? ["reverb"] : []
+    }
+
+    /// "Replace the ladder with a lowpass", "swap the reverb for a delay",
+    /// "use a ladder instead of the lowpass": one module out and another in
+    /// its place, holding its cables and whatever settings the two share.
+    ///
+    /// By rule, because it has one right answer and the model did not find
+    /// it: it removed the ladder and added nothing, there being no add verb
+    /// in the sentence. Nil when the sentence is not a swap, or names
+    /// nothing in the patch, or nothing this build can add.
+    public static func replacement(
+        _ request: String,
+        in patch: CratePatch,
+        catalog: MaterialCatalog
+    ) -> (patch: CratePatch, notes: [String])? {
+        let text = " " + request.lowercased().replacingOccurrences(of: ".", with: " ") + " "
+        var old = ""
+        var new = ""
+        if let range = text.range(of: " instead of ") {
+            new = String(text[..<range.lowerBound])
+            old = String(text[range.upperBound...])
+            for verb in [" use ", " put ", " try ", " want "] {
+                if let start = new.range(of: verb, options: .backwards) { new = String(new[start.upperBound...]) }
+            }
+        } else {
+            for verb in [" replace ", " swap ", " switch ", " exchange "] {
+                guard let start = text.range(of: verb) else { continue }
+                let rest = text[start.upperBound...]
+                for joiner in [" with ", " for ", " to ", " into "] {
+                    if let split = rest.range(of: joiner) {
+                        old = String(rest[..<split.lowerBound])
+                        new = String(rest[split.upperBound...])
+                        break
+                    }
+                }
+                if !old.isEmpty { break }
+            }
+        }
+        guard !old.isEmpty, !new.isEmpty,
+              let kind = requestedKinds("add " + new, catalog: catalog).first,
+              let material = catalog.material(kind)
+        else { return nil }
+
+        // The module named: by its id, by its kind or label, or for
+        // "filter", whichever filter the patch has.
+        let words = Set(requestWords(old))
+        let named = requestedKinds("add " + old, catalog: catalog)
+        let candidates = patch.nodes.filter { !catalog.isHostTool($0.kind) && !isTrimStage($0) }
+        guard let victim = candidates.first(where: { words.contains($0.id.lowercased()) })
+            ?? candidates.first(where: { named.contains($0.kind) })
+            ?? candidates.first(where: { node in
+                guard let category = catalog.material(node.kind)?.category else { return false }
+                return (words.contains("filter") && category == "Filters")
+                    || requestWords(catalog.label(node.kind)).contains(where: words.contains)
+            }),
+            victim.kind != kind
+        else { return nil }
+
+        let made = apply([CrateGenEdit(op: .addModule, kind: kind)], to: patch, catalog: catalog).patch
+        guard let id = made.nodes.map(\.id).first(where: { patch.node($0) == nil }),
+              let index = made.nodes.firstIndex(where: { $0.id == id }),
+              let jacks = catalog.jacks(kind)
+        else { return nil }
+        var next = made
+        next.nodes[index].x = victim.x
+        next.nodes[index].y = victim.y
+        // Shared settings carried over, so a ladder at 900 Hz becomes a
+        // lowpass at 900 Hz rather than at its default.
+        for (name, value) in victim.params {
+            guard let descriptor = material.param(name) else { continue }
+            next.nodes[index].params[name] = CrateFlatten.quantize(descriptor, Swift.min(descriptor.max, Swift.max(descriptor.min, value)))
+        }
+        var rewired = [CratePatchConnection]()
+        var dropped = [String]()
+        for cable in next.connections {
+            var cable = cable
+            if cable.source == victim.id {
+                let outlet = jacks.outputs.contains(cable.sourceOutput) ? cable.sourceOutput : jacks.outputs.first
+                guard let outlet else { dropped.append("\(cable.sourceOutput)"); continue }
+                cable.source = id
+                cable.sourceOutput = outlet
+            }
+            if cable.target == victim.id {
+                guard jacks.inputs.contains(cable.targetInput) else { dropped.append(cable.targetInput); continue }
+                cable.target = id
+            }
+            rewired.append(cable)
+        }
+        next.connections = rewired
+        next.nodes.removeAll { $0.id == victim.id }
+        guard CratePatchCheck.validate(next, catalog: catalog).ok else { return nil }
+        var notes = ["\(victim.id) (\(catalog.label(victim.kind))) replaced with \(id) (\(catalog.label(kind))), on the same cables"]
+        if !dropped.isEmpty {
+            notes.append("\(catalog.label(kind)) has nowhere for \(Array(Set(dropped)).sorted().joined(separator: ", ")), so those cables went")
+        }
+        return (next, notes)
+    }
+
+    /// Whether a request asks for a module or a cable to go.
+    public static func asksToRemove(_ request: String) -> Bool {
+        !Set(requestWords(request)).isDisjoint(with: [
+            "remove", "delete", "take", "drop", "without", "replace", "swap", "rid", "disconnect",
+            "unplug", "lose", "ditch", "instead", "bypass", "kill",
+        ])
+    }
+
+    /// The kinds to add, with an LFO on the end when the request asks for
+    /// movement and nothing in the list would make it.
+    public static func withModulator(_ kinds: [String], request: String) -> [String] {
+        guard asksToModulate(request), !kinds.contains(where: CratePatchAudit.isControlSource) else { return kinds }
+        return kinds + ["lfo"]
+    }
+
+    /// The model's edits with the ones the request did not ask for removed.
+    ///
+    /// Each rule is a mistake from a real run of "add a reverb and modulate
+    /// the decay" on Acid Line: the model deleted the ladder, which nobody
+    /// asked to lose, and cabled the reverb's audio into the voice's `note`,
+    /// which is a pitch jack and not somewhere a sound goes. The patch came
+    /// back silent, three times out of three.
+    ///
+    /// - Removing a module or a cable needs words that ask to remove.
+    /// - A sound's audio goes into audio inlets only. Control signals go to
+    ///   parameters; an oscillator or a reverb into a cutoff or a note is
+    ///   audio-rate modulation nobody asked for in words.
+    public static func guardEdits(
+        _ edits: [CrateGenEdit],
+        request: String,
+        patch: CratePatch,
+        catalog: MaterialCatalog
+    ) -> (edits: [CrateGenEdit], notes: [String]) {
+        let removing = asksToRemove(request)
+        let adding = asksToAdd(request)
+        let direction = CrateGenStart.brightness(request)
+        let timeWords = Set(requestWords(request))
+        let longer = !timeWords.isDisjoint(with: ["slower", "slow", "longer", "long", "swell", "swelling", "softer"])
+        let shorter = !timeWords.isDisjoint(with: ["faster", "fast", "shorter", "short", "tighter", "tight", "snappier", "snappy", "punchier", "quicker"])
+        let timing = longer == shorter ? 0 : (longer ? 1 : -1)
+        let quieting = !Set(requestWords(request)).isDisjoint(with: ["mute", "silent", "silence", "off", "quiet", "quieter"])
+        let parallel = !Set(requestWords(request)).isDisjoint(with: ["parallel", "blend", "layer", "alongside"])
+        var fedInlets = Set(patch.connections.map { "\($0.target).\($0.targetInput)" })
+        var kept = [CrateGenEdit]()
+        var notes = [String]()
+        for edit in edits {
+            switch edit.op {
+            case .addModule where !adding:
+                // "Make it darker" came back with six Impulse modules wired
+                // to nothing.
+                notes.append("did not add \(edit.kind): the request did not ask to add anything")
+                continue
+            case .removeNode where !removing:
+                notes.append("kept \(edit.node): the request did not ask to remove anything")
+                continue
+            case .disconnect where !removing:
+                continue
+            case .removeNode:
+                for cable in patch.connections where cable.source == edit.node {
+                    let key = "\(cable.target).\(cable.targetInput)"
+                    if !patch.connections.contains(where: { "\($0.target).\($0.targetInput)" == key && $0.source != edit.node }) {
+                        fedInlets.remove(key)
+                    }
+                }
+            case .disconnect:
+                // What the disconnect empties can be fed again by a later
+                // edit: "replace the reverb with a delay" is a disconnect and
+                // a connect into the same inlet.
+                let key = "\(edit.target).\(edit.targetJack)"
+                let remaining = patch.connections.filter {
+                    "\($0.target).\($0.targetInput)" == key
+                        && !($0.source == edit.node && (edit.jack.isEmpty || $0.sourceOutput == edit.jack))
+                }
+                if remaining.isEmpty { fedInlets.remove(key) }
+            case .setParam:
+                // A change is a step, not a jump to the end of the range.
+                // "Make it darker" took Acid Line's ladder to 20 Hz, which is
+                // silence. A frequency moves by up to four times either way
+                // per request, which is two octaves, and a level is not taken
+                // to nothing unless the words ask for quiet.
+                var edit = edit
+                if let node = patch.node(edit.node),
+                   let descriptor = catalog.material(node.kind)?.param(edit.param) {
+                    let current = node.params[edit.param] ?? descriptor.defaultValue
+                    // Bright or dark, the cutoff of a lowpass goes that way.
+                    // Asked for brighter, the model set Acid Line's voice
+                    // to -320 Hz, which clamps to the floor: darker than it
+                    // was. Wrong way round is turned around, by the same
+                    // step a nudge takes.
+                    if edit.param == "cutoff", direction != 0, CrateGenStart.lowpassKinds.contains(node.kind),
+                       (edit.value - current) * Double(direction) <= 0 {
+                        edit.value = current * (direction > 0 ? 1.8 : 0.55)
+                    }
+                    // Slower and longer go up, tighter and snappier down,
+                    // for a time. A model that answers "slower attack" with a
+                    // shorter one is turned around the same way.
+                    if descriptor.unit == "s", timing != 0, ["attack", "decay", "release", "timeSec"].contains(edit.param),
+                       (edit.value - current) * Double(timing) <= 0 {
+                        edit.value = Swift.min(descriptor.max, Swift.max(descriptor.min, current * (timing > 0 ? 2.5 : 0.4)))
+                    }
+                    // Frequencies only: a time may need to go from 5 ms to a
+                    // second, which is two hundred times.
+                    if descriptor.unit == "Hz", CrateGenBuilder.isWide(descriptor, edit.param), current > 0 {
+                        let stepped = Swift.min(current * 4, Swift.max(current / 4, edit.value))
+                        if abs(stepped - edit.value) > 1e-9 {
+                            notes.append("\(edit.node).\(edit.param) moved to \(String(format: "%g", stepped.rounded())) rather than \(String(format: "%g", edit.value.rounded())), one step at a time")
+                            edit.value = stepped
+                        }
+                    }
+                    if CrateGenBuilder.amplitudeParams.contains(edit.param), !quieting, current > 0 {
+                        edit.value = Swift.max(edit.value, current * 0.1)
+                    }
+                }
+                kept.append(edit)
+                continue
+            case .connect:
+                // Sound modules only: a gain or an offset is how a control
+                // signal is scaled on its way to a parameter, and blocking
+                // those blocked every trim the patch already had.
+                if let source = patch.node(edit.node), let target = patch.node(edit.target),
+                   !CratePatchAudit.isControlSource(source.kind),
+                   !catalog.isHostTool(source.kind),
+                   let sourceMaterial = catalog.material(source.kind),
+                   ["Sources", "Filters", "Dynamics", "Shape", "Time", "Stereo", "Spatial"].contains(sourceMaterial.category),
+                   let material = catalog.material(target.kind),
+                   !material.isAudioInlet(edit.targetJack) {
+                    notes.append("did not cable \(source.id)'s sound into \(target.id).\(edit.targetJack)")
+                    continue
+                }
+                // One feed per audio inlet. Cables into one inlet sum, and
+                // "make it more spacious" came back with the voice and the
+                // ladder both into a new reverb and the ladder and the
+                // reverb both straight into Master, past the limiter: a
+                // patch peaking at 1.4. An inlet already fed, or fed earlier
+                // in this answer, takes nothing more unless it is a mixer or
+                // the words ask for parallel.
+                if let target = patch.node(edit.target), !parallel,
+                   !["mix", "audiomix", "crossfade"].contains(target.kind),
+                   target.kind == catalog.io.master || catalog.material(target.kind)?.isAudioInlet(edit.targetJack) == true {
+                    let key = "\(edit.target).\(edit.targetJack)"
+                    if fedInlets.contains(key) {
+                        notes.append("\(key) already has a feed, so \(edit.node) was not added to it")
+                        continue
+                    }
+                    fedInlets.insert(key)
+                }
+            default:
+                break
+            }
+            kept.append(edit)
+        }
+        return (kept, notes)
+    }
+
     private static func defaults(_ kind: String, _ catalog: MaterialCatalog) -> [String: Double] {
         guard let material = catalog.material(kind) else { return [:] }
         var values = [String: Double]()
@@ -2055,5 +2823,14 @@ public enum CratePatchEditor {
         var index = 2
         while taken.contains("\(kind)\(index)") { index += 1 }
         return "\(kind)\(index)"
+    }
+}
+
+extension CratePatch {
+    /// The patch with every cable leaving `id` taken out.
+    func removingCables(from id: String) -> CratePatch {
+        var copy = self
+        copy.connections.removeAll { $0.source == id }
+        return copy
     }
 }

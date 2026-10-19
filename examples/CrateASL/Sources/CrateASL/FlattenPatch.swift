@@ -79,6 +79,23 @@ public enum CrateFlatten {
     ///     own materials, which is what makes a patch containing a
     ///     eight-voice oscillator an eight-voice instrument without anybody
     ///     saying so.
+    /// Where each module of an instrument runs, as `flatten` will build it:
+    /// what an inspector's Per voice / Summed switch shows. Nil for a patch
+    /// that is not an instrument, where nothing is per voice.
+    public static func voicingPlan(_ patch: CratePatch, catalog: MaterialCatalog) -> VoicingPlan? {
+        guard detectRole(patch, catalog: catalog) == .instrument else { return nil }
+        var entries = [String: CatalogMaterialEntry]()
+        for node in patch.nodes where !catalog.io.contains(node.kind) {
+            if let entry = catalog.material(node.kind) { entries[node.id] = entry }
+        }
+        return VoicingPlan.plan(
+            patch,
+            entries: entries,
+            voiceSourceKinds: [catalog.io.keyboard, catalog.io.midiIn],
+            noteInputs: noteInputs
+        )
+    }
+
     public static func flatten(
         _ patch: CratePatch,
         catalog: MaterialCatalog,
@@ -127,8 +144,46 @@ public enum CrateFlatten {
 
         let order = try topoSort(patch, materialIds: materialIds, entries: entries, kinds: kinds, io: io)
 
-        var flattened = [String: FlatNode]()
-        for id in order {
+        // Which modules run per voice and which once on the voices' sum
+        // (`VoicingPlan`). An insert has no voices, and an instrument with
+        // nothing to sum flattens exactly as it always did.
+        let voicing = role == .instrument
+            ? VoicingPlan.plan(patch, entries: entries, voiceSourceKinds: [io.keyboard, io.midiIn], noteInputs: Self.noteInputs)
+            : nil
+        func roleOf(_ id: String) -> VoicingPlan.Role { voicing?.role[id] ?? .instanced }
+        let split = voicing != nil && summedReachesMaster(patch, kinds: kinds, io: io) { roleOf($0) == .summed }
+
+        enum Side { case voice, bus }
+        // `voice` is every module when nothing is split. Split, it is the
+        // instanced and global modules, and `bus` the summed and global ones.
+        var voiceFlat = [String: FlatNode]()
+        var busFlat = [String: FlatNode]()
+        /// Per-voice signals handed to the bus, in first-use order.
+        var sends = [FlatNode]()
+        var sendPorts = [FlatNode]()
+        func sendPort(_ node: FlatNode) -> FlatNode {
+            if let k = sends.firstIndex(where: { $0 === node }) { return sendPorts[k] }
+            let k = sends.count
+            sends.append(node)
+            let port = ids.node("port", params: ["name": .string("send\(k)")])
+            sendPorts.append(port)
+            return port
+        }
+
+        /// A cable's upstream value on the side being built. On the bus, a
+        /// per-voice source arrives as the sum of every voice's copy, through
+        /// that signal's send port.
+        func upstream(_ side: Side, _ source: String, _ field: ((FlatNode) -> FlatNode?)? = nil) -> FlatNode? {
+            if side == .bus && roleOf(source) == .instanced {
+                guard let audio = voiceFlat[source] else { return nil }
+                guard let node = field.map({ $0(audio) }) ?? audio else { return nil }
+                return sendPort(node)
+            }
+            guard let audio = (side == .voice ? voiceFlat : busFlat)[source] else { return nil }
+            return field.map { $0(audio) } ?? audio
+        }
+
+        func build(_ id: String, _ side: Side) -> FlatNode {
             let entry = entries[id]!
             var audioSources = [String: [FlatNode]]()
             var cvSources = [String: [FlatNode]]()
@@ -151,18 +206,18 @@ public enum CrateFlatten {
 
                 if let sourceKind, let source = catalog.material(sourceKind),
                    source.isAnalysis, connection.sourceOutput != "audio" {
-                    guard let audio = flattened[connection.source],
-                          let field = analysisOutlet(connection.sourceOutput, audio: audio, ids: ids)
-                    else { continue }
+                    guard let field = upstream(side, connection.source, {
+                        analysisOutlet(connection.sourceOutput, audio: $0, ids: ids)
+                    }) else { continue }
                     place(field, inlet: inlet, entry: entry, audio: &audioSources, absolute: &cvAbsolute)
                     continue
                 }
 
                 if let sourceKind, let source = catalog.material(sourceKind),
                    source.isLooper, isLooperPulse(connection.sourceOutput) {
-                    guard let audio = flattened[connection.source],
-                          let field = looperOutlet(connection.sourceOutput, audio: audio, ids: ids)
-                    else { continue }
+                    guard let field = upstream(side, connection.source, {
+                        looperOutlet(connection.sourceOutput, audio: $0, ids: ids)
+                    }) else { continue }
                     if entry.isAudioInlet(inlet) {
                         push(&audioSources, inlet, field)
                     } else if entry.params[inlet] != nil {
@@ -175,13 +230,13 @@ public enum CrateFlatten {
                 }
 
                 if entry.isAudioInlet(inlet) {
-                    let node = sourceKind == io.line ? insertInput(ids: ids) : flattened[connection.source]
+                    let node = sourceKind == io.line ? insertInput(ids: ids) : upstream(side, connection.source)
                     if let node { push(&audioSources, inlet, node) }
                     continue
                 }
 
                 if Self.noteInputs.contains(inlet), sourceKind != io.line {
-                    if let node = flattened[connection.source] {
+                    if let node = upstream(side, connection.source) {
                         let unipolar = entries[connection.source]?.isUnipolar ?? false
                         cvAbsolute[inlet] = voiceJack(
                             asBipolar(node, unipolar: unipolar, ids: ids),
@@ -193,7 +248,7 @@ public enum CrateFlatten {
                 }
 
                 if entry.params[inlet] != nil, sourceKind != io.line {
-                    if let node = flattened[connection.source] {
+                    if let node = upstream(side, connection.source) {
                         let unipolar = entries[connection.source]?.isUnipolar ?? false
                         push(
                             &cvSources,
@@ -217,7 +272,17 @@ public enum CrateFlatten {
             }
 
             let instance = instantiate(entry.graph.output, ids: ids)
-            flattened[id] = rewrite(
+            // A chosen audio file is recorded on the patch node, and the box
+            // that plays it is buried inside the material's own graph. Flatten
+            // is the only place that knows both, so it is where the two are
+            // joined: every box in this instance is stamped with the filename,
+            // and the samples are put in later by `CrateSamples.resolving`.
+            // The ref goes in *beside* whatever table the material shipped:
+            // see the note on unresolved references in `SampleBox.swift`.
+            if let filename = patch.node(id)?.sampleFilename {
+                stampSampleRef(instance, filename: filename)
+            }
+            return rewrite(
                 instance,
                 context: RewriteContext(
                     audio: audioSources,
@@ -229,6 +294,13 @@ public enum CrateFlatten {
             )
         }
 
+        for id in order {
+            let r = roleOf(id)
+            if !split || r != .summed { voiceFlat[id] = build(id, .voice) }
+            if split && r != .instanced { busFlat[id] = build(id, .bus) }
+        }
+
+        let outputSide: Side = split ? .bus : .voice
         var outputs = [FlatNode]()
         for connection in patch.connections where kinds[connection.target] == io.master {
             let sourceKind = kinds[connection.source]
@@ -239,10 +311,11 @@ public enum CrateFlatten {
                 node = transportOutlet(connection.sourceOutput, ids: ids)
             } else if let sourceKind, let source = catalog.material(sourceKind),
                       source.isLooper, isLooperPulse(connection.sourceOutput) {
-                node = flattened[connection.source]
-                    .flatMap { looperOutlet(connection.sourceOutput, audio: $0, ids: ids) }
+                node = upstream(outputSide, connection.source) {
+                    looperOutlet(connection.sourceOutput, audio: $0, ids: ids)
+                }
             } else {
-                node = flattened[connection.source]
+                node = upstream(outputSide, connection.source)
             }
             if let node { outputs.append(node) }
         }
@@ -282,14 +355,76 @@ public enum CrateFlatten {
             voices = 1
         }
 
+        let smooth = Self.smoothList(publishedOrder, published)
+        guard split, !sends.isEmpty else {
+            return CompiledMaterialDocument(
+                graph: ASLGraphDocument(inputs: publishedOrder, output: document(output), smooth: smooth),
+                params: published,
+                name: name,
+                role: role.rawValue,
+                polyphony: voices,
+                ports: portNames(output)
+            )
+        }
+
+        // Split: the voices render their sends, and `output` (built on the
+        // bus side) is what runs once on their sum.
+        let voiceOutput = mix(sends, ids: ids)
+        var memo = [Int: ASLNodeDocument]()
+        let voiceDocument = document(voiceOutput, memo: &memo)
         return CompiledMaterialDocument(
-            graph: ASLGraphDocument(inputs: publishedOrder, output: document(output)),
+            graph: ASLGraphDocument(
+                inputs: publishedOrder,
+                output: voiceDocument,
+                smooth: smooth,
+                sends: sends.map { document($0, memo: &memo) },
+                bus: ASLGraphDocument(inputs: publishedOrder, output: document(output), smooth: smooth)
+            ),
             params: published,
             name: name,
             role: role.rawValue,
             polyphony: voices,
-            ports: portNames(output)
+            ports: portNames(voiceOutput)
         )
+    }
+
+    /// Whether any summed module is actually heard; a dead end does not
+    /// justify a bus. `summedReachesMaster` in flattenPatch.ts.
+    private static func summedReachesMaster(
+        _ patch: CratePatch,
+        kinds: [String: String],
+        io: PatchIoKinds,
+        summed: (String) -> Bool
+    ) -> Bool {
+        var feeds = [String: [String]]()
+        for connection in patch.connections { feeds[connection.source, default: []].append(connection.target) }
+        var reaches = [String: Bool]()
+        func visit(_ id: String, _ path: inout Set<String>) -> Bool {
+            if let known = reaches[id] { return known }
+            if path.contains(id) { return false }
+            path.insert(id)
+            var result = false
+            for next in feeds[id] ?? [] {
+                if kinds[next] == io.master || visit(next, &path) {
+                    result = true
+                    break
+                }
+            }
+            path.remove(id)
+            reaches[id] = result
+            return result
+        }
+        return patch.nodes.contains { node in
+            var path = Set<String>()
+            return summed(node.id) && visit(node.id, &path)
+        }
+    }
+
+    /// The published parameters that glide, in published order, or nil when
+    /// none do: what `AudioMaterial` writes as `graph.smooth` in JavaScript.
+    static func smoothList(_ order: [String], _ published: [String: CrateParamDescriptor]) -> [String]? {
+        let names = order.filter { published[$0]?.isSmoothed == true }
+        return names.isEmpty ? nil : names
     }
 
     // MARK: - Parameter values
@@ -651,6 +786,27 @@ public enum CrateFlatten {
     /// nodes from zero, so splicing two of them without new ids would make
     /// one filter share the interpreter's per-node state with another: two
     /// delay lines collapsing into one, which sounds almost right.
+    /// Writes a filename onto every box in one freshly instantiated material.
+    ///
+    /// Mutates in place, which is safe here and nowhere else: `instantiate`
+    /// has just minted this subtree for this one patch node, so no other
+    /// material shares a node with it. Run before `rewrite`, which copies
+    /// params forward as it rebuilds.
+    private static func stampSampleRef(_ node: FlatNode, filename: String) {
+        var seen = Set<Int>()
+        func visit(_ node: FlatNode) {
+            guard seen.insert(node.id).inserted else { return }
+            if CrateSamples.boxKinds.contains(node.kind) {
+                node.params[CrateSamples.boxParam] = CrateSamples.box(
+                    node.params[CrateSamples.boxParam], referencing: filename
+                )
+            }
+            for (_, child) in node.inputs { visit(child) }
+            for child in node.list ?? [] { visit(child) }
+        }
+        visit(node)
+    }
+
     private static func instantiate(_ document: ASLNodeDocument, ids: NodeIdAllocator) -> FlatNode {
         var memo = [Int: FlatNode]()
         return instantiate(document, ids: ids, memo: &memo)

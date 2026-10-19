@@ -33,6 +33,7 @@
  */
 import { DISTANCE_MODELS, distanceAttenuation, type DistanceModel } from '../distance';
 import { FOA_W, foaGainsFromDirection } from '../foa';
+import { registerProcessorOnce } from '../../renderers/worklet/registerOnce';
 
 /** Processor name `SpatialBus` looks for unless told otherwise. */
 export const FOA_ENCODER_PROCESSOR = 'crate-foa-encoder';
@@ -160,7 +161,9 @@ export function defineCrateFoaEncoder(processorName: string = FOA_ENCODER_PROCES
     }
   }
 
-  registerProcessor(processorName, CrateFoaEncoder);
+  // The set above makes a repeat call from this copy silent; this one covers
+  // another copy of audiocrate in the same worklet global.
+  registerProcessorOnce(processorName, CrateFoaEncoder);
 }
 
 /**

@@ -167,7 +167,7 @@ export const PALETTE_BLURBS: Record<string, string> = {
   noise: 'Six spectral colors through a lowpass.',
   impulse: 'A one-sample click on a rising gate.',
   wavetable: 'Polyphonic scanner over single-cycle frames.',
-  sampleplayer: 'Plays a loaded file on a gate. Silent until a file is chosen.',
+  sampleplayer: 'Plays a loaded file. Trig starts it, gate holds it, reset moves the playhead. Silent until a file is chosen.',
   SynthVoice: 'Subtractive voice: wave, unison, lowpass, and an amp envelope.',
   lowpass: 'Biquad lowpass. Cutoff and Q.',
   highpass: 'Biquad highpass. Cutoff and Q.',

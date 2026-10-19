@@ -42,11 +42,32 @@ final class FlattenConformanceTests: XCTestCase {
         let graph: CanonicalGraph
     }
 
-    private struct CanonicalGraph: Decodable, Equatable {
+    private final class CanonicalGraph: Decodable, Equatable {
         let inputs: [String]
         let channels: Int?
+        let smooth: [String]?
         let output: Int
         let nodes: [CanonicalNode]
+        /// A split instrument's voice outputs, as ids in `nodes`.
+        let sends: [Int]?
+        /// The summed half, canonicalised on its own.
+        let bus: CanonicalGraph?
+
+        init(inputs: [String], channels: Int?, smooth: [String]?, output: Int, nodes: [CanonicalNode],
+             sends: [Int]?, bus: CanonicalGraph?) {
+            self.inputs = inputs
+            self.channels = channels
+            self.smooth = smooth
+            self.output = output
+            self.nodes = nodes
+            self.sends = sends
+            self.bus = bus
+        }
+
+        static func == (a: CanonicalGraph, b: CanonicalGraph) -> Bool {
+            a.inputs == b.inputs && a.channels == b.channels && a.smooth == b.smooth && a.output == b.output
+                && a.nodes == b.nodes && a.sends == b.sends && a.bus == b.bus
+        }
     }
 
     private struct CanonicalNode: Decodable, Equatable {
@@ -86,9 +107,36 @@ final class FlattenConformanceTests: XCTestCase {
         }
 
         let output = visit(graph.output)
+        let sends = graph.sends?.map { visit($0) }
         return CanonicalGraph(
-            inputs: graph.inputs, channels: graph.channels, output: output, nodes: nodes
+            inputs: graph.inputs, channels: graph.channels, smooth: graph.smooth, output: output, nodes: nodes,
+            sends: sends, bus: graph.bus.map { canonical($0) }
         )
+    }
+
+    /// Node by node, so a mismatch names the node rather than the graph.
+    private func compare(_ produced: CanonicalGraph, _ expected: CanonicalGraph, _ name: String, _ proves: String) {
+        XCTAssertEqual(
+            produced.nodes.count,
+            expected.nodes.count,
+            "\(name): node count differs, so sharing differs. \(proves)"
+        )
+        XCTAssertEqual(produced.inputs, expected.inputs, "\(name): parameter order")
+        XCTAssertEqual(produced.smooth, expected.smooth, "\(name): which published parameters glide")
+        XCTAssertEqual(produced.output, expected.output, name)
+        XCTAssertEqual(produced.sends, expected.sends, "\(name): which signals a voice hands the bus. \(proves)")
+        for (index, node) in expected.nodes.enumerated() {
+            guard index < produced.nodes.count else { break }
+            let actual = produced.nodes[index]
+            XCTAssertEqual(actual.kind, node.kind, "\(name): node \(index) kind")
+            XCTAssertEqual(actual.params, node.params, "\(name): node \(index) params")
+            XCTAssertEqual(actual.inputs, node.inputs, "\(name): node \(index) inputs")
+            XCTAssertEqual(actual.list, node.list, "\(name): node \(index) list")
+        }
+        XCTAssertEqual(produced.bus == nil, expected.bus == nil, "\(name): whether it is split. \(proves)")
+        if let producedBus = produced.bus, let expectedBus = expected.bus {
+            compare(producedBus, expectedBus, "\(name) (bus)", proves)
+        }
     }
 
     // MARK: - Tests
@@ -101,7 +149,7 @@ final class FlattenConformanceTests: XCTestCase {
     func testFlattenMatchesJavaScript() throws {
         let fixture = try loadFixture()
         let catalog = try MaterialCatalog.bundled()
-        XCTAssertEqual(fixture.version, 1)
+        XCTAssertEqual(fixture.version, 2)
         XCTAssertEqual(fixture.io.master, catalog.io.master, "the two generated files disagree about host I/O")
         XCTAssertFalse(fixture.cases.isEmpty)
 
@@ -128,22 +176,7 @@ final class FlattenConformanceTests: XCTestCase {
                 XCTAssertEqual(compiled.params[name], expected, "\(entry.name).\(name)")
             }
 
-            let produced = canonical(compiled.graph)
-            XCTAssertEqual(
-                produced.nodes.count,
-                entry.expected.graph.nodes.count,
-                "\(entry.name): node count differs, so sharing differs. \(entry.proves)"
-            )
-            XCTAssertEqual(produced.inputs, entry.expected.graph.inputs, "\(entry.name): parameter order")
-            XCTAssertEqual(produced.output, entry.expected.graph.output, entry.name)
-            for (index, expected) in entry.expected.graph.nodes.enumerated() {
-                guard index < produced.nodes.count else { break }
-                let actual = produced.nodes[index]
-                XCTAssertEqual(actual.kind, expected.kind, "\(entry.name): node \(index) kind")
-                XCTAssertEqual(actual.params, expected.params, "\(entry.name): node \(index) params")
-                XCTAssertEqual(actual.inputs, expected.inputs, "\(entry.name): node \(index) inputs")
-                XCTAssertEqual(actual.list, expected.list, "\(entry.name): node \(index) list")
-            }
+            compare(canonical(compiled.graph), entry.expected.graph, entry.name, entry.proves)
         }
     }
 

@@ -12,7 +12,7 @@
 import { AU_TYPE_EFFECT, AU_TYPE_INSTRUMENT } from '../host/pluginSlots';
 import type { AudioMaterial } from '../graph/AudioMaterial';
 import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
-import type { CompiledMaterialDocument } from './compiledPlugin';
+import { inflateSerializedGraph, shareSerializedGraph, type CompiledMaterialDocument } from './compiledPlugin';
 import {
   flattenPatch,
   type PatchDocument,
@@ -22,7 +22,18 @@ import {
 } from './flattenPatch';
 
 export const CRATE_PLUGIN_KIND = 'crate.plugin';
+/**
+ * The format a document is written in unless the writer asks for more. Stays
+ * at 1 until the hosts that read 2 have shipped: readers first, then writers.
+ * See `docs/format.md` for what each version means and the policy.
+ */
 export const CRATE_PLUGIN_VERSION = 1;
+/**
+ * The newest format this build reads. A document newer than this is refused
+ * by `parseCratePlugin`, not read in part: a host that ran the half of a file
+ * it recognised would play something the author never made.
+ */
+export const CRATE_PLUGIN_MAX_VERSION = 3;
 
 /** 'CrUs', the manufacturer code every user-authored crate.plugin shares. */
 export const USER_PLUGIN_MANUFACTURER = 0x43725573;
@@ -58,7 +69,9 @@ export function isCratePluginDocument(value: unknown): value is CratePluginDocum
   const doc = value as CratePluginDocument;
   return (
     doc.kind === CRATE_PLUGIN_KIND &&
-    typeof doc.version === 'number' &&
+    Number.isInteger(doc.version) &&
+    doc.version >= 1 &&
+    doc.version <= CRATE_PLUGIN_MAX_VERSION &&
     typeof doc.id === 'string' &&
     doc.id.length > 0 &&
     typeof doc.label === 'string' &&
@@ -70,14 +83,62 @@ export function isCratePluginDocument(value: unknown): value is CratePluginDocum
   );
 }
 
+/**
+ * Reads a document in any format this build knows. `compiled.graph` comes back
+ * with shared nodes as shared objects (`inflateSerializedGraph`), whichever
+ * format wrote it, so a host passes it to `compileVoice` without caring.
+ */
 export function parseCratePlugin(text: string): CratePluginDocument {
   const parsed = JSON.parse(text) as unknown;
+  const version = (parsed as { version?: unknown } | null)?.version;
+  if (
+    (parsed as { kind?: unknown } | null)?.kind === CRATE_PLUGIN_KIND &&
+    typeof version === 'number' &&
+    version > CRATE_PLUGIN_MAX_VERSION
+  ) {
+    throw new Error(
+      `This crate.plugin is format ${version}, written by a newer audiocrate; ` +
+        `this build reads up to format ${CRATE_PLUGIN_MAX_VERSION}. Update audiocrate to open it.`,
+    );
+  }
   if (!isCratePluginDocument(parsed)) throw new Error('Not a crate.plugin document');
+  if (parsed.compiled) {
+    parsed.compiled = { ...parsed.compiled, graph: inflateSerializedGraph(parsed.compiled.graph) };
+  }
   return parsed;
 }
 
-export function stringifyCratePlugin(doc: CratePluginDocument): string {
-  return JSON.stringify(doc, null, 2);
+export interface StringifyCratePluginOptions {
+  /**
+   * Write format 2: each shared node in full once, then as `{ "ref": id }`.
+   * About a quarter the size on a rich patch. Off by default until the hosts
+   * that will open the file read format 2 (audiocrate 0.3, CrateASL with
+   * `ASLGraphDocument` ref resolution).
+   */
+  shareNodes?: boolean;
+}
+
+/**
+ * The document as text: the patch indented for a person to read and diff,
+ * `compiled` on one line.
+ *
+ * Indenting everything made a rich patch a quarter of a megabyte. A compiled
+ * graph is a tree nested as deep as the signal chain is long, and two spaces
+ * per level on every line of it outweighed the data about five to one
+ * (`ambient-bloom`: 266 kB written, 39 kB of it graph). Nobody reads that
+ * half by eye, and every JSON reader parses the two layouts identically.
+ */
+export function stringifyCratePlugin(doc: CratePluginDocument, options: StringifyCratePluginOptions = {}): string {
+  const { compiled, ...rest } = doc;
+  const share = options.shareNodes === true && compiled !== undefined;
+  // Format 3 is a split instrument (`compiled.graph.bus`). Written only when
+  // there is one, so every other document stays readable where it was: a
+  // reader that ignored the bus would play the voices without their effects.
+  const floor = compiled?.graph.bus ? 3 : share ? 2 : rest.version;
+  const head = JSON.stringify(floor > rest.version ? { ...rest, version: floor } : rest, null, 2);
+  if (compiled === undefined) return head;
+  const body = share ? { ...compiled, graph: shareSerializedGraph(compiled.graph) } : compiled;
+  return `${head.slice(0, head.lastIndexOf('}')).trimEnd()},\n  "compiled": ${JSON.stringify(body)}\n}`;
 }
 
 export interface CratePluginDocumentOptions {

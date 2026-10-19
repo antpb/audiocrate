@@ -44,6 +44,33 @@ export interface ParamDescriptorBase {
    * the first one percent of its travel.
    */
   readonly curve?: ParamCurve;
+  /**
+   * `false` makes a continuous parameter jump to a new value instead of
+   * gliding to it. Absent means the rule in `isSmoothedParam`. Only ever
+   * written as `false`: a discrete parameter cannot be made to glide.
+   */
+  readonly smooth?: false;
+}
+
+/**
+ * Whether a change to this parameter glides (`PARAM_RAMP_SECONDS`) or jumps.
+ *
+ * Decided by what the parameter *is*, so no material has to opt in:
+ *
+ * - **Continuous values glide.** A `range` with no step: gain, cutoff, depth,
+ *   position, time. Stepping one of those is audible as zipper noise, and
+ *   the sweep test (`editor/test/paramMotion.test.ts`) measured it.
+ * - **Discrete values jump.** `stepped`, `enum`, `toggle`: a mode, an octave,
+ *   a switch. Gliding one would pass through choices nobody made.
+ * - A material may still say `smooth: false` on a continuous parameter that
+ *   means "jump", such as a value a sequencer steps on purpose.
+ *
+ * A descriptor with no `kind` is an older continuous one and follows the
+ * continuous rule.
+ */
+export function isSmoothedParam(descriptor: ParamDescriptor): boolean {
+  const kind = (descriptor as { kind?: string }).kind;
+  return (kind === undefined || kind === 'range') && descriptor.step === undefined && descriptor.smooth !== false;
 }
 
 /**
@@ -60,6 +87,8 @@ export interface RangeParamOptions {
   address?: number;
   label?: string;
   curve?: ParamCurve;
+  /** `false` to jump rather than glide. See `isSmoothedParam`. */
+  smooth?: false;
 }
 
 export interface RangeParamDescriptor extends ParamDescriptorBase {
@@ -140,6 +169,7 @@ export const param = {
       ...(options.address !== undefined ? { address: options.address } : {}),
       ...(options.label !== undefined ? { label: options.label } : {}),
       ...(options.curve !== undefined && options.curve !== 'linear' ? { curve: options.curve } : {}),
+      ...(options.smooth === false ? { smooth: false as const } : {}),
     };
   },
 

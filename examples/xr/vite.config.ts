@@ -6,7 +6,7 @@ import { crateVoiceWorkletPlugin } from '../../../../vite-crate-worklet';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Builds the XR Publisher plugin as one file.
+ * Builds the crate-stones XR Publisher plugin as one file.
  *
  * Two things make this different from crate's other bundles.
  *
@@ -18,8 +18,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  *
  * **Audiocrate's own worklet entry, not homecrate's.** Pure ASL plus the core
  * convolver, no amp, grain or synth kernels. That is not a limitation here,
- * it is the demonstration: the AudioMaterial this plugin ships needs no kernel at
- * all, which is true of 107 of the 108 Materials crate ships.
+ * it is the demonstration: the AudioMaterial this plugin ships needs no kernel
+ * at all, which is true of 107 of the 108 Materials crate ships.
+ *
+ * `vite.resonance.config.ts` builds the resonance-stage concert the same way
+ * (same inlined worklet, same `CrateAudio` bridge); the `example:xr` script
+ * runs this one first (it clears `dist/`), then the resonance one appends.
  *
  * Three is not bundled and must not be: the engine's copy is already on the
  * page as `window.THREE`, and a second one breaks `instanceof` and doubles

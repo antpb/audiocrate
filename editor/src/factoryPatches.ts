@@ -42,6 +42,35 @@ export function factoryPatchFits(entry: FactoryPatch, slot: FactorySlot): boolea
   return entry.slot === slot || entry.slot === 'either';
 }
 
+/**
+ * The factory library as the iOS plugin ships it.
+ *
+ * These patches are the one source: `npm run fixtures:factory` writes this
+ * into the CrateASL package, the plugin loads that file, and a test here fails
+ * when the file falls behind. Before, the plugin had its own hand-written copy
+ * of all hundred in Swift, and parity was a diff somebody had to remember to
+ * run. Now a change here is the change there, and `validate-factory.sh` holds
+ * the shipped file to the native engine.
+ */
+export function buildFactoryCatalog(): {
+  version: number;
+  categoryOrder: string[];
+  patches: FactoryPatch[];
+} {
+  return {
+    version: 1,
+    categoryOrder: [...FACTORY_CATEGORY_ORDER],
+    patches: FACTORY_PATCHES.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      category: entry.category,
+      blurb: entry.blurb,
+      slot: entry.slot,
+      patch: entry.patch,
+    })),
+  };
+}
+
 export function factoryPatchById(id: string): FactoryPatch | undefined {
   return FACTORY_PATCHES.find((entry) => entry.id === id);
 }
@@ -345,7 +374,7 @@ const bass: FactoryPatch[] = [
       ],
       voices: ['osc'],
       path: ['osc', 'lp'],
-      level: 0.9,
+      level: 0.75,
     }),
   inst('round-bass', 'Round Bass', 'Bass',
     'A sine sub with a triangle an octave above it, so the line still reads on a phone speaker.',
@@ -357,7 +386,7 @@ const bass: FactoryPatch[] = [
       ],
       voices: ['sub', 'body'],
       path: ['sub', 'lp'],
-      level: 1.0,
+      level: 0.9,
       wires: [w('body', 'audio', 'lp', 'input')],
     }),
   inst('acid-line', 'Acid Line', 'Bass',
@@ -491,16 +520,18 @@ const lead: FactoryPatch[] = [
       mods: [mod('pwm', 'lfo', 'cv', 'osc', 'width', 0.08, 0.5)],
     }),
   inst('ring-lead', 'Ring Lead', 'Lead',
-    'A triangle multiplied by a fixed 330 Hz tone. Inharmonic, and it changes character across the keyboard.',
+    'A triangle multiplied by a sine an octave and a quarter tone above it, both played by the keys. Inharmonic, and it still follows the melody.',
     {
       nodes: [
-        n('osc', 'oscillator', { type: Wave.triangle, gain: 0.4, attack: 0.004, decay: 0.2, sustain: 0.7, release: 0.2 }),
-        n('rm', 'ringmod', { freq: 330, mix: 0.5 }),
+        n('osc', 'oscillator', { type: Wave.triangle, gain: 0.5, attack: 0.004, decay: 0.2, sustain: 0.7, release: 0.2 }),
+        n('ring', 'oscillator', { type: Wave.sine, octave: 1, detune: 50, gain: 1, attack: 0.004, decay: 0.2, sustain: 0.9, release: 0.2 }),
+        n('mul', 'audiomultiply', { mix: 0.7 }),
         n('lp', 'lowpass', { cutoff: 5200, q: 0.9 }),
       ],
-      voices: ['osc'],
-      path: ['osc', 'rm', 'lp'],
-      level: 1.0,
+      voices: ['osc', 'ring'],
+      path: ['osc', 'mul', 'lp'],
+      level: 0.8,
+      wires: [w('ring', 'audio', 'mul', 'sidechain')],
     }),
   inst('octave-lead', 'Octave Lead', 'Lead',
     'Two squares an octave apart, the upper one quiet. Doubles a melody without anybody playing two parts.',
@@ -539,7 +570,7 @@ const lead: FactoryPatch[] = [
       ],
       voices: ['osc'],
       path: ['osc', 'fold', 'lp'],
-      level: 0.45,
+      level: 0.38,
     }),
 ];
 
@@ -578,7 +609,7 @@ const pad: FactoryPatch[] = [
       ],
       voices: ['osc'],
       path: ['osc', 'svf'],
-      level: 1.0,
+      level: 0.85,
       mods: [mod('br', 'lfo', 'cv', 'svf', 'cutoff', 500, 4200)],
     }),
   inst('string-machine', 'String Machine', 'Pad',
@@ -598,7 +629,7 @@ const pad: FactoryPatch[] = [
       wires: [w('b', 'audio', 'cho', 'input')],
     }),
   inst('choir-pad', 'Choir Pad', 'Pad',
-    'A harmonic oscillator through two narrow bandpasses at 700 and 1900 Hz. Two fixed formants, and it reads as a voice.',
+    'A harmonic oscillator through two narrow bandpasses at 520 and 1500 Hz. Two fixed formants, and it reads as a voice.',
     {
       nodes: [
         n('osc', 'oscillator', { type: Wave.harmonic, gain: 0.3, attack: 0.45, decay: 0.9, sustain: 0.8, release: 1.2 }),
@@ -608,7 +639,7 @@ const pad: FactoryPatch[] = [
       ],
       voices: ['osc'],
       path: ['osc', 'f1', 'rev'],
-      level: 2.6,
+      level: 3.6,
       wires: [w('osc', 'audio', 'f2', 'input'), w('f2', 'audio', 'rev', 'input')],
     }),
   inst('dark-drone', 'Dark Drone', 'Pad',
@@ -622,7 +653,7 @@ const pad: FactoryPatch[] = [
       ],
       voices: ['body', 'sub'],
       path: ['body', 'lp', 'rev'],
-      level: 1.8,
+      level: 1.5,
       wires: [w('sub', 'audio', 'lp', 'input')],
     }),
   inst('shimmer-pad', 'Shimmer Pad', 'Pad',
@@ -649,48 +680,51 @@ const pad: FactoryPatch[] = [
       ],
       voices: ['osc'],
       path: ['osc', 'lp', 'rev'],
-      level: 1.6,
+      level: 2.1,
     }),
 ];
 
 const keys: FactoryPatch[] = [
   inst('electric-piano', 'Electric Piano', 'Keys & Pluck',
-    'A sine with a quiet triangle an octave up, and a tempo locked tremolo on the end.',
+    'A sine with a quiet triangle an octave up, a short ping two octaves up for the tine, and a tempo locked tremolo on the end.',
     {
       nodes: [
         n('body', 'oscillator', { type: Wave.sine, gain: 0.34, attack: 0.002, decay: 0.9, sustain: 0.25, release: 0.5 }),
         n('tine', 'oscillator', { type: Wave.triangle, octave: 1, gain: 0.14, attack: 0.002, decay: 0.35, sustain: 0.1, release: 0.3 }),
+        n('ping', 'oscillator', { type: Wave.sine, octave: 2, gain: 0.07, attack: 0.001, decay: 0.07, sustain: 0, release: 0.05 }),
         n('lp', 'lowpass', { cutoff: 3800, q: 0.8 }),
         n('trem', 'syncedtremolo', { division: Div.quarter, depth: 0.35 }),
       ],
-      voices: ['body', 'tine'],
+      voices: ['body', 'tine', 'ping'],
       path: ['body', 'lp', 'trem'],
       level: 1.0,
-      wires: [w('tine', 'audio', 'lp', 'input')],
+      wires: [w('tine', 'audio', 'lp', 'input'), w('ping', 'audio', 'lp', 'input')],
     }),
   inst('bell', 'Bell', 'Keys & Pluck',
-    'A harmonic oscillator ring modulated against 720 Hz. Inharmonic partials are what make a bell a bell.',
+    'A sine multiplied by a second sine just under two octaves above it, both played by the keys. The partials land between the harmonics, which is what makes a bell a bell.',
     {
       nodes: [
-        n('osc', 'oscillator', { type: Wave.harmonic, gain: 0.45, attack: 0.001, decay: 1.4, sustain: 0, release: 1.2 }),
-        n('rm', 'ringmod', { freq: 720, mix: 0.45 }),
+        n('osc', 'oscillator', { type: Wave.sine, gain: 0.5, attack: 0.001, decay: 1.6, sustain: 0, release: 1.2 }),
+        n('strike', 'oscillator', { type: Wave.sine, octave: 2, detune: -50, gain: 1, attack: 0.001, decay: 0.9, sustain: 0, release: 0.8 }),
+        n('mul', 'audiomultiply', { mix: 0.7 }),
         n('rev', 'reverb', { size: 1.2, decay: 0.84, damp: 6500, mix: 0.35 }),
       ],
-      voices: ['osc'],
-      path: ['osc', 'rm', 'rev'],
-      level: 2.2,
+      voices: ['osc', 'strike'],
+      path: ['osc', 'mul', 'rev'],
+      level: 1.25,
+      wires: [w('strike', 'audio', 'mul', 'sidechain')],
     }),
   inst('marimba', 'Marimba', 'Keys & Pluck',
     'A short sine with a shorter sine an octave above it. Wooden because the top one dies first.',
     {
       nodes: [
-        n('body', 'oscillator', { type: Wave.sine, gain: 0.4, attack: 0.002, decay: 0.32, sustain: 0, release: 0.25 }),
-        n('tap', 'oscillator', { type: Wave.sine, octave: 1, gain: 0.11, attack: 0.001, decay: 0.12, sustain: 0, release: 0.1 }),
+        n('body', 'oscillator', { type: Wave.sine, gain: 0.4, attack: 0.002, decay: 0.6, sustain: 0, release: 0.35 }),
+        n('tap', 'oscillator', { type: Wave.sine, octave: 1, gain: 0.11, attack: 0.001, decay: 0.18, sustain: 0, release: 0.12 }),
         n('lp', 'lowpass', { cutoff: 4200, q: 0.8 }),
       ],
       voices: ['body', 'tap'],
       path: ['body', 'lp'],
-      level: 1.0,
+      level: 0.85,
       wires: [w('tap', 'audio', 'lp', 'input')],
     }),
   inst('nylon-pluck', 'Nylon Pluck', 'Keys & Pluck',
@@ -718,11 +752,11 @@ const keys: FactoryPatch[] = [
       level: 0.8,
     }),
   inst('music-box', 'Music Box', 'Keys & Pluck',
-    'Two sines two octaves apart, both decaying to nothing, in a fairly wet room.',
+    'Two sines two octaves apart, pitched an octave up where a music box plays, both decaying to nothing in a fairly wet room.',
     {
       nodes: [
-        n('body', 'oscillator', { type: Wave.sine, gain: 0.34, attack: 0.001, decay: 0.7, sustain: 0, release: 0.6 }),
-        n('ting', 'oscillator', { type: Wave.sine, octave: 2, gain: 0.1, attack: 0.001, decay: 0.25, sustain: 0, release: 0.2 }),
+        n('body', 'oscillator', { type: Wave.sine, octave: 1, gain: 0.34, attack: 0.001, decay: 1.2, sustain: 0, release: 0.8 }),
+        n('ting', 'oscillator', { type: Wave.sine, octave: 3, gain: 0.12, attack: 0.001, decay: 0.35, sustain: 0, release: 0.25 }),
         n('rev', 'reverb', { size: 1.15, decay: 0.8, damp: 7000, mix: 0.42 }),
       ],
       voices: ['body', 'ting'],
@@ -810,8 +844,8 @@ const percussion: FactoryPatch[] = [
       ],
       gates: ['env'],
       path: ['nz', 'vca', 'hp'],
-      level: 0.48,
-      mods: [mod('hh', 'env', 'cv', 'vca', 'gain', 0, 0.26)],
+      level: 0.95,
+      mods: [mod('hh', 'env', 'cv', 'vca', 'gain', 0, 0.3)],
     }),
   inst('tom', 'Tom', 'Percussion',
     'The kick\'s three voices, one octave up and held longer. Knock is the skin. Play the note that matches the drum.',
@@ -889,8 +923,9 @@ const filterAndTone: FactoryPatch[] = [
         n('hp', 'highpass', { cutoff: 300, q: 0.8 }),
         n('lp', 'lowpass', { cutoff: 3400, q: 0.9 }),
         n('shp', 'waveshape', { curve: Curve.asym, drive: 2, mix: 0.6 }),
+        n('dc', 'dcblock'),
       ],
-      path: ['hp', 'lp', 'shp'],
+      path: ['hp', 'lp', 'shp', 'dc'],
       level: 0.9,
     }),
   fx('tilt-eq', 'Tilt EQ', 'Filter & Tone',
@@ -904,7 +939,7 @@ const filterAndTone: FactoryPatch[] = [
       level: 1,
     }),
   fx('auto-wah', 'Auto Wah', 'Filter & Tone',
-    'An envelope follower on the ladder\'s cutoff, so the filter opens as hard as you play. Trimmed to 300 Hz to 3.2 kHz.',
+    'An envelope follower on the ladder\'s cutoff, so the filter opens as hard as you play. Trimmed so it rests near 300 Hz and an ordinary strum opens it past 2 kHz.',
     {
       nodes: [
         n('fol', 'envfollow', { attack: 0.008, release: 0.18 }),
@@ -912,7 +947,7 @@ const filterAndTone: FactoryPatch[] = [
       ],
       path: ['lad'],
       level: 1,
-      mods: [mod('wah', 'fol', 'cv', 'lad', 'cutoff', 300, 3200)],
+      mods: [mod('wah', 'fol', 'cv', 'lad', 'cutoff', 300, 7000)],
       wires: [w(lineId, 'audio', 'fol', 'input')],
     }),
   fx('filter-sweep', 'Filter Sweep', 'Filter & Tone',
@@ -923,7 +958,7 @@ const filterAndTone: FactoryPatch[] = [
         n('svf', 'svflowpass', { cutoff: 1200, q: 2.5 }),
       ],
       path: ['svf'],
-      level: 1,
+      level: 0.7,
       mods: [mod('sw', 'lfo', 'cv', 'svf', 'cutoff', 200, 6000)],
     }),
   fx('sub-boost', 'Sub Boost', 'Filter & Tone',
@@ -944,7 +979,7 @@ const filterAndTone: FactoryPatch[] = [
         n('air', 'highshelf', { freq: 9000, gainDb: 5, q: 0.707 }),
       ],
       path: ['mud', 'air'],
-      level: 1,
+      level: 0.8,
     }),
   fx('formant', 'Formant', 'Filter & Tone',
     'Two narrow bandpasses in parallel at 700 and 1150 Hz, summed. Those two numbers are roughly where a spoken vowel sits.',
@@ -1114,15 +1149,15 @@ const delay: FactoryPatch[] = [
 const reverbAndSpace: FactoryPatch[] = [
   fx('small-room', 'Small Room', 'Reverb & Space',
     'Barely there. Enough to stop something sounding like it was recorded in a box.',
-    { nodes: [n('rev', 'reverb', { size: 0.5, decay: 0.4, damp: 6000, mix: 0.22 })], path: ['rev'], level: 1 }),
+    { nodes: [n('rev', 'reverb', { size: 0.6, decay: 0.55, damp: 6000, mix: 0.22 })], path: ['rev'], level: 1 }),
   fx('big-hall', 'Big Hall', 'Reverb & Space',
     'Long and dark. Put it after something that has already stopped playing.',
-    { nodes: [n('rev', 'reverb', { size: 1.35, decay: 0.88, damp: 3200, mix: 0.45 })], path: ['rev'], level: 1 }),
+    { nodes: [n('rev', 'reverb', { size: 1.4, decay: 0.92, damp: 3200, mix: 0.45 })], path: ['rev'], level: 1 }),
   fx('plate', 'Plate', 'Reverb & Space',
     'Short, bright and dense, with a shelf on top. The reverb for a snare.',
     {
       nodes: [
-        n('rev', 'reverb', { size: 0.8, decay: 0.7, damp: 9000, mix: 0.35 }),
+        n('rev', 'reverb', { size: 1.0, decay: 0.88, damp: 9000, mix: 0.35 }),
         n('air', 'highshelf', { freq: 6000, gainDb: 3, q: 0.707 }),
       ],
       path: ['rev', 'air'],
@@ -1133,7 +1168,7 @@ const reverbAndSpace: FactoryPatch[] = [
     {
       nodes: [
         n('oct', 'pitchshift', { pitch: 12, mix: 1 }),
-        n('rev', 'reverb', { size: 1.3, decay: 0.87, damp: 6000, mix: 0.45 }),
+        n('rev', 'reverb', { size: 1.4, decay: 0.9, damp: 6000, mix: 0.45 }),
       ],
       path: ['rev'],
       level: 1,
@@ -1144,7 +1179,7 @@ const reverbAndSpace: FactoryPatch[] = [
     {
       nodes: [
         n('rev', 'reverb', { size: 0.9, decay: 0.62, damp: 5000, mix: 0.6 }),
-        n('gate', 'gate', { threshold: 0.06, attack: 0.001, release: 0.03, hold: 0.08 }),
+        n('gate', 'gate', { threshold: 0.06, attack: 0.001, release: 0.03, hold: 0.22 }),
       ],
       path: ['rev', 'gate'],
       level: 1,
@@ -1195,7 +1230,7 @@ const modulation: FactoryPatch[] = [
       mods: [mod('fl', 'lfo', 'cv', 'comb', 'freq', 80, 900)],
     }),
   fx('phaser', 'Phaser', 'Modulation',
-    'Two allpass stages swept by one LFO. Allpass changes phase and not level, which is why this sounds hollow rather than filtered.',
+    'Two allpass stages swept by one LFO, summed back with the dry signal. Allpass changes phase and not level, so the notches are where the two cancel, and that is the sweep.',
     {
       nodes: [
         n('lfo', 'lfo', { type: Wave.sine, rate: 0.4, amount: 1 }),
@@ -1203,7 +1238,8 @@ const modulation: FactoryPatch[] = [
         n('ap2', 'allpass', { cutoff: 1400, q: 0.9 }),
       ],
       path: ['ap1', 'ap2'],
-      level: 1,
+      level: 0.5,
+      wires: [w(lineId, 'audio', 'lvl', 'input')],
       mods: [
         mod('p1', 'lfo', 'cv', 'ap1', 'cutoff', 300, 1600),
         mod('p2', 'lfo', 'cv', 'ap2', 'cutoff', 800, 3600),
@@ -1214,7 +1250,7 @@ const modulation: FactoryPatch[] = [
     { nodes: [n('trem', 'syncedtremolo', { division: Div.eighth, depth: 0.6 })], path: ['trem'], level: 1 }),
   fx('auto-pan', 'Auto Pan', 'Modulation',
     'Side to side just under once a second. On headphones this is a lot; on speakers it is barely there.',
-    { nodes: [n('pan', 'autopan', { rate: 0.8, depth: 0.8 })], path: ['pan'], level: 1 }),
+    { nodes: [n('pan', 'autopan', { rate: 0.8, depth: 0.8 })], path: ['pan'], level: 0.9 }),
   fx('vibrato', 'Vibrato', 'Modulation',
     'The chorus with no dry signal in it. An eight millisecond delay, fully wet, with the LFO on its time.',
     {
@@ -1246,7 +1282,7 @@ const modulation: FactoryPatch[] = [
         n('lp', 'lowpass', { cutoff: 2000, q: 3 }),
       ],
       path: ['lp'],
-      level: 1,
+      level: 0.7,
       mods: [mod('sh', 'rnd', 'audio', 'lp', 'cutoff', 400, 6000)],
     }),
 ];
@@ -1255,7 +1291,7 @@ const dynamics: FactoryPatch[] = [
   fx('vocal-comp', 'Vocal Comp', 'Dynamics',
     'Four to one with a fast attack and makeup to bring it back. The one that makes a take sit still.',
     {
-      nodes: [n('comp', 'compressor', { threshold: 0.25, ratio: 4, attack: 0.006, release: 0.12, makeup: 1.8, mix: 1 })],
+      nodes: [n('comp', 'compressor', { threshold: 0.25, ratio: 4, attack: 0.006, release: 0.12, makeup: 1.4, mix: 1 })],
       path: ['comp'],
       level: 1,
     }),
@@ -1274,7 +1310,7 @@ const dynamics: FactoryPatch[] = [
     { nodes: [n('gate', 'gate', { threshold: 0.03, attack: 0.002, release: 0.08, hold: 0.02 })], path: ['gate'], level: 1 }),
   fx('punch', 'Punch', 'Dynamics',
     'Transient shaping: attack up, sustain down. It finds the hits by itself, so there is no threshold to set.',
-    { nodes: [n('tr', 'transient', { attack: 0.6, sustain: -0.2 })], path: ['tr'], level: 1 }),
+    { nodes: [n('tr', 'transient', { attack: 0.6, sustain: -0.2 })], path: ['tr'], level: 0.85 }),
   fx('parallel-comp', 'Parallel Comp', 'Dynamics',
     'A heavily squashed copy summed back with the dry. Both cables land on the same inlet, which is how crate mixes.',
     {
@@ -1283,7 +1319,7 @@ const dynamics: FactoryPatch[] = [
         n('sum', 'gain', { gain: 0.6 }),
       ],
       path: ['comp', 'sum'],
-      level: 1,
+      level: 0.7,
       wires: [w(lineId, 'audio', 'sum', 'input')],
     }),
   fx('pump', 'Pump', 'Dynamics',
@@ -1308,19 +1344,21 @@ const stereoAndWidth: FactoryPatch[] = [
     'One side delayed by sixteen milliseconds. Under about thirty the ear hears position rather than an echo.',
     { nodes: [n('haas', 'haas', { delayMs: 16 })], path: ['haas'], level: 1 }),
   fx('mono-below', 'Mono Below', 'Stereo & Width',
-    'Under 180 Hz folded to mono, above it widened. The standard treatment for a bass that will be cut to vinyl.',
+    'Under 180 Hz folded to mono, above it widened. The high band is inverted so the two halves sum flat across the crossover. The standard treatment for a bass that will be cut to vinyl.',
     {
       nodes: [
-        n('lo', 'lowpass', { cutoff: 180, q: 0.707 }),
+        n('lo', 'lowpass', { cutoff: 180, q: 0.5 }),
         n('ms', 'monosum'),
-        n('hi', 'highpass', { cutoff: 180, q: 0.707 }),
+        n('hi', 'highpass', { cutoff: 180, q: 0.5 }),
+        n('inv', 'invert'),
         n('wd', 'width', { width: 1.5 }),
       ],
       path: ['lo', 'ms'],
-      level: 1,
+      level: 0.9,
       wires: [
         w(lineId, 'audio', 'hi', 'input'),
-        w('hi', 'audio', 'wd', 'input'),
+        w('hi', 'audio', 'inv', 'input'),
+        w('inv', 'audio', 'wd', 'input'),
         w('wd', 'audio', 'lvl', 'input'),
       ],
     }),
@@ -1333,7 +1371,7 @@ const stereoAndWidth: FactoryPatch[] = [
         n('dec', 'midsidedecode'),
       ],
       path: ['enc', 'air', 'dec'],
-      level: 0.5,
+      level: 0.42,
     }),
   fx('stereo-flip', 'Stereo Flip', 'Stereo & Width',
     'Left becomes right. One module, and it is the fastest way to find out whether a part was panned by accident.',
@@ -1350,7 +1388,7 @@ const playsItself: FactoryPatch[] = [
       nodes: [
         n('clk', 'syncedclock', { division: Div.sixteenth }),
         n('euc', 'euclidean', { steps: 16, hits: 7, rotation: 0 }),
-        n('pls', 'pulse', { widthSec: 0.01 }),
+        n('pls', 'pulse', { widthSec: 0.08 }),
         n('env', 'dahdsr', { attack: 0.002, hold: 0.01, decay: 0.14, sustain: 0, release: 0.1 }),
         n('seq', 'sequencer', { step0: midi(48), step1: midi(48), step2: midi(60), step3: midi(48), step4: midi(51), step5: midi(48), step6: midi(55), step7: midi(48) }),
         n('osc', 'oscillator', { type: Wave.saw, octave: -1, gain: 0.5 }),
@@ -1374,7 +1412,7 @@ const playsItself: FactoryPatch[] = [
     {
       nodes: [
         n('clk', 'syncedclock', { division: Div.sixteenth }),
-        n('pls', 'pulse', { widthSec: 0.01 }),
+        n('pls', 'pulse', { widthSec: 0.08 }),
         n('env', 'dahdsr', { attack: 0.002, hold: 0.01, decay: 0.12, sustain: 0, release: 0.08 }),
         n('seq', 'sequencer', { step0: midi(52), step1: midi(52), step2: midi(64), step3: midi(55), step4: midi(52), step5: midi(59), step6: midi(52), step7: midi(57) }),
         n('v', 'SynthVoice', { type: Wave.saw, octave: -1, cutoff: 500, resonance: 5, envAmt: 1.2, gain: 0.5 }),
@@ -1397,7 +1435,7 @@ const playsItself: FactoryPatch[] = [
     {
       nodes: [
         n('clk', 'syncedclock', { division: Div.eighth }),
-        n('pls', 'pulse', { widthSec: 0.01 }),
+        n('pls', 'pulse', { widthSec: 0.16 }),
         n('env', 'dahdsr', { attack: 0.002, hold: 0.01, decay: 0.16, sustain: 0, release: 0.12 }),
         n('rnd', 'randomstepped', { freq: 3 }),
         n('qnt', 'quantize', { root: 9, scale: 2 }),
@@ -1421,7 +1459,7 @@ const playsItself: FactoryPatch[] = [
     {
       nodes: [
         n('clk', 'syncedclock', { division: Div.eighth }),
-        n('pls', 'pulse', { widthSec: 0.02 }),
+        n('pls', 'pulse', { widthSec: 0.16 }),
         n('env', 'dahdsr', { attack: 0.004, hold: 0.02, decay: 0.3, sustain: 0, release: 0.2 }),
         n('seq', 'sequencer', { step0: midi(60), step1: midi(64), step2: midi(67), step3: midi(72), step4: midi(67), step5: midi(64), step6: midi(60), step7: midi(55) }),
         n('wt', 'wavetable', { position: 0.4, gain: 0.4 }),
@@ -1445,13 +1483,13 @@ const playsItself: FactoryPatch[] = [
     {
       nodes: [
         n('clk', 'syncedclock', { division: Div.quarter }),
-        n('pls', 'pulse', { widthSec: 0.01 }),
+        n('pls', 'pulse', { widthSec: 0.3 }),
         n('env', 'dahdsr', { attack: 0.002, hold: 0.01, decay: 0.3, sustain: 0, release: 0.2 }),
         n('tn', 'tone', { freq: 55, gain: 1 }),
         vca('kvca'),
         n('sat', 'softclip', { drive: 1.6 }),
         n('hclk', 'syncedclock', { division: Div.eighth }),
-        n('hpls', 'pulse', { widthSec: 0.005 }),
+        n('hpls', 'pulse', { widthSec: 0.05 }),
         n('henv', 'dahdsr', { attack: 0.001, hold: 0.004, decay: 0.05, sustain: 0, release: 0.04 }),
         n('nz', 'noise', { color: Noise.white, gain: 1, cutoff: 16000 }),
         vca('hvca'),
@@ -1479,7 +1517,7 @@ const playsItself: FactoryPatch[] = [
     {
       nodes: [
         n('clk', 'syncedclock', { division: Div.whole }),
-        n('pls', 'pulse', { widthSec: 0.3 }),
+        n('pls', 'pulse', { widthSec: 1.28 }),
         n('env', 'dahdsr', { attack: 1.2, hold: 0.2, decay: 2, sustain: 0, release: 2 }),
         n('rnd', 'randomstepped', { freq: 0.25 }),
         n('qnt', 'quantize', { root: 0, scale: 2 }),
@@ -1504,7 +1542,7 @@ const playsItself: FactoryPatch[] = [
       nodes: [
         n('drift', 'randomsmooth', { freq: 0.3 }),
         n('clk', 'clock', { freq: 1.5 }),
-        n('pls', 'pulse', { widthSec: 0.02 }),
+        n('pls', 'pulse', { widthSec: 0.25 }),
         n('env', 'dahdsr', { attack: 0.06, hold: 0.02, decay: 0.6, sustain: 0, release: 0.5 }),
         n('pick', 'randomstepped', { freq: 0.7 }),
         n('qnt', 'quantize', { root: 2, scale: 1 }),
@@ -1534,9 +1572,9 @@ const playsItself: FactoryPatch[] = [
         n('clk', 'syncedclock', { division: Div.eighth }),
         n('slow', 'clockdivide', { factor: 3 }),
         n('fast', 'clockmultiply', { factor: 2 }),
-        n('apls', 'pulse', { widthSec: 0.02 }),
+        n('apls', 'pulse', { widthSec: 0.37 }),
         n('aenv', 'dahdsr', { attack: 0.004, hold: 0.02, decay: 0.35, sustain: 0, release: 0.25 }),
-        n('bpls', 'pulse', { widthSec: 0.006 }),
+        n('bpls', 'pulse', { widthSec: 0.08 }),
         n('benv', 'dahdsr', { attack: 0.001, hold: 0.006, decay: 0.09, sustain: 0, release: 0.07 }),
         n('seq', 'sequencer', { step0: midi(48), step1: midi(55), step2: midi(60), step3: midi(63), step4: midi(60), step5: midi(55), step6: midi(51), step7: midi(55) }),
         n('low', 'oscillator', { type: Wave.triangle, octave: -1, gain: 0.45 }),
@@ -1601,7 +1639,7 @@ const playsItself: FactoryPatch[] = [
       nodes: [
         n('clk', 'syncedclock', { division: Div.sixteenth }),
         n('euc', 'euclidean', { steps: 16, hits: 9, rotation: 2 }),
-        n('pls', 'pulse', { widthSec: 0.005 }),
+        n('pls', 'pulse', { widthSec: 0.08 }),
         n('env', 'dahdsr', { attack: 0.001, hold: 0.005, decay: 0.09, sustain: 0, release: 0.07 }),
         n('rnd', 'randomstepped', { freq: 6 }),
         n('nz', 'noise', { color: Noise.white, gain: 1, cutoff: 16000 }),

@@ -149,21 +149,44 @@ different file, which is how the gates themselves are tested.
   mismatch rather than a diff of two megabytes of floats, and a hand-edited
   fixture fails.
 
-## The two exempt kinds
+## Seeded randomness
 
-`noise` and `random` have no golden case and cannot have one. Both call
-`Math.random()` per sample, so two runs of the *same* implementation
-disagree with each other. There is nothing for a sample comparison to
-assert.
+`noise` and `random` used to be the two exempt kinds: both called
+`Math.random()`, so two runs of the same implementation disagreed and there
+was nothing for a comparison to assert. They draw from seeded streams now
+(`asl/rng.ts`, `Rng.swift`) and have golden cases like every other kind.
+`COVERAGE_EXEMPT_KINDS` is empty and meant to stay so.
 
-Audiocrate's determinism promise is enforced by the golden-audio snapshot, and
-these two kinds sit outside it: **a graph containing `noise` or `random`
-cannot be reproduced, bounced twice to the same file, or compared against a
-native render.**
+A stream is a pure function of three integers:
 
-Seeding the generator from voice state would bring them inside the snapshot
-and would change what those nodes sound like. `COVERAGE_EXEMPT_KINDS` in
-`asl/goldenCases.ts` is the exemption table.
+- the **voice seed**, `createState({ seed })` in JavaScript and
+  `makeState(seed:)` in Swift, 0 by default;
+- the node's **rank** among the graph's random nodes in structural order:
+  first visit in a depth-first walk from the output, inputs in sorted name
+  order, a `mix` list in order (`randomRanks`). Not the plan slot, because
+  Swift walks inputs in dictionary order, and not the id, because the palette
+  catalog renumbers ids and each language's flatten mints its own. The first
+  version of this ranked by id; the flatten fixture compares ids only after
+  renumbering, which is what showed that could not hold;
+- the output **channel**, so the two sides of a stereo insert are two noises.
+
+The generator is mulberry32 behind a murmur3 finalizer, all 32-bit wrapping
+integer arithmetic, and a draw is that integer over 2^32. Both languages do
+each step exactly, so noise is compared at zero tolerance. The fixture renders
+at the default seed; `rng.test.ts` and `RngTests.swift` pin the same literal
+draws at other seeds, ranks and channels.
+
+Defaults, and why they differ by renderer:
+
+| Renderer | Default seed | Why |
+|---|---|---|
+| `OfflineRenderer`, `BlockRenderer`, `compileVoice` | 0 | A bounce must be reproducible |
+| `WebAudioRenderer.createVoice` | fresh random per voice | Two rain cells must not play one noise in lockstep |
+| `AudioMaterial.bind(renderer, dest, { seed })` | voice `i` gets `seed + i` | A pool is reproducible and its voices still independent |
+| Swift `VoicePool(seed:)` | the same rule | |
+
+A host that wants a world to sound the same on every visit passes a seed
+derived from its world seed and the emitter.
 
 ## What this does not cover
 

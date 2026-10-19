@@ -1,6 +1,6 @@
 import { AudioMaterial } from '../graph/AudioMaterial';
 import { param } from '../graph/param';
-import { env, filter, impulse, noise, osc, samplePlay, uniform, wavetable } from '../asl/builders';
+import { env, filter, impulse, logic, noise, osc, samplePlay, uniform, wavetable } from '../asl/builders';
 import type { SampleBox } from '../asl/types';
 import type { AudioAssetData } from '../graph/assets';
 
@@ -232,10 +232,26 @@ export function createSamplePlayerMaterial(): AudioMaterial {
       gain: param.range(0, 2, { default: 0.85 }),
     },
     automatable: ['rate', 'start', 'pitch', 'gain', 'loop'],
-    graph: ({ input, params }) =>
+    // `trig`, `gate` and `reset` are jacks, not knobs, so they are declared by
+    // being destructured here: the palette derives a material's control inlets
+    // from the `param` nodes its graph reads (`editor/src/controlInputs.ts`).
+    //
+    // Before this the only way in was `gate: input`, the audio port. That does
+    // trigger the sample, and it is the one thing the material ever did with
+    // its audio inlet, but nothing on the node said so: the jack was drawn
+    // `input(audio)`, a cable from a Keyboard into `gate` or `trig` was
+    // accepted by flatten and then silently dropped for want of a `param` node
+    // to land on, and a note could never play a sample at all.
+    graph: ({ input, trig, gate, reset, params }) =>
       samplePlay({
         rate: params.rate,
-        gate: input,
+        // The audio inlet keeps its old job beside the new jack, so a patch
+        // that triggers a sample from a signal still works. ORed rather than
+        // summed: audio is bipolar, and a sum would let a negative swing
+        // cancel a trigger that had genuinely arrived.
+        trig: logic.or(trig, input),
+        gate,
+        reset,
         position: params.start,
         loop: params.loop,
         pitch: params.pitch,

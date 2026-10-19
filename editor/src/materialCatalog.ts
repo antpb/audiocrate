@@ -225,6 +225,9 @@ function renumberGraph(graph: SerializedGraph): SerializedGraph {
     inputs: [...graph.inputs],
     output,
     ...(graph.channels ? { channels: graph.channels } : {}),
+    // Which parameters glide travels with the graph, so a native host that
+    // compiles a palette entry directly smooths the same ones.
+    ...(graph.smooth ? { smooth: [...graph.smooth] } : {}),
   };
 }
 

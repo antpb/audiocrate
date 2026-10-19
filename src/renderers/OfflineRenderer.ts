@@ -60,6 +60,12 @@ export interface OfflineRenderOptions {
    * block-rate kernel has no meaningful per-sample path.
    */
   kernels?: Record<string, KernelProcessor>;
+  /**
+   * Starts `noise` and `random` streams (`asl/rng.ts`). Defaults to
+   * `DEFAULT_VOICE_SEED`, so rendering the same graph twice gives the same
+   * samples.
+   */
+  seed?: number;
   /** Lanes evaluated at the start of each block. */
   automation?: Array<{ target: string; lane: AutomationLane }>;
   timeContext?: TimeContext;
@@ -83,7 +89,7 @@ export const OfflineRenderer = {
     const noteOffSample = options.noteOffAt != null ? Math.round(options.noteOffAt * sampleRate) : null;
 
     const voice = compileVoice(graph);
-    const state = voice.createState();
+    const state = voice.createState({ seed: options.seed });
     const kernelEntries = Object.entries(options.kernels ?? {});
     if (kernelEntries.length > 0) state.kernels = new Map(kernelEntries);
     voice.noteOn(state, options.params ?? {});

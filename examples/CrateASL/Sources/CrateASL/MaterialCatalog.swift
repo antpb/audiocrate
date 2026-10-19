@@ -299,6 +299,10 @@ public struct CatalogMaterialEntry: Decodable, Sendable, Identifiable {
     public let kind: String
     public let label: String
     public let category: String
+    /// One line on what the material is, the palette's tooltip in the web
+    /// editor and the first line of the inspector here. Optional because a
+    /// catalog written before it was carried has none.
+    public let blurb: String?
     /// `analysis` or `looper`: kinds whose non-audio outlets are derived from
     /// their audio rather than being jacks in their own right.
     public let trait: String?

@@ -10,6 +10,33 @@ import Foundation
 /// JavaScript's `%`, which keeps the sign of the dividend.
 @inline(__always) func jsMod(_ x: Double, _ m: Double) -> Double { x.truncatingRemainder(dividingBy: m) }
 
+/// `jsMod(x, m)` without `fmod` on the paths a phase or a ring index takes
+/// every sample. Bit-identical, not approximately equal: inside (-m, m) the
+/// remainder is `x` itself, and on [m, 2m) `x - m` is exact (Sterbenz), as
+/// `fmod` always is. Anything else, including NaN and a non-positive `m`,
+/// takes `fmod` as before. `fmod` was 6% of a reverb instrument's render.
+@inline(__always) func wrapMod(_ x: Double, _ m: Double) -> Double {
+    if x > -m && x < m { return x }
+    if x >= m && x < 2 * m { return x - m }
+    return jsMod(x, m)
+}
+
+/// `jsMod(jsMod(x, m) + m, m)`, the always-positive wrap a ring buffer reads
+/// through, with the same fast paths as `wrapMod`. `x + m` is computed
+/// exactly as the nested form computes it, rounding included, so a sum that
+/// rounds onto `m` or `2m` still wraps to the same bits.
+@inline(__always) func jsWrap(_ x: Double, _ m: Double) -> Double {
+    if x >= 0 && x < m {
+        let t = x + m
+        return t < 2 * m ? t - m : jsMod(t, m)
+    }
+    if x < 0 && x > -m {
+        let t = x + m
+        return t < m ? t : jsMod(t, m)
+    }
+    return jsMod(jsMod(x, m) + m, m)
+}
+
 @inline(__always) func oscillatorSample(_ shape: Int, _ phase: Double, _ width: Double = 0.5, _ freq: Double = 0, _ sr: Double = 1) -> Double {
     switch shape {
     case Shape.saw: return 2 * phase - 1
@@ -71,10 +98,32 @@ public final class CompiledVoice {
     /// Where the main insert input lands in the port arrays, or -1 when the
     /// graph never reads one.
     private let mainPortSlot: Int
+    /// Parameters whose `setParam` glides, `graph.smooth` in the document.
+    private let smoothed: Set<String>
+    /// Every node a frame always evaluates, children first (`Schedule.swift`).
+    /// Unretained, like `PlanNode.inputs`: `plan.nodes` owns them for the
+    /// voice's whole life, and walking them per sample must cost no retain.
+    private let schedule: UnsafeMutablePointer<Unmanaged<PlanNode>>
+    private let scheduleCount: Int
+    /// A split instrument's voice outputs (`ASLGraphDocument.sends`): how
+    /// many, and each one's slot in the value cache.
+    public let sendCount: Int
+    private let sendSlots: UnsafeMutablePointer<Int>
+    /// What runs once on the voices' summed sends, compiled from
+    /// `document.bus`. A `VoicePool` drives it; nil for every other graph.
+    public let bus: CompiledVoice?
+    /// The bus's port index for each send, in send order.
+    private let busSendPorts: [Int]
 
-    public init(document: ASLGraphDocument) throws {
-        plan = try buildPlan(document)
+    /// `samples` supplies the audio for boxes that name a file rather than
+    /// carrying their own table, keyed by the name `CrateSamples.references`
+    /// reported. A ref with nothing here falls back to whatever table the
+    /// material shipped, which is silence for a Sample Player and a sine for
+    /// a Wavetable; see `SampleBox.swift`.
+    public init(document: ASLGraphDocument, samples: [String: CrateSampleBox] = [:]) throws {
+        plan = try buildPlan(document, samples: samples)
         root = plan.root
+        smoothed = Set(document.smooth ?? [])
         switch document.channels {
         case 1: stereo = false
         case 2: stereo = true
@@ -94,14 +143,67 @@ public final class CompiledVoice {
         mirrorsMonoInput = stereo && !plan.usesLane && !plan.usesRandom
         writesScalarInput = plan.readsScalarInput
         mainPortSlot = plan.ports.firstIndex(of: mainPortName) ?? -1
+        let order = buildSchedule(plan.root)
+        scheduleCount = order.count
+        schedule = .allocate(capacity: max(order.count, 1))
+        for (i, node) in order.enumerated() { (schedule + i).initialize(to: .passUnretained(node)) }
+        let sends = document.sends ?? []
+        sendCount = sends.count
+        sendSlots = .allocate(capacity: max(sends.count, 1))
+        for (k, send) in sends.enumerated() {
+            guard let slot = plan.slotBySourceId[send.id] else {
+                throw ASLCompileError("a send is not reachable from the graph output")
+            }
+            (sendSlots + k).initialize(to: slot)
+        }
+        bus = try document.bus.map { try CompiledVoice(document: $0, samples: samples) }
+        busSendPorts = (0..<sends.count).map { [bus] in bus?.portIndex(of: "send\($0)") ?? -1 }
+    }
+
+    deinit {
+        schedule.deallocate()
+        sendSlots.deallocate()
+    }
+
+    /// One frame: the schedule front to back, then the root's cached value.
+    /// The same nodes `eval(root)` would compute, computed bottom up, so each
+    /// evaluator's input reads are cache loads rather than recursive calls.
+    @inline(__always) private func runFrame(_ state: VoiceState, _ sampleRate: Double) -> Double {
+        // `_withUnsafeGuaranteedRef` keeps the node unretained;
+        // `takeUnretainedValue` retains and measured half again slower.
+        for i in 0..<scheduleCount {
+            schedule[i]._withUnsafeGuaranteedRef { _ = eval($0, state, sampleRate) }
+        }
+        return state.values[root.slot]
     }
 
     public convenience init(json: Data) throws {
         try self.init(document: ASLGraphDocument.decode(json))
     }
 
-    public func makeState() -> VoiceState {
-        VoiceState(slotCount: plan.slotCount, portNames: plan.ports, paramNames: plan.paramNames)
+    /// `seed` makes `noise` and `random` reproducible, as
+    /// `createState({ seed })` does in compile.ts, and the default is the same.
+    ///
+    /// A split instrument's state carries its own bus, so rendering it alone
+    /// plays the whole patch, as `compileVoice` does in JavaScript.
+    /// `withBus: false` is for a `VoicePool`, which runs one bus for all its
+    /// voices.
+    public func makeState(seed: UInt32 = defaultVoiceSeed, withBus: Bool = true) -> VoiceState {
+        let state = VoiceState(
+            slotCount: plan.slotCount,
+            portNames: plan.ports,
+            paramNames: plan.paramNames,
+            tapIds: plan.tapIds,
+            tapWindows: plan.tapWindows
+        )
+        state.seed = seed
+        if withBus, let bus {
+            let busState = bus.makeState(seed: seed)
+            // An effect on the voices' sum: its gate opens once and stays open.
+            busState.gate = true
+            state.splitBus = SplitBusRuntime(state: busState)
+        }
+        return state
     }
 
     /// The index a named port occupies in `VoiceState.setPort`, or -1.
@@ -115,6 +217,20 @@ public final class CompiledVoice {
         state.gate = true
     }
 
+    /// A host's parameter change, `CompiledVoice.setParam` in compile.ts: a
+    /// parameter the graph lists in `smooth` glides there over
+    /// `paramRampSeconds`, anything else lands at once, and so does anything
+    /// set before the voice first renders. A host ramp with its own length
+    /// (`rampParam`) and `noteOn` values are untouched by this.
+    public func setParam(_ state: VoiceState, _ name: String, _ value: Double) {
+        guard smoothed.contains(name), state.renderedRate > 0,
+              let current = state.committedParam(name), current.value != value else {
+            state.setParam(name, value)
+            return
+        }
+        state.rampParam(name, to: value, frames: paramRampFrames(state.renderedRate))
+    }
+
     public func noteOff(_ state: VoiceState) {
         state.gate = false
     }
@@ -122,8 +238,19 @@ public final class CompiledVoice {
     /// One sample, for offline rendering and tests. Ports fall back to the
     /// scalar of the same name, which is what makes a per-sample caller work.
     public func renderSample(_ state: VoiceState, sampleRate: Double) -> Double {
+        if sendCount > 0, state.splitBus != nil {
+            // The whole split patch, as a block of one.
+            var out: Float = 0
+            _ = render(state, sampleRate: sampleRate, frames: 1, outL: &out, outR: nil)
+            return Double(out)
+        }
         state.generation += 1
-        return eval(root, state, sampleRate)
+        // One sample is a block of one: frame 0 of any ramp, then committed.
+        state.renderedRate = sampleRate
+        state.frameIndex = 0
+        let out = eval(root, state, sampleRate)
+        state.commitRamps(framesRendered: 1)
+        return out
     }
 
     /// Renders one block into raw output pointers.
@@ -148,14 +275,41 @@ public final class CompiledVoice {
         outR: UnsafeMutablePointer<Float>?,
         inL: UnsafePointer<Float>? = nil,
         inR: UnsafePointer<Float>? = nil,
-        transport: TransportSnapshot? = nil
+        transport: TransportSnapshot? = nil,
+        sendsL: UnsafePointer<UnsafeMutablePointer<Float>>? = nil,
+        sendsR: UnsafePointer<UnsafeMutablePointer<Float>>? = nil
     ) -> Bool {
+        // A split voice asked for its output rather than its sends plays its
+        // own bus: the whole patch, as one voice.
+        if sendsL == nil, sendCount > 0, let bus, let split = state.splitBus {
+            split.ensure(frames: frames, sends: sendCount)
+            let wroteRight = split.sendL.withUnsafeBufferPointer { left in
+                split.sendR.withUnsafeBufferPointer { right in
+                    render(
+                        state, sampleRate: sampleRate, frames: frames, outL: split.mix!, outR: nil,
+                        inL: inL, inR: inR, transport: transport,
+                        sendsL: left.baseAddress!, sendsR: right.baseAddress!
+                    )
+                }
+            }
+            for k in 0..<sendCount where busSendPorts[k] >= 0 {
+                split.state.portL[busSendPorts[k]] = UnsafePointer(split.sendL[k])
+                split.state.portR[busSendPorts[k]] = wroteRight ? UnsafePointer(split.sendR[k]) : nil
+            }
+            return bus.render(
+                split.state, sampleRate: sampleRate, frames: frames, outL: outL, outR: outR,
+                transport: transport ?? state.transport
+            )
+        }
         if let transport { state.transport = transport }
+        state.renderedRate = sampleRate
 
         if let sourceNode {
-            return renderSourceKernel(
+            let wrote = renderSourceKernel(
                 sourceNode, state, frames: frames, outL: outL, outR: outR, inL: inL, inR: inR
             )
+            state.commitRamps(framesRendered: frames)
+            return wrote
         }
 
         if let inL, mainPortSlot >= 0 {
@@ -190,25 +344,38 @@ public final class CompiledVoice {
         let scalarInput = writesScalarInput ? inL : nil
 
         if boundSeams == 0 {
-            let wantsRight = stereo && !allInputsMono && outR != nil
+            // A split voice can be stereo with no `outR`: its sends carry the
+            // channels. Either asks for the second pass. Same rule as
+            // compile.ts, return value included.
+            let sendsL = sendCount > 0 ? sendsL : nil
+            let stereoPass = stereo && !allInputsMono
+            let sendsR = stereoPass && sendsL != nil ? sendsR : nil
+            let wantsRight = stereoPass && (outR != nil || sendsR != nil)
             for i in 0..<frames {
                 state.frameIndex = i
                 state.lane = 0
-                if let scalarInput { state.setParam(mainPortName, Double(scalarInput[i])) }
+                if let scalarInput { state.setPortScalar(mainPortSlot, Double(scalarInput[i])) }
                 state.generation += 1
-                outL[i] = Float(eval(root, state, sampleRate))
+                outL[i] = Float(runFrame(state, sampleRate))
+                if let sendsL {
+                    for k in 0..<sendCount { sendsL[k][i] = Float(state.values[sendSlots[k]]) }
+                }
                 if wantsRight {
                     // A second full pass, with its own node memory, is what
                     // makes a filter written once a real stereo filter rather
                     // than a mono one whose output is copied to both sides.
                     state.lane = 1
                     state.generation += 1
-                    outR![i] = Float(eval(root, state, sampleRate))
+                    let right = Float(runFrame(state, sampleRate))
+                    if let outR { outR[i] = right }
+                    if let sendsR {
+                        for k in 0..<sendCount { sendsR[k][i] = Float(state.values[sendSlots[k]]) }
+                    }
                 }
             }
             state.lane = 0
             state.commitRamps(framesRendered: frames)
-            return wantsRight
+            return sendsL != nil ? sendsR != nil : (wantsRight && outR != nil)
         }
 
         renderSeamBlock(state, sampleRate: sampleRate, frames: frames, outL: outL, scalarInput: scalarInput)
@@ -281,7 +448,7 @@ public final class CompiledVoice {
         for i in 0..<frames {
             seamIndex = i
             state.frameIndex = i
-            if let scalarInput { state.setParam(mainPortName, Double(scalarInput[i])) }
+            if let scalarInput { state.setPortScalar(mainPortSlot, Double(scalarInput[i])) }
             state.generation += 1
             _ = eval(root, state, sampleRate)
         }
@@ -302,7 +469,7 @@ public final class CompiledVoice {
         for i in 0..<frames {
             seamIndex = i
             state.frameIndex = i
-            if let scalarInput { state.setParam(mainPortName, Double(scalarInput[i])) }
+            if let scalarInput { state.setPortScalar(mainPortSlot, Double(scalarInput[i])) }
             state.generation += 1
             outL[i] = Float(eval(root, state, sampleRate))
         }
@@ -375,20 +542,34 @@ public final class CompiledVoice {
     /// the same reason as in the JavaScript version: a graph's arithmetic
     /// spine is a deep recursion, and recursing through a function with
     /// seventy cases in it means stack frames sized for the widest of them.
-    func eval(_ node: PlanNode, _ state: VoiceState, _ sampleRate: Double) -> Double {
+    ///
+    /// Split in two. This half is the cache: small enough to inline into
+    /// every caller, so a value this frame already has costs a compare and a
+    /// load, not a call. `compute` is the switch, kept out of line so its
+    /// frame (sized for whatever the compiler inlined into seventy cases) is
+    /// paid once per node per sample rather than on every read. A profile of
+    /// the single-function form put about a quarter of render time in its
+    /// prologue and epilogue alone.
+    @inline(__always) func eval(_ node: PlanNode, _ state: VoiceState, _ sampleRate: Double) -> Double {
         let slot = node.slot
         if state.stamps[slot] == state.generation { return state.values[slot] }
+        let result = compute(node, state, sampleRate)
+        state.values[slot] = result
+        state.stamps[slot] = state.generation
+        return result
+    }
 
+    /// One node's own work, with its inputs read through `ev`. Callers go
+    /// through `eval`, which caches the answer for the rest of the frame.
+    @inline(never) func compute(_ node: PlanNode, _ state: VoiceState, _ sampleRate: Double) -> Double {
         let result: Double
         switch node.kind {
         case .const:
             result = node.c
         case .mul:
-            result = eval(node.input(.a)!, state, sampleRate)
-                * eval(node.input(.b)!, state, sampleRate)
+            result = ev(node, .a, state, sampleRate) * ev(node, .b, state, sampleRate)
         case .add:
-            result = eval(node.input(.a)!, state, sampleRate)
-                + eval(node.input(.b)!, state, sampleRate)
+            result = ev(node, .a, state, sampleRate) + ev(node, .b, state, sampleRate)
         case .param:
             // Pure in the frame, so a seam graph's collect and apply passes
             // read the same value. See `VoiceState.paramValue`.
@@ -398,20 +579,22 @@ public final class CompiledVoice {
         case .lane:
             result = Double(state.lane)
         case .range:
-            let source = eval(node.input(.source)!, state, sampleRate)
+            let source = ev(node, .source, state, sampleRate)
             result = node.rangeMin + ((source + 1) / 2) * (node.rangeMax - node.rangeMin)
         case .mix:
+            // Same terms, same order, so the same sum to the bit; read from
+            // the cache by slot, as `ev` reads a named input.
             var sum = 0.0
-            if let list = node.list {
-                for child in list { sum += eval(child, state, sampleRate) }
+            if let slots = node.listSlots {
+                for i in 0..<node.listCount {
+                    let s = slots[i]
+                    sum += state.stamps[s] == state.generation ? state.values[s] : eval(node.list![i], state, sampleRate)
+                }
             }
             result = sum
         default:
             result = evalOther(node, state, sampleRate)
         }
-
-        state.values[slot] = result
-        state.stamps[slot] = state.generation
         return result
     }
 
@@ -421,7 +604,17 @@ public final class CompiledVoice {
             // No block wired: fall back to the scalar of the same name. That
             // is the per-sample path, and it is why a graph written against
             // the old scalar `input` still runs unchanged.
-            return state.params[node.name] ?? 0
+            //
+            // Out of the dense array, never out of `state.params`. That
+            // dictionary is written by whichever thread sets a parameter,
+            // which for an AUv3 is the host's thread the moment somebody
+            // drags a slider, and reading a Swift dictionary while another
+            // thread reshapes its storage is a wild pointer rather than a
+            // stale number. A VoicePool never wires its ports, so an
+            // instrument patch took this branch for every sample of every
+            // voice, which is where that race was found: holding a note on a
+            // Sample Player and moving its rate killed the render thread.
+            return index >= 0 ? state.portScalars[index] : 0
         }
         // A fixed channel the source does not have reads the one it does
         // have: `audio.right()` on a mono send is that send, not silence.

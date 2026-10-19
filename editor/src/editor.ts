@@ -36,6 +36,8 @@ export class PatchNode extends ClassicPreset.Node {
   width = 172;
   height = 96;
   nodeData?: Record<string, unknown>;
+  /** Per voice or summed, in an instrument. See `PatchNode` in patch.ts. */
+  voicing?: 'instanced' | 'summed';
   constructor(
     public nodeKind: string,
     label: string,
@@ -216,7 +218,14 @@ export class PatchEditor {
   }
 
   async pasteNode(
-    saved: { kind: string; params: Record<string, number>; data?: Record<string, unknown>; x: number; y: number },
+    saved: {
+      kind: string;
+      params: Record<string, number>;
+      data?: Record<string, unknown>;
+      voicing?: 'instanced' | 'summed';
+      x: number;
+      y: number;
+    },
     position?: { x: number; y: number },
   ): Promise<string> {
     const id = await this.addKind(saved.kind, position ?? { x: saved.x + 36, y: saved.y + 36 });
@@ -231,9 +240,12 @@ export class PatchEditor {
       }
       if (isTransportKind(saved.kind)) this.syncTransportFromGraph();
     }
-    if (saved.data) {
+    if (saved.data || saved.voicing) {
       const node = this.editor.getNodes().find((item) => item.id === id);
-      if (node instanceof PatchNode) node.nodeData = { ...(node.nodeData ?? {}), ...saved.data };
+      if (node instanceof PatchNode) {
+        if (saved.data) node.nodeData = { ...(node.nodeData ?? {}), ...saved.data };
+        if (saved.voicing) node.voicing = saved.voicing;
+      }
     }
     this.hooks.onChange();
     return id;
@@ -364,6 +376,7 @@ export class PatchEditor {
         params: material?.snapshotParams() ?? {},
       };
       if (node instanceof PatchNode && node.nodeData) saved.data = node.nodeData;
+      if (node instanceof PatchNode && node.voicing) saved.voicing = node.voicing;
       patch.nodes.push(saved);
     }
     if (this.transport) patch.transport = this.transport;
@@ -406,6 +419,7 @@ export class PatchEditor {
       }
       if (isLineKind(saved.kind)) node.nodeData = { monitor: 0, ...(saved.data ?? {}) };
       else if (saved.data) node.nodeData = saved.data;
+      if (saved.voicing) node.voicing = saved.voicing;
       (node as { id: string }).id = saved.id;
       this.kinds.set(node.id, saved.kind);
       await this.editor.addNode(node);
@@ -443,6 +457,20 @@ export class PatchEditor {
   nodeData(id: string): Record<string, unknown> | undefined {
     const node = this.editor.getNodes().find((item) => item.id === id);
     return node instanceof PatchNode ? node.nodeData : undefined;
+  }
+
+  /** A node's voicing flag, or undefined when it follows the default. */
+  nodeVoicing(id: string): 'instanced' | 'summed' | undefined {
+    const node = this.editor.getNodes().find((item) => item.id === id);
+    return node instanceof PatchNode ? node.voicing : undefined;
+  }
+
+  /** Sets or clears (undefined) a node's voicing flag, as an edit. */
+  setNodeVoicing(id: string, voicing: 'instanced' | 'summed' | undefined): void {
+    const node = this.editor.getNodes().find((item) => item.id === id);
+    if (!(node instanceof PatchNode) || node.voicing === voicing) return;
+    node.voicing = voicing;
+    this.hooks.onChange();
   }
 
   patchNodeData(id: string, patch: Record<string, unknown>): void {

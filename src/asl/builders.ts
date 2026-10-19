@@ -855,7 +855,12 @@ export function wavetable(
 export function samplePlay(
   opts: {
     rate?: ASLValueLike;
+    /** Level. High plays, low stops, and the voice's own gate is ORed in. */
     gate?: ASLValueLike;
+    /** Edge. Starts the sample again from `position`. */
+    trig?: ASLValueLike;
+    /** Edge. Moves the playhead to `position` without starting anything. */
+    reset?: ASLValueLike;
     position?: ASLValueLike;
     loop?: ASLValueLike;
     pitch?: ASLValueLike;
@@ -865,6 +870,8 @@ export function samplePlay(
 ): ASLValue {
   const inputs: Record<string, ReturnType<typeof toNode>> = { rate: toNode(opts.rate ?? 1) };
   if (opts.gate !== undefined) inputs.gate = toNode(opts.gate);
+  if (opts.trig !== undefined) inputs.trig = toNode(opts.trig);
+  if (opts.reset !== undefined) inputs.reset = toNode(opts.reset);
   if (opts.position !== undefined) inputs.position = toNode(opts.position);
   if (opts.loop !== undefined) inputs.length = toNode(opts.loop);
   if (opts.pitch !== undefined) inputs.pitch = toNode(opts.pitch);

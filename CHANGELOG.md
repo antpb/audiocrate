@@ -2,6 +2,258 @@
 
 ## Unreleased
 
+Everything since 0.2.1. An instrument sums its voices into the effects after
+them, `noise` and `random` are seeded, and the browser patcher plays a patch
+as the graph the plugin ships. Existing golden renders are unchanged; the
+conformance fixture grew from 103 cases to 115, additions only. Where a sound
+changed on purpose, the entry says so.
+
+### Added
+
+- **Instruments sum their voices into the effects after them.** A patch is
+  modular topology: eight oscillator voices into one reverb is one reverb.
+  Flattening used to copy the whole chain into every voice, so an instrument
+  ran eight reverbs and eight limiters and limited each note instead of the
+  chord. `flattenPatch` now splits an instrument into a per-voice graph with
+  `sends` and a `bus` that runs once on their sum (`patcher/voicing.ts`,
+  CrateASL `VoicingPlan`). A module stays per voice when it is a voice
+  source, reads its voice, is played by the keyboard, has a per-voice signal
+  on a control input, combines per-voice signals on two audio inputs, or
+  feeds anything per voice; a patch node's optional `voicing: "instanced"`
+  keeps any other module per voice, and the inspector shows a Per voice /
+  Summed switch. Single notes render the same as before; chords differ only
+  where a stage is nonlinear on the sum. The traced reverb instrument costs
+  0.28 ms per 256-frame block at eight voices, down from 1.53 ms.
+  A split instrument exports as `crate.plugin` format 3 (`docs/format.md`).
+- **The Swift interpreter runs a precomputed schedule.** Every node a frame
+  always evaluates runs bottom up from a flat list (`Schedule.swift`), inputs
+  are read from the value cache by slot, and the render path does no
+  reference counting. Bit-identical on every conformance graph and factory
+  patch (`InterpreterDigestTests`), about 46% faster before the voice split.
+- **The patcher plays patches the way the plugin does.** A patch of pure ASL
+  materials is flattened (`flattenPatch`, the lowering Export Plugin and the
+  iOS AUv3 use) and played as one voice, so a cable into a parameter is a
+  per-sample signal rather than a value sampled from the main thread every
+  50 ms. Drum envelopes, fast LFOs and a clock into a Euclidean now work in
+  the browser, and the browser renders the graph the plugin ships. Patches
+  with kernels, loaded files, a looper, analysis modules, MIDI Out, spatial
+  nodes or MIDI clips still play per module (`editor/src/compiledPlayback.ts`
+  says why each). Knobs reach the compiled voice as parameter changes and
+  glide; a change of modules or cables rebuilds it.
+- **Seeded `noise` and `random`.** Each node draws from its own stream, a pure
+  function of the voice seed, the node's structural rank (first visit from
+  the output, inputs in sorted name order), and the channel (`asl/rng.ts`, `Rng.swift`). A bounce is now reproducible, and a
+  seeded world sounds the same on every visit and every device.
+  `createState({ seed })`, `OfflineRenderer.render({ seed })`,
+  `BlockRenderer({ seed })`, `WebAudioRenderer.createVoice(graph, { seed })`,
+  `AudioMaterial.bind(renderer, dest, { seed })` (voice `i` gets `seed + i`),
+  Swift `makeState(seed:)` and `VoicePool(seed:)`. Offline renderers default
+  to seed 0. Live voices default to a fresh random seed each, as before, so
+  two voices of one graph never share a noise. `DEFAULT_VOICE_SEED` and
+  `normalizeSeed` are exported.
+- **Both kinds are in the conformance fixture** (11 new cases, 115 in all):
+  every colour, a live colour switch, both random modes, two streams in one
+  graph, and a stereo insert. `COVERAGE_EXEMPT_KINDS` is empty. The twelfth
+  addition is `svf bandpass ringing`, under the resonance ceiling below.
+
+- **`crate.plugin` format 2, readable now, written on request.** A shared
+  node is written in full once and as `{ "ref": id }` after that, which takes
+  a rich plugin to about 40% of its format 1 size (`ambient-bloom` 38.8 kB to
+  15.9 kB). `parseCratePlugin` reads both and hands back `compiled.graph` with
+  shared nodes as shared objects, so hosts need no change beyond upgrading;
+  CrateASL resolves references while decoding. `stringifyCratePlugin(doc,
+  { shareNodes: true })` writes it; the default stays format 1 until hosts
+  that read 2 have shipped. `shareSerializedGraph`, `inflateSerializedGraph`,
+  `canonicalizeSerializedGraph` and `CRATE_PLUGIN_MAX_VERSION` are exported.
+  Specified in `docs/format.md`, with the compatibility promise, and held to
+  `fixtures/plugin-format-conformance.json` in both languages.
+- **A newer format is refused, by name.** `parseCratePlugin` and
+  `CratePluginDocument.decode` reject a version above what they read, before
+  reading anything else. `isCratePluginDocument` used to accept any number.
+
+- **Motion conformance.** `fixtures/motion-conformance.json` renders all 106
+  sounding palette materials while every parameter steps through its range
+  four times and the note is released and struck again; CrateASL replays it
+  against the bundled catalog (`MotionConformanceTests`). It is the first
+  render comparison of the palette itself, and all 105 Swift can compile agree.
+  `editor/test/paramMotion.test.ts` sweeps every automatable parameter at knob
+  rate and fails on any non-finite sample or any click not listed with a reason.
+
+- **Continuous parameters glide when a host moves them.** A change through
+  `CompiledVoice.setParam` (the worklet's `setParam` message,
+  `BlockRenderer.setParam`, CrateASL's `CompiledVoice.setParam` and
+  `VoicePool.glideParam`) reaches its value over `PARAM_RAMP_SECONDS`, 5 ms,
+  in a straight line, and lands on it exactly. Which parameters glide is
+  decided by what they are (`isSmoothedParam`): a continuous `range` glides;
+  `stepped`, `enum` and `toggle` jump, because gliding a mode plays modes
+  nobody chose; `smooth: false` makes a continuous one jump. Values that
+  arrive with a note never glide, and nothing glides before a voice first
+  renders. 5 ms is the shortest length that cleared every zipper finding in
+  the palette sweep (2 ms left one), and short enough that a large change
+  lands within two render quanta. The list travels as `graph.smooth`, an
+  optional field (no format version change), through `crate.plugin`, the
+  palette catalog and both flattens, and the motion fixture holds the two
+  interpreters' glides to each other. The AUv3 glides host step events and
+  MIDI CC, both on the render thread. A knob in the plugin's own editor is
+  posted to `ParameterInbox` and applied on that same thread, so it glides
+  the same way and never writes a `VoiceState` from the thread the host
+  called on.
+- **Sample Player takes `trig`, `gate`, and `reset`.** `trig` is an edge: it
+  starts the file from `start`, and it restarts one that has finished.
+  `gate` is a level: it starts on the rise and stops on the release, and it
+  is ORed with the voice gate, so a keyboard plays a sampler with nothing
+  cabled. `reset` moves the playhead to `start` and leaves a finished sample
+  finished. The audio inlet still triggers, as an edge, which is how this
+  material worked before it had jacks of its own: a cable into it plays the
+  file out, and a patch built that way is unchanged. A `samplePlay` whose
+  `gate` inlet is present used to ignore the voice gate, and releasing that
+  gate used to let the file play out; the release now stops it.
+  `samplePlayerMaterial` exposes the three jacks. Both interpreters.
+- **A loaded file is a name until a plugin is exported.** A sample, wavetable,
+  or grain box in CrateASL can name a file (`ref`) beside its samples.
+  `CrateSamples.references` lists them. Playing hands the audio to
+  `CompiledVoice(document:samples:)` as a side table the host already holds,
+  so adopting an edit does not copy the samples into the graph: a 30-second
+  file was 166 ms per edit when baked in, and about a millisecond this way.
+  `CrateSamples.resolving` writes the samples into the document for export,
+  because a `.crate.plugin` opened somewhere else has no library. A missing
+  Sample Player file is silence. A missing wavetable stays the sine it
+  shipped with. The reference stays either way, so putting the file back
+  fixes the patch.
+- **The factory library is one file.** `npm run fixtures:factory` writes
+  `editor/src/factoryPatches.ts` into CrateASL as `factory-patches.json`, and
+  `FactoryLibrary.bundled()` is what the iOS plugin offers.
+  `FactoryLibraryTests` decodes, flattens, and compiles every patch. There
+  used to be a second, hand-written copy of all of them in Swift.
+- **On-device generation starts from a factory patch.** `CrateGenStart` picks
+  the nearest factory patch for the sentence and tunes that patch's own
+  knobs. `CrateGenMove` adds the movement the description asks for (a filter
+  envelope, a sweep, wobble, random steps, drift, vibrato, pulse width, a
+  wavetable scan, autopan, tape wow), each built by rule. Editing a patch
+  that already exists (`CratePatchEditor`) wires an added module into the
+  path: "add a reverb and modulate the decay" puts the reverb before the
+  limiter and an LFO on its decay (`PatchChangeGuardTests`).
+- **The native editor matches the browser's edits.** Removing a module can
+  carry its audio through to whatever followed it (`passthroughConnections`).
+  `CrateNodeClip` is `crate.nodeclip`, the same text the browser puts on the
+  clipboard, so a module copied on a phone pastes into the browser.
+  `CratePluginExport` writes a format 1 `crate.plugin` from this side's
+  flatten. `ParamPresentation` is `normalizeParam`, `denormalizeParam`,
+  `quantizeParam`, and `formatParam`, so a native fader lands on the value
+  the browser's would: envelope times are `exp`, and a linear fader over
+  0.001 to 2 seconds puts 1 to 50 ms in the first two and a half percent of
+  the throw.
+
+### Fixed
+
+- **`transport.pulse` no longer drops an edge.** It compared each sample's
+  position with `beats - perSample` rather than with the previous sample's
+  own position. The two differ by rounding, so when a boundary landed within
+  that rounding of a sample both floors agreed and the clock skipped it. At
+  120 bpm a 1/16 Synced Clock lost the edge at beat 4.75, and a Euclidean or
+  Sequencer on it played a step late for the rest of the song. Both
+  evaluators now use the same formula for the previous sample as for the
+  current one.
+- **Self-playing patches in the iOS AUv3 played one note and stopped.** The
+  homecrate recorder refreshes the beat it gives a plugin from a 50 Hz timer,
+  and not at all when no audio track is playing. With the beat stuck at 0,
+  frame 0 of every block looked like a downbeat, a Synced Clock fired once a
+  block, the Pulse after it never fell, and the envelope it gated never
+  released. `TransportFollower` (Swift) now keeps a sample-continuous count
+  anchored at Play, passes a sample-accurate host through unchanged, and
+  re-anchors only on a seek or loop wrap. The AU also reads a host with a
+  musical context and no transport-state block, like the recorder's offline
+  bounce, as rolling, so such a bounce no longer renders these patches silent.
+
+- **A worklet voice could render before it had its parameters.** Values
+  arrived as `setParam` messages after the node existed, and on a busy main
+  thread the processor had already run a block or two with every parameter at
+  zero. A ladder with drive 0 computes 0/0, and a filter keeps a NaN forever:
+  the browser patcher went NaN on ladder patches after a few patch loads.
+  `WebAudioRenderer.createVoice(graph, { params })` now hands the starting
+  values to the processor's constructor, and `AudioMaterial.bind` and the
+  scene's live voices pass them. The ladder also treats drive near 0 as the
+  identity, the formula's own limit, in both interpreters.
+- **Disposed worklet voices were never released.** A processor that returns
+  true is kept by the browser for as long as the page lives, disconnected or
+  not. `disposeVoiceHandle` now posts `{ type: 'dispose' }` and `process`
+  returns false after it.
+- **Idle pool voices rendered their whole graph into silence.** A released
+  voice that has been silent for four blocks, with nothing at its inputs and
+  no MIDI due, now skips rendering until a note or an input wakes it: the
+  rule the Swift `VoicePool` retires a tail by. A held voice is never skipped,
+  so inserts (gate held open) and sustained notes are unaffected. A split
+  instrument's bus follows the same rule: four silent blocks with nothing
+  feeding it, and the summed effects stop until a voice sounds.
+- **A pulse-driven DAHDSR fired once and never again wherever the voice gate
+  was held open.** The envelope read `gate cable || voice gate`, and a host
+  that holds an insert's gate open (every AUv3 insert and self-playing patch)
+  made that true forever: one hit at load, then silence. The cable now drives
+  the envelope from the moment it first rises, and each rise retriggers it
+  even under a held voice gate. An envelope whose cable never fires follows
+  the voice gate exactly as before, so keyboard-played envelopes are
+  unchanged. Both interpreters; the golden snapshot and the motion fixture
+  are unchanged, and two Swift tests that had been failing
+  (`PatchSongResetTests` and `AtmosphericSynthesizerTests`, both built on
+  pulse-driven lanes) now pass, because this was their cause.
+- **Waveshape's Fold and Asym curves turned silence into DC.** Fold was
+  `[-1, 1, -1, 1, -1]`, which is -1 at its centre, so a folded signal sat at
+  full-scale DC with nothing playing and a limiter after it clamped the rest
+  of the patch; Asym put 0.05 there. Every curve now maps 0 to 0: Fold is an
+  odd fold (`[1, -1, 0, 1, -1]`) and Asym keeps its lean. Patches using
+  Fold or Asym sound different, on purpose.
+- **SVF blew up at high cutoffs.** The topology is stable only while
+  `f^2 + 2 f damp < 4`, and the `sr / 4` cutoff clamp is inside that only
+  above Q 1.4. At the palette's default Q of 0.5 the SVF materials went NaN
+  from 6.6 kHz, knob held still, on a cutoff that goes to 20 kHz. `f` is now
+  capped at `SVF_STABILITY`; settings that were stable are bit-identical.
+  Both interpreters.
+- **Low and high shelves went NaN on a deep cut with a steep slope** (-17 dB
+  at q 3.96, inside the materials' ranges), and stayed NaN for the rest of the
+  voice. The slope-form radicand is floored at 1/Q^2 for Q 10
+  (`SHELF_MIN_RADICAND`); settings that rendered before are bit-identical.
+  Affects `parametricEq` too. Both interpreters.
+- **Changing an envelope's attack, decay or release mid-stage jumped the
+  level** (up to 0.55). A stage now keeps its fraction done when its time
+  moves. Envelopes whose times hold still are bit-identical. Both interpreters.
+- **Swift never had the delay and comb read-pointer glide.** The JavaScript
+  click fix for sweeping a delay time or comb frequency was never ported, so
+  the AUv3 still crackled while those knobs moved. Ported line for line.
+- **Seeded streams are ranked by the graph's shape, not by node id.** The
+  palette catalog renumbers ids and each language's flatten mints its own, so
+  ranking by id could swap two noise sources between the web editor and the
+  AUv3. `randomRanks`: first visit from the output, inputs in sorted name
+  order.
+- **`.range()` with signal bounds.** A parameter or envelope passed as a bound
+  was written into params as an object and rendered NaN with no error. Signal
+  bounds now lower to `add`/`mul`; constant bounds still build one `range`
+  node, so existing graphs serialize unchanged. A `range` node whose bounds are
+  not finite numbers is refused at compile time in both interpreters rather
+  than rendering NaN (JS) or 0 (Swift).
+- **SVF resonance ceiling.** The damping floor capped Q at 20, so a filter
+  asked to ring for a second rang for milliseconds. It is Q 10,000 now
+  (`SVF_MIN_DAMP`). The topology is stable for any positive damping at every
+  cutoff the clamp allows. The palette's SVF materials still cap `q` at 20, so
+  patches are unaffected.
+- **Duplicate worklet registration.** `registerProcessor` is guarded by a
+  registry shared across every copy of audiocrate in the worklet global, and a
+  skipped registration says so on the console. `WebAudioRenderer` loads the
+  module once per context per processor name, across renderer instances and
+  package copies, and warns when a different build was asked for under a name
+  that is already loaded. A failed load is retried.
+- **`crate.plugin` size.** `stringifyCratePlugin` indented the compiled graph,
+  which nests as deep as the signal chain, and the whitespace outweighed the
+  data about five to one. `compiled` is written on one line now and the patch
+  stays indented. Measured on XR Publisher's exports: `ambient-bloom` 266 kB to
+  39 kB, `music-box` 245 kB to 35 kB. Every JSON reader parses both identically.
+- **A slider and the audio thread no longer share a dictionary.** Port
+  scalars and tap state are dense arrays, indexed when the plan is built.
+  Looking a port up by name hashed a string on every sample, and a dictionary
+  written from a slider while the render thread read it was a reproducible
+  crash (`PortScalarRaceTests`). Taps are allocated with the voice
+  (`TapStorageTests`), including the accumulator a tap used to create on its
+  first sample.
+
 ### Changed
 
 - **`adsrMaterial` reads a live `gate` inlet.** The graph is `env.dahdsr` with
@@ -12,6 +264,12 @@
   gate that sits at 0 used to ignore `noteOn`, because the compiler treated
   "gate inlet present" as "voice gate does not count." The envelope now opens
   on the signal **or** `state.gate`.
+- **Factory patches were revoiced against the fixes above.** Self-playing
+  patches widen the pulses that gate their envelopes, because a pulse that
+  falls now really does release. Ring Lead and Bell multiply a second
+  oscillator played by the keys, so the partials follow the note. The music
+  box sits an octave higher. A few reverbs, decays, and levels moved with
+  them. `npm run audit:presets` is the listening pass.
 
 ## 0.2.0
 

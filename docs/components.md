@@ -46,7 +46,7 @@ Note-driven or free-running. These read no input.
 | `noiseMaterial` | `color`, `gain`, `cutoff` | Six spectral colors through a lowpass |
 | `impulseMaterial` | | A single-sample impulse from a gate |
 | `wavetableMaterial` | `position`, octave, detune, gain, ADSR | Scans a bank of single-cycle frames. `createWavetableMaterial`, `setWavetableAsset` |
-| `samplePlayerMaterial` | `rate`, `start`, `loop`, `pitch`, `gain` | One-shot or loop from a loaded file. Pitch is semitones. `createSamplePlayerMaterial`, `setSampleAsset` |
+| `samplePlayerMaterial` | `rate`, `start`, `loop`, `pitch`, `gain` | One-shot or loop from a loaded file. Plays on `trig`, `gate` or the audio inlet; `reset` moves the playhead. Pitch is semitones. `createSamplePlayerMaterial`, `setSampleAsset` |
 | `synthVoiceMaterial` | wave, unison, filter, env amt, ADSR | A complete subtractive voice |
 
 ### Filters
@@ -176,13 +176,26 @@ jacks would hide a control that works to conceal one route into it that does
 not.
 
 To gate an envelope from inside a patch, cable into `adsrMaterial`'s `gate` or
-use `dahdsrMaterial`, whose trigger is `input`. `breakpointEnvelopeMaterial` and
-`samplePlayerMaterial` take theirs the same way. The remaining dead-jack list
-is pinned by `DeadJackTests` in the Swift package, which measures it rather
-than trusting it: a new dead jack fails, and so does fixing one.
+use `dahdsrMaterial`, whose trigger is `input`. `breakpointEnvelopeMaterial`
+takes its the same way. The remaining dead-jack list is pinned by
+`DeadJackTests` in the Swift package, which measures it rather than trusting
+it: a new dead jack fails, and so does fixing one.
 
-**Reset.** The five modules that carry a position in a pattern (Clock, Clock
-Divide, Clock Multiply, Euclidean, Sequencer) take a `reset` jack. A rising
+**Playing a sample.** `samplePlayerMaterial` has three ways in, and they do
+different things. `trig` is an edge: it starts the file from `start`, and it
+will restart one that has already finished. `gate` is a level: it starts on
+the rise and stops on the release, and it is ORed with the voice's own gate,
+which is what lets a keyboard play a sampler with nothing cabled at all.
+`reset` is an edge that moves the playhead to `start` and nothing else, so a
+sample that has run out stays finished.
+
+The audio inlet triggers it too, as an edge, which is how this material worked
+before it had jacks of its own: it was the only way in, and it was drawn
+`input(audio)` with nothing saying it was the trigger. Cables into it still
+work and a patch built that way is unchanged.
+
+**Reset.** The modules that carry a position (Clock, Clock Divide, Clock
+Multiply, Euclidean, Sequencer, and Sample Player) take a `reset` jack. A rising
 edge puts the module back to its first step; it is edge-triggered, so a signal
 held high resets once rather than pinning the pattern at step zero.
 
@@ -288,7 +301,7 @@ Every value is chainable:
 | | |
 |---|---|
 | `.mul(x)` `.add(x)` | Arithmetic |
-| `.range(min, max)` | Map from -1..1 into a range |
+| `.range(min, max)` | Map from -1..1 into a range. Bounds may be numbers or signals |
 | `.toFrequency()` | Note number to hertz |
 | `.trigger(velocity)` | Gate an envelope |
 
@@ -297,7 +310,7 @@ Every value is chainable:
 ```ts
 osc({ freq, type?, width? })        // sine, saw, square, triangle
 lfo({ rate, shape?, width?, phase?, reset? })
-noise({ color? })                  // white, pink, brown
+noise({ color? })                  // white, pink, brown, blue, violet, grey; seeded per voice
 impulse({ gate? })
 wavetable({ freq, table?, position?, frameSize? })
 samplePlay({ rate?, gate?, position?, loop?, pitch?, table? })
@@ -317,7 +330,7 @@ filter.lowshelf(x, { freq, gainDb, q? })
 filter.highshelf(x, { freq, gainDb, q? })
 filter.onePoleLowpass(x, { cutoff })
 filter.onePoleHighpass(x, { cutoff })
-filter.svf(x, { cutoff, q?, mode? })
+filter.svf(x, { cutoff, q?, mode? })   // q up to 10,000: rings like a bell
 filter.ladder(x, { cutoff, resonance?, drive? })
 filter.comb(x, { freq, feedback?, mix? })
 filter.slope(x, { cutoff, poles?, mode? })
@@ -377,7 +390,7 @@ logic.and(a, b)   logic.or(a, b)   logic.xor(a, b)   logic.not(a)
 quantize(x, { root?, scale? })
 euclidean(clockIn, { steps?, hits?, rotation?, reset? })
 sequencer(clockIn, [ ... ], { reset? })
-random({ freq?, mode? })
+random({ freq?, mode? })              // seeded per voice, like noise
 slew(x, { rise?, fall? })
 sampleHold(x, { freq?, clock? })
 ```

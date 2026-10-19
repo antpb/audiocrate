@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AnalogKeyboard, COMPUTER_DEGREES, reconcileHeld } from './analogKeyboard';
 import { PatchEditor } from './editor';
 import { InspectorPanel } from './InspectorPanel';
+import { voicingView } from './compiledPlayback';
 import { PaletteNav } from './PaletteNav';
 import { isPaletteDrag, readPaletteKind } from './paletteDrag';
 import type { PaletteFilter } from './paletteFilter';
@@ -1187,6 +1188,12 @@ export function App() {
             }
           }}
           nodeId={selectedId}
+          voicing={selectedId && editorRef.current ? voicingView(editorRef.current.getPatch(), selectedId) : undefined}
+          onVoicing={(voicing) => {
+            if (!selectedId) return;
+            editorRef.current?.setNodeVoicing(selectedId, voicing);
+            setTick((n) => n + 1);
+          }}
           namFilename={material && selectedKind === 'amp' ? namFilename(material) : null}
           namFilenameR={material && selectedKind === 'amp' ? namFilenameR(material) : null}
           irFilename={material && selectedKind ? irFilename(material, selectedKind) : null}

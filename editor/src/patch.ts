@@ -28,6 +28,12 @@ export interface PatchNode {
   y: number;
   params: Record<string, number>;
   data?: Record<string, unknown>;
+  /**
+   * In an instrument, run this module per voice (`instanced`) or once on the
+   * sum of the voices (`summed`). Omitted means summed wherever the patch
+   * allows it (`src/patcher/voicing.ts`).
+   */
+  voicing?: 'instanced' | 'summed';
 }
 
 export interface PatchConnection {

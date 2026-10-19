@@ -31,9 +31,11 @@ public struct CrateParamDescriptor: Codable, Sendable, Equatable {
     public let options: [String]?
     /// Present on a toggle parameter: the labels for off and on.
     public let labels: [String]?
+    /// `false` on a continuous parameter that jumps rather than glides.
+    public let smooth: Bool?
 
     private enum CodingKeys: String, CodingKey {
-        case kind, min, max, address, label, unit, step, curve, options, labels
+        case kind, min, max, address, label, unit, step, curve, options, labels, smooth
         case defaultValue = "default"
     }
 
@@ -48,7 +50,8 @@ public struct CrateParamDescriptor: Codable, Sendable, Equatable {
         step: Double? = nil,
         curve: String? = nil,
         options: [String]? = nil,
-        labels: [String]? = nil
+        labels: [String]? = nil,
+        smooth: Bool? = nil
     ) {
         self.kind = kind
         self.min = min
@@ -61,6 +64,7 @@ public struct CrateParamDescriptor: Codable, Sendable, Equatable {
         self.curve = curve
         self.options = options
         self.labels = labels
+        self.smooth = smooth
     }
 
     /// A republished descriptor: the same declaration with a new default and
@@ -79,8 +83,16 @@ public struct CrateParamDescriptor: Codable, Sendable, Equatable {
             step: step,
             curve: curve,
             options: options,
-            labels: labels
+            labels: labels,
+            smooth: smooth
         )
+    }
+
+    /// Whether a host change glides (`isSmoothedParam` in param.ts): a
+    /// continuous value does, a stepped, enum or toggle one jumps, and
+    /// `smooth: false` makes a continuous one jump.
+    public var isSmoothed: Bool {
+        (kind == nil || kind == "range") && step == nil && smooth != false
     }
 
     /// Whether this parameter should appear in an `AUParameterTree`.
@@ -143,8 +155,22 @@ public struct CratePluginDocument: Decodable, Sendable {
     public let polyphony: Int?
     public let compiled: CompiledMaterialDocument?
 
+    /// The newest format this build reads, `CRATE_PLUGIN_MAX_VERSION` in
+    /// cratePlugin.ts. Format 2 adds `{ "ref": id }` in the compiled graph;
+    /// format 3 a split instrument's `sends` and `bus`.
+    public static let maxVersion = 3
+
+    /// Refuses a format newer than `maxVersion` before reading anything else,
+    /// so a host never runs the half of a file it happens to recognise.
     public static func decode(_ data: Data) throws -> CratePluginDocument {
-        try JSONDecoder().decode(CratePluginDocument.self, from: data)
+        struct Header: Decodable { let version: Int? }
+        if let version = try? JSONDecoder().decode(Header.self, from: data).version, version > maxVersion {
+            throw ASLCompileError(
+                "This crate.plugin is format \(version), written by a newer audiocrate; "
+                    + "this build reads up to format \(maxVersion)."
+            )
+        }
+        return try JSONDecoder().decode(CratePluginDocument.self, from: data)
     }
 
     /// The compiled form, or a refusal that says which half is missing.

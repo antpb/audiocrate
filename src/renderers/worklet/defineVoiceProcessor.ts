@@ -34,6 +34,7 @@ import type { KernelFactoryMap, KernelProcessor } from '../kernel';
 import { IR_KERNEL_SLOT, irKernelFactory } from '../kernels/irKernel';
 import { WASM_KERNEL_SLOT, isWasmKernelPayload, wasmKernelFactory } from '../kernels/wasmKernel';
 import { defineCrateFoaEncoder } from '../../spatial/worklet/defineFoaEncoder';
+import { registerProcessorOnce } from './registerOnce';
 
 /**
  * Kernels that belong in every crate worklet. IR is a primitive, not a
@@ -45,13 +46,53 @@ const CORE_KERNELS: KernelFactoryMap = {
   [WASM_KERNEL_SLOT]: wasmKernelFactory,
 };
 
+/**
+ * Under this a released voice counts as finished: -100 dBFS, far below what a
+ * converter expresses. `VoicePool.silenceFloor` in Swift.
+ */
+const SILENCE_FLOOR = 1e-5;
+/** Quiet blocks before an idle voice stops rendering. A few, so one zero crossing is never mistaken for the end. */
+const QUIET_BLOCKS_TO_IDLE = 4;
+
+function isSilent(channel: Float32Array | undefined): boolean {
+  if (!channel) return true;
+  for (let i = 0; i < channel.length; i++) {
+    const v = channel[i]!;
+    if (v > SILENCE_FLOOR || v < -SILENCE_FLOOR) return false;
+  }
+  return true;
+}
+
 interface CrateVoiceProcessorOptions {
   graph: ASLGraphDescriptor;
+  /** Chosen on the main thread by `WebAudioRenderer.createVoice`. */
+  seed?: number;
+  /**
+   * Parameter values the voice starts with, so its first block already has
+   * them. Sent as messages instead, they arrive after the node exists, and on
+   * a busy main thread the processor had rendered a block or two with every
+   * parameter at zero first: a ladder with drive 0 computes 0/0, and a filter
+   * holds a NaN forever once it has one.
+   */
+  params?: Record<string, number>;
+  /**
+   * Render a split instrument's voice alone (`compileVoice`'s `sends`), one
+   * output per send, for a host that sums many voices into one bus node.
+   * Off, a split graph renders its own bus and plays as one voice.
+   */
+  sends?: boolean;
 }
 
 export type PortMessage =
   | { type: 'noteOn'; params: Record<string, number> }
   | { type: 'noteOff' }
+  /**
+   * The host is done with this voice. `process` returns false from then on,
+   * which is the only thing that lets the browser release a processor:
+   * disconnecting the node does not, and one that returns true forever keeps
+   * its place on the audio thread for the life of the page.
+   */
+  | { type: 'dispose' }
   | { type: 'setParam'; name: string; value: number }
   | { type: 'loadKernel'; slot: string; payload: unknown }
   | { type: 'kernelMessage'; slot: string; message: unknown }
@@ -137,14 +178,36 @@ export function defineCrateVoiceProcessor(
      */
     private readonly dueScratch: TimedMidi[] = [];
     private auxScratch: Record<string, readonly (Float32Array | undefined)[] | undefined> | undefined;
+    /** Set by a `dispose` message; `process` returns false from then on. */
+    private disposed = false;
+    /**
+     * Consecutive blocks this voice has been released and silent. A pool
+     * keeps every voice it might need, and an idle one used to run its whole
+     * graph (reverb, filters, oscillators) into silence on every block: a
+     * pad of eight voices cost eight reverbs with one key down.
+     */
+    private quietBlocks = 0;
+    /** Outputs this voice writes its sends to; 0 for an ordinary voice. */
+    private readonly sendCount: number;
+    /** The voice's own mix of its sends, which idling is judged on. */
+    private mixScratch: Float32Array | undefined;
+    private readonly sendLeft: Float32Array[] = [];
+    private readonly sendRight: Float32Array[] = [];
 
     constructor(options?: AudioWorkletNodeOptions) {
       super(options);
-      const { graph } = (options?.processorOptions ?? {}) as CrateVoiceProcessorOptions;
-      this.voice = compileVoice(graph);
+      const { graph, seed, params, sends } = (options?.processorOptions ?? {}) as CrateVoiceProcessorOptions;
+      this.voice = compileVoice(graph, { sends: sends === true });
+      this.sendCount = sends === true ? this.voice.sendCount : 0;
       this.auxPorts = auxAudioPorts(graph);
-      this.state = this.voice.createState();
+      this.state = this.voice.createState({ seed });
       this.state.kernels = new Map();
+      // Before the first render, so nothing glides and nothing is read unset.
+      if (params) {
+        for (const [name, value] of Object.entries(params)) {
+          if (Number.isFinite(value)) this.voice.setParam(this.state, name, value);
+        }
+      }
 
       this.port.onmessage = (event: MessageEvent<PortMessage>) => {
         const msg = event.data;
@@ -155,8 +218,14 @@ export function defineCrateVoiceProcessor(
           case 'noteOff':
             this.voice.noteOff(this.state);
             break;
+          case 'dispose':
+            this.disposed = true;
+            this.eachKernel((k) => k.dispose?.());
+            break;
           case 'setParam':
-            this.state.params[msg.name] = msg.value;
+            // Glides a continuous parameter rather than stepping it; see
+            // `PARAM_RAMP_SECONDS`.
+            this.voice.setParam(this.state, msg.name, msg.value);
             break;
           case 'loadKernel':
             this.loadKernel(msg.slot, msg.payload).catch((err) => {
@@ -300,6 +369,16 @@ export function defineCrateVoiceProcessor(
       transport: TransportSnapshot,
     ): boolean {
       if (end <= start) return false;
+      let sends: { left: Float32Array[]; right: Float32Array[] } | undefined;
+      if (this.sendCount > 0) {
+        sends =
+          start === 0 && end === channel0.length
+            ? { left: this.sendLeft, right: this.sendRight }
+            : {
+                left: this.sendLeft.map((channel) => channel.subarray(start, end)),
+                right: this.sendRight.map((channel) => channel.subarray(start, end)),
+              };
+      }
       let ports = aux;
       if (aux && start !== 0) {
         // Sub-block splitting for sample-accurate MIDI has to slice the aux
@@ -326,6 +405,7 @@ export function defineCrateVoiceProcessor(
           // note, which is audible as a synced LFO stuttering under a busy
           // MIDI part.
           transport: advanceTransport(transport, start, sampleRate),
+          ...(sends ? { sends } : {}),
         },
       );
     }
@@ -359,10 +439,50 @@ export function defineCrateVoiceProcessor(
       });
     }
 
+    /**
+     * Whether this block can be skipped: the voice is released (gate low),
+     * has been silent for `QUIET_BLOCKS_TO_IDLE` blocks, nothing is due to
+     * wake it, and nothing is arriving at any input. The same rule the Swift
+     * `VoicePool` retires a tail by. A held voice is never skipped however
+     * quiet, so an insert (whose gate is held open) and a sustained note at
+     * zero level both keep running; a kernel voice is never skipped, because
+     * a kernel plays notes the gate does not describe.
+     */
+    private canIdle(
+      inL: Float32Array | undefined,
+      inR: Float32Array | undefined,
+      aux: Record<string, readonly (Float32Array | undefined)[] | undefined> | undefined,
+    ): boolean {
+      if (this.quietBlocks < QUIET_BLOCKS_TO_IDLE || this.state.gate || this.hasKernels()) return false;
+      if (this.scheduledMidi.length > 0 || this.pendingMidi.length > 0) return false;
+      if (!isSilent(inL) || !isSilent(inR)) return false;
+      if (aux) {
+        for (const channels of Object.values(aux)) {
+          if (channels) for (const channel of channels) if (!isSilent(channel)) return false;
+        }
+      }
+      return true;
+    }
+
     process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+      if (this.disposed) return false;
       const output = outputs[0];
-      const channel0 = output?.[0];
-      if (!channel0) return true;
+      const first = output?.[0];
+      if (!first) return true;
+      // A sends voice renders its mix into scratch and each send to its own
+      // output; anything else renders straight into output 0.
+      let channel0 = first;
+      if (this.sendCount > 0) {
+        if (!this.mixScratch || this.mixScratch.length !== first.length) {
+          this.mixScratch = new Float32Array(first.length);
+        }
+        channel0 = this.mixScratch;
+        for (let k = 0; k < this.sendCount; k++) {
+          const channels = outputs[k];
+          this.sendLeft[k] = channels?.[0] ?? new Float32Array(first.length);
+          this.sendRight[k] = channels?.[1] ?? new Float32Array(first.length);
+        }
+      }
 
       // An effect-style AudioMaterial's graph reads its upstream signal through a
       // plain 'input' param node (same mechanism note/velocity use), so an
@@ -373,7 +493,7 @@ export function defineCrateVoiceProcessor(
       const hasInput = inputChannel !== undefined && inputChannel.length === channel0.length;
       const inL = hasInput ? inputChannel : undefined;
       const inR = hasInput ? inputRight : undefined;
-      const outR = output[1];
+      const outR = this.sendCount > 0 ? undefined : output[1];
       const frames = channel0.length;
       const blockEnd = currentTime + frames / sampleRate;
 
@@ -409,6 +529,11 @@ export function defineCrateVoiceProcessor(
       // block however many times MIDI splits it.
       const transport = transportAt(this.transportAnchor, currentTime);
 
+      if (due.length === 0 && this.canIdle(inL, inR, aux)) {
+        for (const out of outputs) for (const channel of out) channel.fill(0);
+        return true;
+      }
+
       let wroteRight = false;
       if (due.length === 0) {
         wroteRight = this.renderRange(channel0, inL, inR, outR, aux, 0, frames, transport);
@@ -429,10 +554,33 @@ export function defineCrateVoiceProcessor(
 
       this.maybePostAnalysis();
 
+      if (this.state.gate) {
+        this.quietBlocks = 0;
+      } else {
+        let peak = 0;
+        for (let i = 0; i < frames; i++) {
+          const v = channel0[i]!;
+          const m = v < 0 ? -v : v;
+          if (m > peak) peak = m;
+        }
+        if (wroteRight && outR) {
+          for (let i = 0; i < frames; i++) {
+            const v = outR[i]!;
+            const m = v < 0 ? -v : v;
+            if (m > peak) peak = m;
+          }
+        }
+        this.quietBlocks = peak < SILENCE_FLOOR ? this.quietBlocks + 1 : 0;
+      }
+
       // `renderBlock` says whether it filled the right channel: a bound
       // source kernel does, and so does a stereo ASL graph. Anything else,
       // including a graph with a seam kernel in it, is one mono pass, so
       // mirror channel 0 across the rest.
+      if (this.sendCount > 0) {
+        if (!wroteRight) for (let k = 0; k < this.sendCount; k++) outputs[k]?.[1]?.set(this.sendLeft[k]!);
+        return true;
+      }
       if (!wroteRight) {
         for (let ch = 1; ch < output.length; ch++) {
           output[ch]?.set(channel0);
@@ -442,5 +590,5 @@ export function defineCrateVoiceProcessor(
     }
   }
 
-  registerProcessor(processorName, CrateVoiceProcessor);
+  registerProcessorOnce(processorName, CrateVoiceProcessor);
 }

@@ -103,6 +103,10 @@ public struct CratePatchNode: Codable, Sendable, Equatable, Identifiable {
     /// device, a monitor toggle. Untyped because crate core has no business
     /// enumerating what an editor keeps here.
     public var data: [String: ASLValue]?
+    /// In an instrument, run this module per voice (`instanced`) or once on
+    /// the sum of the voices (`summed`). Nil means summed wherever the patch
+    /// allows it (`VoicingPlan.swift`, `voicing.ts`).
+    public var voicing: Voicing?
 
     public init(
         id: String,
@@ -110,7 +114,8 @@ public struct CratePatchNode: Codable, Sendable, Equatable, Identifiable {
         x: Double = 0,
         y: Double = 0,
         params: [String: Double] = [:],
-        data: [String: ASLValue]? = nil
+        data: [String: ASLValue]? = nil,
+        voicing: Voicing? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -118,10 +123,11 @@ public struct CratePatchNode: Codable, Sendable, Equatable, Identifiable {
         self.y = y
         self.params = params
         self.data = data
+        self.voicing = voicing
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, x, y, params, data
+        case id, kind, x, y, params, data, voicing
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,6 +138,9 @@ public struct CratePatchNode: Codable, Sendable, Equatable, Identifiable {
         y = try container.decodeIfPresent(Double.self, forKey: .y) ?? 0
         params = try container.decodeIfPresent([String: Double].self, forKey: .params) ?? [:]
         data = try container.decodeIfPresent([String: ASLValue].self, forKey: .data)
+        // An unknown spelling is the default rather than a refused patch: a
+        // newer editor may say something this build does not.
+        voicing = (try? container.decodeIfPresent(String.self, forKey: .voicing)).flatMap { $0.flatMap(Voicing.init(rawValue:)) }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -142,7 +151,14 @@ public struct CratePatchNode: Codable, Sendable, Equatable, Identifiable {
         try container.encode(y, forKey: .y)
         try container.encode(params, forKey: .params)
         try container.encodeIfPresent(data, forKey: .data)
+        try container.encodeIfPresent(voicing?.rawValue, forKey: .voicing)
     }
+}
+
+/// Per voice or summed, in an instrument. See `CratePatchNode.voicing`.
+public enum Voicing: String, Codable, Sendable, Equatable {
+    case instanced
+    case summed
 }
 
 public struct CratePatchConnection: Codable, Sendable, Equatable, Hashable {

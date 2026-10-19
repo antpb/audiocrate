@@ -1,12 +1,14 @@
 import { ASLValue } from '../asl/ASLValue';
 import { createTrackedInputProxy, type ASLGraphDescriptor } from '../asl/graph';
+import type { ASLNode } from '../asl/types';
 import { audio, paramNode } from '../asl/builders';
 import { audioPortNames, auxAudioPorts } from '../asl/ports';
 import { AudioMaterialNotBoundError } from '../errors';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
+import { connectSplitVoices } from '../renderers/splitVoices';
 import { VoicePool, type VoiceBackend } from '../voices/VoicePool';
 import type { VoiceSnapshot, VoiceStealingPolicy } from '../voices/allocate';
-import { enumValue, formatParam, quantizeParam, type ParamDescriptor } from './param';
+import { enumValue, formatParam, isSmoothedParam, quantizeParam, type ParamDescriptor } from './param';
 
 /**
  * The object an AudioMaterial's `graph` builder receives. Arbitrary names
@@ -70,6 +72,18 @@ export interface AudioMaterialOptions {
    */
   channels?: 1 | 2;
   cvPolarity?: CvPolarity;
+  /**
+   * A split instrument's voice outputs (`ASLGraphDescriptor.sends`). Nodes
+   * inside the graph the builder returns; the builder's output must be their
+   * mix. Set by `flattenPatch` together with `bus`.
+   */
+  sends?: readonly ASLNode[];
+  /**
+   * What runs once on the sum of every voice: the summed modules of a patch
+   * (`flattenPatch`, `voicing`). Its ports `send0`..`sendN` read the voices'
+   * summed sends. Shares this material's parameter names.
+   */
+  bus?: AudioMaterial;
 }
 
 /**
@@ -86,6 +100,8 @@ export class AudioMaterial {
   readonly voiceStealing?: VoiceStealingPolicy;
   readonly cvPolarity: CvPolarity;
   readonly graph: ASLGraphDescriptor;
+  /** The summed half of a split instrument; see `AudioMaterialOptions.bus`. */
+  readonly bus?: AudioMaterial;
 
   /**
    * Where this AudioMaterial came from in a hosted project: that project's own
@@ -113,7 +129,10 @@ export class AudioMaterial {
   private readonly paramValues: Record<string, number>;
   private readonly graphBuilder: AudioMaterialGraphBuilder;
   private readonly channelCount?: 1 | 2;
+  private readonly sendNodes?: readonly ASLNode[];
   private pool: VoicePool | null = null;
+  /** The bus a split instrument's voices sum into, while bound. */
+  private busVoice: VoiceHandle | null = null;
 
   constructor(options: AudioMaterialOptions) {
     this.name = options.name;
@@ -136,6 +155,8 @@ export class AudioMaterial {
     this.paramValues = Object.fromEntries(Object.entries(this.params).map(([key, descriptor]) => [key, descriptor.default]));
     this.graphBuilder = options.graph;
     this.channelCount = options.channels;
+    this.sendNodes = options.sends;
+    this.bus = options.bus;
 
     const paramNodes: Record<string, ASLValue> = Object.fromEntries(
       Object.keys(this.params).map((key) => [key, paramNode(key)]),
@@ -145,7 +166,15 @@ export class AudioMaterial {
     if (!(output instanceof ASLValue)) {
       throw new TypeError(`AudioMaterial "${this.name}": graph builder must return an ASLValue.`);
     }
-    this.graph = { inputs: Object.keys(this.params), output: output.node, channels: options.channels };
+    const smooth = Object.keys(this.params).filter((key) => isSmoothedParam(this.params[key]!));
+    this.graph = {
+      inputs: Object.keys(this.params),
+      output: output.node,
+      channels: options.channels,
+      ...(smooth.length > 0 ? { smooth } : {}),
+      ...(options.sends && options.sends.length > 0 ? { sends: options.sends } : {}),
+      ...(options.bus ? { bus: options.bus.graph } : {}),
+    };
   }
 
   /**
@@ -240,6 +269,7 @@ export class AudioMaterial {
     const settled = quantizeParam(descriptor, value);
     this.paramValues[name] = settled;
     this.pool?.setParam(name, settled);
+    this.busVoice?.setParam(name, settled);
   }
 
   /** Sets a named option on an `enum` param. Throws on any other kind. */
@@ -279,17 +309,49 @@ export class AudioMaterial {
    * Pre-allocates `polyphony` renderer voices and connects them to
    * `destination` when given. Tests can pass fake backends via
    * `attachVoices` instead.
+   *
+   * `seed` makes the pool reproducible: voice `i` is seeded `seed + i`, so
+   * the voices stay independent of each other and identical across runs.
+   * Omitted, the renderer picks (a fresh random seed per voice, live).
    */
   async bind(
-    renderer: { createVoice: (graph: ASLGraphDescriptor) => Promise<VoiceHandle> },
+    renderer: {
+      createVoice: (
+        graph: ASLGraphDescriptor,
+        options?: { seed?: number; params?: Record<string, number>; sends?: boolean },
+      ) => Promise<VoiceHandle>;
+    },
     destination?: AudioNode,
+    options: { seed?: number } = {},
   ): Promise<void> {
     this.unbind();
     const voices: VoiceHandle[] = [];
+    // The current values travel with each voice, so none renders a block
+    // with its parameters unset before the first note brings them.
+    const params = this.snapshotParams();
+    // A split instrument's voices hand their sends to one bus voice, which
+    // is what reaches the destination; see `flattenPatch`'s `voicing`.
+    const split = this.graph.bus && this.graph.sends ? this.graph.sends.length : 0;
     for (let i = 0; i < this.polyphony; i++) {
-      const handle = await renderer.createVoice(this.graph);
-      if (destination) handle.node.connect(destination);
+      const handle = await renderer.createVoice(this.graph, {
+        params,
+        ...(options.seed === undefined ? {} : { seed: options.seed + i }),
+        ...(split > 0 ? { sends: true } : {}),
+      });
+      if (destination && split === 0) handle.node.connect(destination);
       voices.push(handle);
+    }
+    if (split > 0) {
+      // Seeded like voice 0, as a one-voice host seeds the bus it carries.
+      const bus = await renderer.createVoice(this.graph.bus!, {
+        params,
+        ...(options.seed === undefined ? {} : { seed: options.seed }),
+      });
+      // An effect on the voices' sum: its gate opens once and stays open.
+      bus.noteOn(params);
+      connectSplitVoices(voices, bus, split);
+      if (destination) bus.node.connect(destination);
+      this.busVoice = bus;
     }
     this.pool = new VoicePool(this, voices, this.voiceStealing ?? 'oldest');
   }
@@ -302,6 +364,7 @@ export class AudioMaterial {
   unbind(): void {
     this.pool?.allNotesOff();
     this.pool = null;
+    this.busVoice = null;
   }
 
   get isBound(): boolean {
@@ -347,6 +410,8 @@ export class AudioMaterial {
       graph: this.graphBuilder,
       channels: this.channelCount,
       cvPolarity: this.cvPolarity,
+      sends: this.sendNodes,
+      bus: this.bus?.duplicate(),
     });
     for (const [name, value] of Object.entries(this.snapshotParams())) {
       copy.setParam(name, value);

@@ -211,6 +211,42 @@ describe('range', () => {
     voice.noteOn(state, {});
     expect(voice.renderSample(state, SR)).toBeCloseTo(1400, 5);
   });
+
+  it('follows bounds that are parameters', () => {
+    // What XR Publisher hit: a parameter passed as a bound used to be written
+    // into the node's params as an object, and every sample was NaN.
+    const graph = ASL.node(({ lo, hi }) => lfo({ rate: uniform(0), shape: 'sine' }).range(lo!, hi!));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { lo: 100, hi: 300 });
+    expect(voice.renderSample(state, SR)).toBeCloseTo(200, 9);
+    state.params.hi = 500;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(300, 9);
+  });
+
+  it('maps both ends exactly with one bound constant and one live', () => {
+    const graph = ASL.node(({ s, hi }) => s!.range(-2, hi!));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { s: -1, hi: 6 });
+    expect(voice.renderSample(state, SR)).toBe(-2);
+    state.params.s = 1;
+    expect(voice.renderSample(state, SR)).toBe(6);
+  });
+
+  it('keeps constant bounds as one range node, so existing graphs serialize unchanged', () => {
+    const graph = ASL.node(({ s }) => s!.range(400, 2400));
+    expect(graph.output.kind).toBe('range');
+    expect(graph.output.params).toEqual({ min: 400, max: 2400 });
+  });
+
+  it('refuses a bound that is not a finite number', () => {
+    expect(() => ASL.node(({ s }) => s!.range(0, Number.NaN))).toThrow(RangeError);
+    // A document written by something other than the builder.
+    const graph = ASL.node(({ s }) => s!.range(0, 1));
+    const bad = { ...graph, output: { ...graph.output, params: { min: 0, max: { kind: 'param' } } } };
+    expect(() => compileVoice(bad)).toThrow(/range node .*"max" must be a finite number/);
+  });
 });
 
 describe('mix', () => {
@@ -635,6 +671,111 @@ describe('filter primitives: one-pole / allpass / svf / ladder / comb', () => {
     expect(last).toBeCloseTo(0.4, 2);
   });
 
+  it.each(['lowpass', 'highpass', 'bandpass'] as const)(
+    'SVF %s stays finite across the whole cutoff range at every Q',
+    (mode) => {
+      // Found by sweeping every palette parameter: at the palette's default Q
+      // of 0.5 this filter went NaN above 6.6 kHz, held or moving.
+      for (const q of [0.1, 0.5, 0.707, 1, 2, 20, 400]) {
+        const graph = ASL.node(({ x, fc }) => filter.svf(x!, { cutoff: fc!, q: uniform(q), mode }));
+        const voice = compileVoice(graph);
+        const state = voice.createState();
+        voice.noteOn(state, { x: 0, fc: 20 });
+        let peak = 0;
+        for (let i = 0; i < 24000; i++) {
+          state.params.x = Math.sin(i * 0.3) * 0.25;
+          state.params.fc = 20 * Math.pow(1000, Math.min(1, i / 12000));
+          const y = voice.renderSample(state, SR);
+          expect(Number.isFinite(y), `q ${q} at ${state.params.fc.toFixed(0)} Hz`).toBe(true);
+          peak = Math.max(peak, Math.abs(y));
+        }
+        // Bounded, not merely finite: gain at resonance is about Q.
+        expect(peak, `q ${q}`).toBeLessThan(Math.max(4, q * 2));
+      }
+    },
+  );
+
+  it('SVF bandpass rings for as long as its Q says', () => {
+    // A two-pole resonator's envelope decays with tau = 2Q / (2 pi fc). At
+    // Q 400 and 1 kHz that is 127 ms, so 100 ms in the ring should still be
+    // at exp(-100/127) = 0.45 of where it started. Under the old damping
+    // floor (Q capped at 20, tau 6.4 ms) it is at 1.6e-7.
+    const fc = 1000;
+    const q = 400;
+    const graph = ASL.node(({ x }) => filter.svf(x!, { cutoff: uniform(fc), q: uniform(q), mode: 'bandpass' }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { x: 1 });
+    const out: number[] = [];
+    for (let i = 0; i < SR * 0.12; i++) {
+      out.push(voice.renderSample(state, SR));
+      state.params.x = 0;
+    }
+    const peakIn = (fromSec: number) => {
+      let peak = 0;
+      for (let i = Math.round(fromSec * SR); i < Math.round((fromSec + 0.005) * SR); i++) {
+        peak = Math.max(peak, Math.abs(out[i]!));
+      }
+      return peak;
+    };
+    const ratio = peakIn(0.1) / peakIn(0.002);
+    const tau = (2 * q) / (2 * Math.PI * fc);
+    expect(ratio).toBeCloseTo(Math.exp(-0.098 / tau), 1);
+  });
+
+  it.each(['lowshelf', 'highshelf'] as const)('a %s on a deep cut with a steep slope stays finite', (kind) => {
+    // Found by the motion fixture: -17.28 dB at q 3.96, inside the shelf
+    // material's own ranges, drove the slope-form radicand to -0.29. alpha
+    // was NaN and the NaN latched into the filter for the rest of the voice.
+    const graph = ASL.node(({ x }) =>
+      filter[kind](x!, { freq: uniform(1782.5), gainDb: uniform(-17.28), q: uniform(3.961) }),
+    );
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { x: 0 });
+    let peak = 0;
+    for (let i = 0; i < 4800; i++) {
+      state.params.x = Math.sin(i * 0.2) * 0.5;
+      const y = voice.renderSample(state, SR);
+      expect(Number.isFinite(y)).toBe(true);
+      peak = Math.max(peak, Math.abs(y));
+    }
+    // A cut shelf, capped at Q 10 resonance, does not blow up either.
+    expect(peak).toBeLessThan(2);
+  });
+
+  it.each([
+    ['attack', 0],
+    ['decay', 0.4],
+    ['release', 0.9],
+  ] as const)('changing %s mid-stage keeps the envelope level continuous', (stage, atSec) => {
+    // Found by sweeping every palette parameter: the level is
+    // start + span * elapsed / duration, so a new duration used to teleport it
+    // (up to 0.55 on attack). The fraction done is kept instead.
+    const graph = ASL.node(({ a, d, r }) =>
+      env.dahdsr({ attack: a!, decay: d!, sustain: uniform(0.3), release: r! }),
+    );
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { a: 0.5, d: 0.5, r: 0.5 });
+    let prev = 0;
+    let worst = 0;
+    for (let i = 0; i < SR * 1.6; i++) {
+      const t = i / SR;
+      if (stage === 'release' && i === Math.round(SR * 1.05)) voice.noteOff(state);
+      // Knob-rate steps on the stage's time, from well into the stage.
+      if (t > atSec + 0.1 && i % 800 === 0) {
+        const key = stage === 'attack' ? 'a' : stage === 'decay' ? 'd' : 'r';
+        state.params[key] = state.params[key] === 0.5 ? 0.05 : 0.5;
+      }
+      const y = voice.renderSample(state, SR);
+      if (i > 0) worst = Math.max(worst, Math.abs(y - prev));
+      prev = y;
+    }
+    // The fastest legitimate slope here is a full-scale ramp over 50 ms.
+    expect(worst).toBeLessThan(1 / (0.05 * SR) + 1e-9);
+  });
+
   it('ladder at resonance 0 has unity DC gain', () => {
     const graph = ASL.node(() =>
       filter.ladder(uniform(0.5), { cutoff: uniform(200), resonance: uniform(0) }),
@@ -983,6 +1124,87 @@ describe('remaining section 5 primitives', () => {
     const first = voice.renderSample(state, SR);
     expect(first).toBeCloseTo(0.2, 5);
     for (let i = 0; i < 8; i++) voice.renderSample(state, SR);
+    expect(voice.renderSample(state, SR)).toBe(0);
+  });
+
+  it('a trig edge restarts a sample that has already finished', () => {
+    // The jack somebody cables a clock into. `gate` cannot do this job on its
+    // own: a one-shot that has run out is not playing, and a level that is
+    // already high has no edge left to give.
+    const table = new Float32Array([0.2, 0.4, 0.6, 0.8]);
+    let trig = 0;
+    const graph = ASL.node(({ t }) => samplePlay({ rate: uniform(1), trig: t, table }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    // Note off, so the voice gate is out of the picture and the trig jack is
+    // the only thing that can make a sound here.
+    voice.noteOn(state, { t: 0 });
+    voice.noteOff(state);
+
+    // Nothing has triggered it, so it is silent however long we wait.
+    for (let i = 0; i < 8; i++) expect(voice.renderSample(state, SR)).toBe(0);
+
+    state.params.t = 1;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    state.params.t = 0;
+    for (let i = 0; i < 8; i++) voice.renderSample(state, SR);
+    expect(voice.renderSample(state, SR)).toBe(0);
+
+    // And again, from the same finished state.
+    state.params.t = 1;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+  });
+
+  it('a reset edge moves the playhead without restarting a finished sample', () => {
+    const table = new Float32Array([0.2, 0.4, 0.6, 0.8]);
+    const graph = ASL.node(({ r }) => samplePlay({ rate: uniform(1), reset: r, table }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    // The voice gate starts it; reset is only ever asked to move the playhead.
+    voice.noteOn(state, { r: 0 });
+
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.4, 5);
+
+    // Mid-flight: back to the top, still playing.
+    state.params.r = 1;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    state.params.r = 0;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.4, 5);
+
+    // Run it out, then reset again. This one does not start anything: that is
+    // the whole difference between reset and trig.
+    for (let i = 0; i < 8; i++) voice.renderSample(state, SR);
+    state.params.r = 1;
+    expect(voice.renderSample(state, SR)).toBe(0);
+  });
+
+  it('releasing the gate stops the sample', () => {
+    const table = new Float32Array([0.2, 0.4, 0.6, 0.8, 0.9, 0.9, 0.9, 0.9]);
+    const graph = ASL.node(({ g }) => samplePlay({ rate: uniform(1), gate: g, table }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    // Note off first: the cabled gate and the voice's own are ORed, so a held
+    // voice gate would keep this playing whatever the jack did.
+    voice.noteOn(state, { g: 1 });
+    voice.noteOff(state);
+
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    state.params.g = 0;
+    expect(voice.renderSample(state, SR)).toBe(0);
+  });
+
+  it('the voice gate plays a sample nothing is cabled to', () => {
+    // What a keyboard does to a Sample Player. Before `gate` was ORed with the
+    // voice's own, the material wired this inlet to its audio port and a note
+    // could never reach the node at all.
+    const table = new Float32Array([0.2, 0.4, 0.6, 0.8]);
+    const graph = ASL.node(() => samplePlay({ rate: uniform(1), table }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, {});
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    voice.noteOff(state);
     expect(voice.renderSample(state, SR)).toBe(0);
   });
 
