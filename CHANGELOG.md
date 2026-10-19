@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3
 
-Everything since 0.2.1. An instrument sums its voices into the effects after
+An instrument now sums its voices into the effects after
 them, `noise` and `random` are seeded, and the browser patcher plays a patch
 as the graph the plugin ships. Existing golden renders are unchanged; the
 conformance fixture grew from 103 cases to 115, additions only. Where a sound
