@@ -1030,13 +1030,12 @@ extension CompiledVoice {
 
     func evalSamplePlay(_ node: PlanNode, _ state: VoiceState, _ sr: Double) -> Double {
         let rate = ev(node, .rate, state, sr)
-        // The level gate, ORed with the voice's own. A sampler with a keyboard
-        // on it should play from the keys, and before this the material wired
-        // `gate` to its audio port, which meant `state.gate` was never
-        // consulted and no note could ever reach it. An insert holds its gate
-        // open for its whole life, so there this reads as one rise at load and
-        // nothing after.
-        let gated = (node.has(.gate) ? ev(node, .gate, state, sr) > 0.5 : false) || state.gate
+        // The level gate. Nothing cabled, or a cable ORed with the voice: a
+        // keyboard plays the sample, and an insert held open reads as one rise
+        // at load. Mode 1 (`voiceGate: false`) leaves the voice out of it, so
+        // a low cable stays silent while the voice is open.
+        let signalGate = node.has(.gate) ? ev(node, .gate, state, sr) > 0.5 : false
+        let gated = node.m == 1 ? signalGate : signalGate || state.gate
         // Edge jacks. `trig` restarts the sample and `reset` only moves the
         // playhead: the difference between them is whether something that has
         // already finished starts again.

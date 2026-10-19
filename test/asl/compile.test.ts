@@ -1194,6 +1194,20 @@ describe('remaining section 5 primitives', () => {
     expect(voice.renderSample(state, SR)).toBe(0);
   });
 
+  it('declining the voice gate keeps a note from starting the sample', () => {
+    const table = new Float32Array([0.2, 0.4, 0.6, 0.8]);
+    const graph = ASL.node(({ t }) => samplePlay({ rate: uniform(1), trig: t, voiceGate: false, table }));
+    const voice = compileVoice(graph);
+    const state = voice.createState();
+    voice.noteOn(state, { t: 0 });
+    for (let i = 0; i < 4; i++) expect(voice.renderSample(state, SR)).toBe(0);
+    state.params.t = 1;
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.2, 5);
+    state.params.t = 0;
+    voice.noteOff(state);
+    expect(voice.renderSample(state, SR)).toBeCloseTo(0.4, 5);
+  });
+
   it('the voice gate plays a sample nothing is cabled to', () => {
     // What a keyboard does to a Sample Player. Before `gate` was ORed with the
     // voice's own, the material wired this inlet to its audio port and a note

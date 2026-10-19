@@ -293,6 +293,10 @@ private func planMode(_ node: ASLNodeDocument, kind: NodeKind) -> Int {
         case "gate": return 3
         default: return 0
         }
+    case .samplePlay:
+        // 1: the cabled gate is the only level. 0: OR the voice gate.
+        if case .bool(false) = p["voiceGate"] { return 1 }
+        return 0
     default:
         return 0
     }

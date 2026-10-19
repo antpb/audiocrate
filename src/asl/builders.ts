@@ -855,7 +855,10 @@ export function wavetable(
 export function samplePlay(
   opts: {
     rate?: ASLValueLike;
-    /** Level. High plays, low stops, and the voice's own gate is ORed in. */
+    /**
+     * Level. High plays, low stops. ORed with the voice gate unless
+     * `voiceGate` is false, in which case this cable is the only level.
+     */
     gate?: ASLValueLike;
     /** Edge. Starts the sample again from `position`. */
     trig?: ASLValueLike;
@@ -864,6 +867,11 @@ export function samplePlay(
     position?: ASLValueLike;
     loop?: ASLValueLike;
     pitch?: ASLValueLike;
+    /**
+     * When false, a note-on does not start this playhead. The default follows
+     * the voice, so a keyboard plays a sample with nothing cabled to `gate`.
+     */
+    voiceGate?: boolean;
     box?: SampleBox;
     table?: Float32Array;
   } = {},
@@ -875,7 +883,13 @@ export function samplePlay(
   if (opts.position !== undefined) inputs.position = toNode(opts.position);
   if (opts.loop !== undefined) inputs.length = toNode(opts.loop);
   if (opts.pitch !== undefined) inputs.pitch = toNode(opts.pitch);
-  return new ASLValue(makeNode('samplePlay', inputs, { box: opts.box, table: opts.table ?? opts.box?.samples }));
+  return new ASLValue(
+    makeNode('samplePlay', inputs, {
+      box: opts.box,
+      table: opts.table ?? opts.box?.samples,
+      ...(opts.voiceGate === false ? { voiceGate: false } : {}),
+    }),
+  );
 }
 
 export function grain(

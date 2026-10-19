@@ -328,6 +328,10 @@ function planMode(node: ASLNode): number {
       return (p.mode as RectifyMode) === 'half' ? 1 : 0;
     case 'compare':
       return (p.mode as CompareMode) === 'lt' ? 1 : 0;
+    case 'samplePlay':
+      // 1: the cabled gate is the only level. 0: OR the voice gate, which is
+      // also the level when nothing is cabled.
+      return p.voiceGate === false ? 1 : 0;
     case 'svf': {
       const mode = (p.mode as SvfMode) ?? 'lowpass';
       return mode === 'highpass' ? 1 : mode === 'bandpass' ? 2 : 0;
@@ -3372,13 +3376,13 @@ function compileGraph(graph: ASLGraphDescriptor): CompiledVoice {
 
   function evalSamplePlay(node: PlanNode, state: VoiceRuntimeState, sampleRate: number): number {
     const rate = evalNode(node.inputs.rate!, state, sampleRate);
-    // The level gate, ORed with the voice's own. A sampler with a keyboard on
-    // it should play from the keys, and before this the material wired `gate`
-    // to its audio port, which meant `state.gate` was never consulted and no
-    // note could ever reach it. An insert's gate is held open for its whole
-    // life, so there it reads as one rise at load and nothing after.
-    const gated =
-      (node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : false) || state.gate;
+    // The level gate. Nothing cabled, or a cable ORed with the voice: a
+    // keyboard plays the sample, and an insert held open reads as one rise
+    // at load. `voiceGate: false` (plan mode 1) leaves the voice out of it,
+    // so a low cable stays silent while the voice is open. Sixteen playheads
+    // in one voice need that, or any note starts all of them.
+    const signalGate = node.inputs.gate ? evalNode(node.inputs.gate, state, sampleRate) > 0.5 : false;
+    const gated = node.m === 1 ? signalGate : signalGate || state.gate;
     // Edge jacks. `trig` restarts the sample, `reset` only moves the playhead:
     // the difference is whether something that has finished starts again.
     const trig = node.inputs.trig ? evalNode(node.inputs.trig, state, sampleRate) > 0.5 : false;

@@ -76,9 +76,13 @@ function padGate(note: ASLValue, gate: ASLValue, pad: number): ASLValue {
  * ## Retriggering
  *
  * `VoicePool` gates off before it gates on when it reuses a slot, so hitting
- * one pad twice does produce two edges. The pad's own gate is the voice gate
- * ANDed with a note match, which means the other fifteen pads see no edge
- * and keep playing: exactly the AU's "note-offs are ignored".
+ * one pad twice does produce two edges. Each pad's hit is that edge on
+ * `trig`: the voice gate ANDed with a note match. The other fifteen see no
+ * edge and keep playing, which is the AU ignoring note-offs.
+ *
+ * `voiceGate: false` is what makes the note match mean anything. `samplePlay`
+ * otherwise ORs its level with the voice's own, and this instrument is one
+ * voice, so any note would start all sixteen playheads.
  */
 function drumGraph(boxes: SampleBox[], sampleRate: number) {
   return ({ note, velocity, params }: AudioMaterialGraphContext): ASLValue => {
@@ -88,24 +92,20 @@ function drumGraph(boxes: SampleBox[], sampleRate: number) {
 
     const pads: ASLValue[] = [];
     for (let pad = 0; pad < NUM_PADS; pad++) {
-      const padNote = PAD_BASE_NOTE + pad;
-      const isPad = logic.and(
-        compare(note, { threshold: padNote - 0.5, mode: 'gt' }),
-        compare(note, { threshold: padNote + 0.5, mode: 'lt' }),
-      );
-      const padGate = gate.mul(isPad);
+      const hit = padGate(note, gate, pad);
       // Velocity, latched at this pad's own trigger. The AU keeps
       // `padVelocities[i]` from note-on until the pad is hit again; without
       // the latch a hit on any other pad would re-scale this one mid-decay.
       const padVelocity = env
-        .dahdsr({ attack: 0, decay: 0, sustain: 1, release: LATCH_RELEASE_SECONDS, gate: padGate })
+        .dahdsr({ attack: 0, decay: 0, sustain: 1, release: LATCH_RELEASE_SECONDS, gate: hit })
         .trigger(velocity);
 
       const p = (bank: Parameters<typeof padParamName>[0]) => params[padParamName(bank, pad)]!;
 
       const dry = samplePlay({
         rate: 1,
-        gate: padGate,
+        trig: hit,
+        voiceGate: false,
         position: p('sampleStart'),
         pitch: p('pitch'),
         box: boxes[pad],
@@ -186,7 +186,8 @@ function drumLiveGraph(boxes: SampleBox[]) {
       const p = (bank: Parameters<typeof padParamName>[0]) => params[padParamName(bank, pad)]!;
       return samplePlay({
         rate: 1,
-        gate: hit,
+        trig: hit,
+        voiceGate: false,
         position: p('sampleStart'),
         pitch: p('pitch'),
         box: boxes[pad],
