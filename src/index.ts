@@ -6,6 +6,7 @@ export {
   planScenePlayback,
   type PlaybackPlan,
   type PlannedClipJob,
+  type PlannedStreamJob,
   type PlannedMidiJob,
   type PlannedMidiCcJob,
   type PlanScenePlaybackInput,
@@ -19,7 +20,11 @@ export {
   type LiveWasmBinaries,
   type LiveTrackVoices,
   type LiveSceneVoices,
+  type LiveInstrumentPool,
+  type PrepareLiveVoicesOptions,
 } from './playback/liveVoices';
+export { scheduledPoolTarget, type ScheduledPoolTarget } from './playback/scheduledPool';
+export { projectFaderGain } from './loaders/ProjectLoader';
 export {
   HostedAutomationBridge,
   type ClipGainTarget,
@@ -54,7 +59,23 @@ export {
 } from './renderers/WebAudioRenderer';
 export { OfflineRenderer, type OfflineRenderOptions, type OfflineRenderResult } from './renderers/OfflineRenderer';
 export { AudioNode3, type AudioNode3Options } from './graph/AudioNode3';
-export { Track, type TrackOptions, type ScheduledClip, type ScheduledMidiClip } from './graph/Track';
+export { Track, type TrackOptions, type ScheduledClip, type ScheduledMidiClip, type ScheduledStreamClip } from './graph/Track';
+export { StreamClip, type StreamClipOptions, type StreamSource, type StreamOutputNode } from './stream/StreamClip';
+export { MseStreamSource, type MseStreamSourceOptions } from './stream/MseStreamSource';
+export { planStreamWork, segmentAt, type StreamSegment, type StreamWork, type StreamWorkInput } from './stream/fetchPlan';
+export { holdWhileBuffering, type BufferingGuard, type BufferingGuardOptions } from './stream/bufferingGuard';
+export {
+  RenderedStreamSource,
+  combineStreamSources,
+  type RenderedStreamSourceOptions,
+} from './stream/RenderedStreamSource';
+export {
+  BlockGraph,
+  BlockNode,
+  captureVoiceProcessor,
+  type VoiceProcessorClass,
+} from './render/blockGraph';
+export { TrackRender, isRenderableTrack, type TrackRenderOptions } from './render/trackRender';
 export { Bus, type BusOptions } from './graph/Bus';
 export { Clip, type ClipOptions, type AudioBufferLike } from './graph/Clip';
 export {
@@ -779,6 +800,17 @@ export {
   type CompiledMaterialDocument,
   type CompileCratePluginOptions,
 } from './patcher/compiledPlugin';
+export {
+  materialFromCompiled,
+  decodeNativeCratePreset,
+  nativeCrateInstrumentPlugin,
+  nativeCrateEffectPlugin,
+  HOMECRATE_CRATE_SUBTYPE,
+  HOMECRATE_CRATE_MANUFACTURER,
+  CRATE_COMPILED_ASSET,
+  CRATE_SEED_ASSET,
+  type NativeCratePreset,
+} from './patcher/nativeCrate';
 export {
   Vec3,
   NAMED_POSITIONS,

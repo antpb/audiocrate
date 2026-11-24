@@ -50,7 +50,7 @@ extension CompiledVoice {
                 let slave = mem.pointee.s0 < 0.5 ? 1.0 : -1.0
                 return (master + slave) * 0.5
             }
-            let out = oscillatorSample(shape, mem.pointee.phase, width, freq, sr)
+            let out = oscillatorSample(shape, mem.pointee.phase, width, freq, sr, mem)
             mem.pointee.phase = wrapMod(mem.pointee.phase + increment, 1)
             return out
 
@@ -92,7 +92,7 @@ extension CompiledVoice {
                 let slave = shift(mem.pointee.s0) < 0.5 ? 1.0 : -1.0
                 return (master + slave) * 0.5
             }
-            let out = oscillatorSample(shape, shift(mem.pointee.phase), width, rate, sr)
+            let out = oscillatorSample(shape, shift(mem.pointee.phase), width, rate, sr, mem)
             mem.pointee.phase = wrapMod(mem.pointee.phase + increment, 1)
             return out
 

@@ -137,7 +137,7 @@ describe('prepareLiveVoices', () => {
     expect(calls).toHaveLength(3); // master insert + track insert + track instrument
   });
 
-  it('does not compile a drum instrument into a worklet', async () => {
+  it('plays a drum instrument as a pool, never as one MIDI voice', async () => {
     const track = new Track({ name: 'T' });
     track.instrument = new AudioMaterial({
       name: 'Drum',
@@ -148,6 +148,24 @@ describe('prepareLiveVoices', () => {
     const { renderer, calls } = fakeRenderer();
     const voices = await prepareLiveVoices(renderer, [track], new Bus({ name: 'Master' }), {}, registry);
     expect(voices.tracks.get(track.id)!.instrument).toBeUndefined();
+    expect(voices.tracks.get(track.id)!.instrumentPool?.voices).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('leaves a drum to the host when the host pools instruments itself', async () => {
+    const track = new Track({ name: 'T' });
+    track.instrument = new AudioMaterial({
+      name: 'Drum',
+      kind: 'drum',
+      params: {},
+      graph: ({ input }) => input,
+    });
+    const { renderer, calls } = fakeRenderer();
+    const voices = await prepareLiveVoices(renderer, [track], new Bus({ name: 'Master' }), {}, registry, {
+      poolInstruments: false,
+    });
+    expect(voices.tracks.get(track.id)!.instrument).toBeUndefined();
+    expect(voices.tracks.get(track.id)!.instrumentPool).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
 

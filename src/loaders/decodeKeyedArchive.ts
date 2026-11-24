@@ -88,7 +88,10 @@ function parseBplist(bytes: Uint8Array): PlistValue {
     } else if (kind === 0x5 || kind === 0x6 || kind === 0x7) {
       const counted = readCounted(offset, info);
       if (kind === 0x5) {
-        value = String.fromCharCode(...bytes.subarray(counted.dataOffset, counted.dataOffset + counted.length));
+        // Latin-1, not `String.fromCharCode(...bytes)`: spreading a long
+        // string (a crate AU's compiled graph runs to hundreds of kB) as
+        // arguments overflows the stack.
+        value = new TextDecoder('latin1').decode(bytes.subarray(counted.dataOffset, counted.dataOffset + counted.length));
       } else if (kind === 0x6) {
         value = new TextDecoder('utf-16be').decode(
           bytes.subarray(counted.dataOffset, counted.dataOffset + counted.length * 2),

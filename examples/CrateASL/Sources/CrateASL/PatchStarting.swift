@@ -66,14 +66,21 @@ public enum CrateGenStart {
     /// is slow, and scoring the two words alike sent it to Slow Panner.
     public static func score(_ prompt: String, _ entry: FactoryLibrary.Entry) -> Int {
         let words = CratePatchEditor.requestWords(prompt).filter { $0.count > 2 }
-        let name = CratePatchEditor.requestWords(entry.name + " " + entry.category)
+        let name = CratePatchEditor.requestWords(entry.name)
+        let category = CratePatchEditor.requestWords(entry.category)
         let blurb = CratePatchEditor.requestWords(entry.blurb)
         var total = 0
+        // The category counts like the blurb, not like the name. Counted
+        // like the name, "crushing" matched "Drive & Crush" and gave every
+        // distortion in it the Bitcrusher's score, so "a flanger with bit
+        // crushing" was offered eight distortions and one flanger.
         for word in Set(words) {
             if name.contains(where: { same(word, $0) }) { total += 3 }
-            else if blurb.contains(where: { same(word, $0) }) { total += 1 }
+            else if category.contains(where: { same(word, $0) }) || blurb.contains(where: { same(word, $0) }) { total += 1 }
         }
-        if let head = headWord(prompt), name.contains(where: { same(head, $0) }) { total += 2 }
+        // The head noun may still be the category: "a lush reverb" is about
+        // reverbs, and every one of them is in Reverb & Space.
+        if let head = headWord(prompt), (name + category).contains(where: { same(head, $0) }) { total += 2 }
         return total
     }
 

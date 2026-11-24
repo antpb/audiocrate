@@ -63,6 +63,9 @@ export class AudioMaterialRegistry {
    * identity: the same product often registers twice, once as a plain
    * effect and once as a MIDI effect, with the same subtype.
    *
+   * A claim that lists `componentTypes` also requires the slot's type to be
+   * one of them, when the slot has a type at all.
+   *
    * An entry with no manufacturer, or a manufacturer of 0, matches on
    * subtype alone. A host may know less about a slot than the plugin
    * declares.
@@ -73,6 +76,9 @@ export class AudioMaterialRegistry {
       const claim = plugin.host;
       if (!claim) continue;
       if (claim.componentSubType !== identity.componentSubType) continue;
+      if (claim.componentTypes && identity.componentType !== undefined && identity.componentType !== 0) {
+        if (!claim.componentTypes.includes(identity.componentType)) continue;
+      }
       if (hasManufacturer(claim.componentManufacturer) && hasManufacturer(identity.componentManufacturer)) {
         if (claim.componentManufacturer !== identity.componentManufacturer) continue;
       }

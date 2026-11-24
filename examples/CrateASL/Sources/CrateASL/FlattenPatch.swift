@@ -103,6 +103,21 @@ public enum CrateFlatten {
         role: Role? = nil,
         polyphony: Int? = nil
     ) throws -> CompiledMaterialDocument {
+        try flattenWithProbes(patch, catalog: catalog, name: name, role: role, polyphony: polyphony).document
+    }
+
+    /// `flatten`, and where each module's output ended up: the flat node that
+    /// is its output, by patch node id (`ProbeSite`, Probes.swift). The
+    /// document is identical to `flatten`'s; the sites are read off the
+    /// build it already does, so asking for them costs nothing at render time
+    /// and changes nothing about the graph.
+    public static func flattenWithProbes(
+        _ patch: CratePatch,
+        catalog: MaterialCatalog,
+        name: String = "Patch",
+        role: Role? = nil,
+        polyphony: Int? = nil
+    ) throws -> (document: CompiledMaterialDocument, probes: [String: ProbeSite]) {
         let io = catalog.io
         let role = role ?? detectRole(patch, catalog: catalog)
         let ids = NodeIdAllocator()
@@ -300,6 +315,17 @@ public enum CrateFlatten {
             if split && r != .instanced { busFlat[id] = build(id, .bus) }
         }
 
+        // A summed module is read where it runs, on the bus; every other one
+        // (instanced, or global and so on both sides) on the voice side.
+        var probes = [String: ProbeSite]()
+        for id in order {
+            if split, roleOf(id) == .summed, let node = busFlat[id] {
+                probes[id] = ProbeSite(flatId: node.id, onBus: true)
+            } else if let node = voiceFlat[id] {
+                probes[id] = ProbeSite(flatId: node.id, onBus: false)
+            }
+        }
+
         let outputSide: Side = split ? .bus : .voice
         var outputs = [FlatNode]()
         for connection in patch.connections where kinds[connection.target] == io.master {
@@ -357,7 +383,7 @@ public enum CrateFlatten {
 
         let smooth = Self.smoothList(publishedOrder, published)
         guard split, !sends.isEmpty else {
-            return CompiledMaterialDocument(
+            let single = CompiledMaterialDocument(
                 graph: ASLGraphDocument(inputs: publishedOrder, output: document(output), smooth: smooth),
                 params: published,
                 name: name,
@@ -365,6 +391,8 @@ public enum CrateFlatten {
                 polyphony: voices,
                 ports: portNames(output)
             )
+            // Not split after all, so nothing is on a bus.
+            return (single, probes.mapValues { ProbeSite(flatId: $0.flatId, onBus: false) })
         }
 
         // Split: the voices render their sends, and `output` (built on the
@@ -372,7 +400,7 @@ public enum CrateFlatten {
         let voiceOutput = mix(sends, ids: ids)
         var memo = [Int: ASLNodeDocument]()
         let voiceDocument = document(voiceOutput, memo: &memo)
-        return CompiledMaterialDocument(
+        let compiled = CompiledMaterialDocument(
             graph: ASLGraphDocument(
                 inputs: publishedOrder,
                 output: voiceDocument,
@@ -386,6 +414,7 @@ public enum CrateFlatten {
             polyphony: voices,
             ports: portNames(voiceOutput)
         )
+        return (compiled, probes)
     }
 
     /// Whether any summed module is actually heard; a dead end does not

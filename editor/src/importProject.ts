@@ -7,6 +7,7 @@ import {
   listPluginSlots,
   mapPluginSlot,
   parseProject,
+  projectFaderGain,
   barBeats,
   TRANSPORT_KIND,
   resolveAudioPath,
@@ -333,8 +334,9 @@ async function buildImportedProject(
     }
 
     const muted = Boolean(track.isMuted || track.muted);
+    // A stored fader position; the app's gain is its cube (projectFaderGain).
     const rawVolume = typeof track.volume === 'number' ? track.volume : 1;
-    const volume = muted ? 0 : clamp(rawVolume, 0, 4);
+    const volume = muted ? 0 : projectFaderGain(rawVolume);
     const pan = clamp(typeof track.pan === 'number' ? track.pan : 0, -1, 1);
     const gainId = addNode(`t${track.trackIndex}-gain`, 'gain', 36 + col * COL, y, { gain: volume });
     if (sourceIds.length > 0) feed(gainId);

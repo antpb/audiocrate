@@ -27,8 +27,9 @@ export interface VoiceHandle {
    * so GC cannot collect the driver mid-play.
    */
   readonly driver?: ConstantSourceNode;
-  noteOn(params: Record<string, number>): void;
-  noteOff(): void;
+  /** `when` is AudioContext time; absent, at once. */
+  noteOn(params: Record<string, number>, when?: number): void;
+  noteOff(when?: number): void;
   /** Updates one param on the already-running voice, e.g. an inspector slider moved mid-note. */
   setParam(name: string, value: number): void;
   /**
@@ -365,8 +366,9 @@ export class WebAudioRenderer {
         }
         return index + 1;
       },
-      noteOn: (params: Record<string, number>) => node.port.postMessage({ type: 'noteOn', params }),
-      noteOff: () => node.port.postMessage({ type: 'noteOff' }),
+      noteOn: (params: Record<string, number>, when?: number) =>
+        node.port.postMessage(when === undefined ? { type: 'noteOn', params } : { type: 'noteOn', params, when }),
+      noteOff: (when?: number) => node.port.postMessage(when === undefined ? { type: 'noteOff' } : { type: 'noteOff', when }),
       setParam: (name: string, value: number) => node.port.postMessage({ type: 'setParam', name, value }),
       loadKernel: (slot: string, payload: unknown) => {
         const ready = waitForKernel(slot);

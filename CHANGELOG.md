@@ -1,5 +1,121 @@
 # Changelog
 
+## 0.4.0
+
+A track can play a stream, a homecrate project's crate AU plays on the web
+from the compiled graph the slot saved, and a pure ASL instrument plays the
+scene's MIDI on a voice pool scheduled to the sample. CrateC runs those
+patches live in WASM, and a worker can render a track ahead of the playhead
+the way live playback would.
+
+### Added
+
+- **Streaming sources.** A `StreamClip` plays network-fed audio on a track
+  (`track.addStream(clip, { at })`) without decoding the whole file first.
+  The plan gives it a window like a clip (`plan.streamJobs`), and
+  `ScenePlayback` starts it at the same origin and routes it through the
+  track's chain, so meters, analysers and AudioMaterials see it like any
+  clip. Trims, fades, stretch and offline rendering stay with `Clip`.
+- **`MseStreamSource`**, the browser `StreamSource`: Media Source
+  Extensions (or `ManagedMediaSource` on iOS 17.1+) into an audio element,
+  joined to the graph by a `MediaElementAudioSourceNode`. The host supplies
+  `loadInit` and `loadSegment`; the source fetches the segment under the
+  playhead first, fills `aheadSec` ahead, evicts what is `behindSec` behind,
+  aborts fetches a seek made pointless, and stops on an error marked
+  `fatal`. The fetch policy is the pure `planStreamWork`.
+- **`holdWhileBuffering(scene, source)`**: when a stream runs out of data
+  the transport pauses at the position actually heard, and plays again once
+  enough is buffered. The transport stays the one scheduling origin, so a
+  network stall is a pause, never drift.
+- **homecrate's crate AU plays on the web.** A project slot holding the crate
+  AU (`crat` by `NAMp`: an instrument as `aumu`, an effect as `aufx`) maps
+  to `homecrate.crate` / `homecrate.crate-fx` in `corePlugins`. The material
+  is built from the compiled graph saved in the slot (`crateCompiledGraph`),
+  the same artifact CrateASL runs, with `param_N` applied by address.
+  `materialFromCompiled(doc)` is the same thing for any compiled document.
+- **Pure ASL instruments play a scene's MIDI.** `prepareLiveVoices` gives an
+  instrument with no kernel (a crate patch, the drum) a pool of `polyphony`
+  voices, plus the bus voice of a split instrument, and `scheduledPoolTarget`
+  plays it: every note of a play assigned to a voice ahead of time and sent
+  with its AudioContext time, so it lands on the sample with no main-thread
+  timers. Before, such an instrument got one worklet voice that ignored MIDI
+  (or, for the drum, no voice), and its track was silent. A host that voices
+  these itself passes `{ poolInstruments: false }`; the patch editor does.
+- **`audiocrate/homecrate`**: homecrate's plugins as a package entry
+  (`registerHomecrateMaterials`, `loadHomecrateKernelBinaries`,
+  `HOMECRATE_KERNEL_FILES`), their worklet (`audiocrate/homecrate/worklet`)
+  and WASM (`audiocrate/homecrate/wasm/*`). The entry imports core rather
+  than bundling it, so a host gets one registry. `npm run build:homecrate`.
+- `AudioMaterialPlugin.createFromPreset(preset)`, for a plugin whose preset
+  is the material (a patch host); `mapPluginSlot` decodes first and builds
+  from it. `AudioMaterialPlugin.applyAsset(material, key, value)`, for a
+  plugin whose graph reads a hydrated file from somewhere of its own; the
+  drum uses it to fill its pads, which a loaded kit previously never reached.
+- `HostPluginIdentity.componentTypes`: a claim may name the component types
+  it answers to, so one native product with two roles under one subtype maps
+  to two plugins. Claims without it match as before.
+- A voice's own `noteOn(params, when?)` and `noteOff(when?)` take an
+  AudioContext time, scheduled in the worklet like MIDI.
+
+- **CrateC plays crate patches live, in WASM.** `examples/CrateC/web` builds
+  the C interpreter (`web/build.sh`) as a homecrate kernel: an instrument is
+  CrateC's voice pool, split bus included, as one voice taking MIDI; an
+  effect is one state. homecrate's `crateInstrumentPlugin` /
+  `crateEffectPlugin` replace core's crate AU plugins with it live, and keep
+  the ASL material for everything else. The same compiled document, sample
+  for sample (`crateKernel.test.ts`), at 2 to 4 times the speed of the JS
+  interpreter on a rich pad.
+- **Render-ahead.** `BlockGraph` runs the live voice processor without Web
+  Audio (`captureVoiceProcessor` takes the class from a worklet bundle), so a
+  Worker can render a track exactly as live playback would. `TrackRender`
+  renders one instrument track, with its inserts and MIDI, from any song
+  position, continuously. `RenderedStreamSource` plays the chunks on the
+  track's `StreamClip`, asks for a new render on a seek outside what it has,
+  and stalls rather than playing silence; `combineStreamSources` gives one
+  `holdWhileBuffering` a view of all of them.
+- `AudioMaterialPlugin.liveGraph(material)`: the graph a real-time voice
+  compiles when it should differ from `material.graph` (the drum's light
+  live graph, a kernel instead of the interpreter).
+- `KernelProcessor.setTransport(snapshot)`: the song position at the start
+  of each render, for a kernel that keeps its own musical clock.
+- An effect or bus voice (gate held open) now rests once its inputs and
+  output have been silent for longer than its longest delay line, instead of
+  rendering silence for good. Notes queued for later no longer keep a voice
+  awake.
+- `homecrateKernelSlots(scene)`: the kernel WASM a scene's materials need.
+- **hc_dynEQ and hc_send** (`examples/dyneq`). dynEQ's iOS kernel, ported to
+  portable C++ with its math verbatim (`dsp/dyneq_kernel.cpp`) and built to
+  WASM (`wasm/build_dyneq.sh`): five RBJ bells with per-band duck, a
+  stereo-linked compressor keyed internally or by the follower, in/out gain
+  and the AU's safety clamp. hc_send is a JS kernel: bit-exact passthrough
+  that publishes its block peak x SEND to an envelope bus kept in the worklet
+  realm, the web's counterpart of the AU's process-global bus (loudest live
+  send wins, stale after 150 ms). `envelopeBusTracks` names the tracks that
+  must share a realm for that to work.
+
+- **The drum plays live as its own engine.** homecrate-drum-vst3's
+  DrumEngine (the AUv3's Swift voice and C++ kernel, vendored in
+  `examples/drum/vst3/`) compiled to WASM (`wasm/build_drum_fx.sh`): idle pads
+  cost nothing, and SOLA stretch, hi-hat choke, character and humanize are
+  the AU's. The ASL drum graph stays for offline renders and bakes. Its light
+  live graph (no 026S chain) changed the kit's sound and balance.
+- CrateC's builder takes sample tables as floats (`{ "ext": n }`,
+  `crate_build_set_external_tables`); the web kernel's `tables` payload and
+  `graphForKernel` use it, so a sample-heavy graph is not written out as
+  JSON text.
+
+### Fixed
+
+- **Track volume in a homecrate project is a fader position.** The app plays
+  it through a cubic taper; `loadProjectScene` (and the editor's import) read
+  it as a linear gain, so every track below full fader played hot, a 0.47
+  fader by 13 dB, and no imported mix had the balance the artist set.
+  `projectFaderGain` is the taper.
+- `prepareLiveVoices` no longer leaves a drum with a kernel voiceless; the
+  drum is skipped only for a host that voices instruments itself.
+- `decodeKeyedArchive` no longer overflows the stack on a long ASCII string
+  (a crate AU's compiled graph runs to hundreds of kB).
+
 ## 0.3
 
 An instrument now sums its voices into the effects after

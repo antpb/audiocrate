@@ -815,7 +815,9 @@ export class PatchAudio {
     await this.resumeIfNeeded();
     if (token !== this.armToken) return;
     try {
-      await scene.prepareLiveVoices(renderer, await patcherKernelBinaries());
+      // The timeline voices pure ASL instruments (the drum) through the graph
+      // itself (attachTimelineDrumLives), so the scene must not pool them too.
+      await scene.prepareLiveVoices(renderer, await patcherKernelBinaries(), { poolInstruments: false });
     } catch (err) {
       console.warn('[crate-patcher] live instruments failed; clips still play dry', err);
     }

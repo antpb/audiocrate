@@ -164,7 +164,8 @@ describe('loadProjectScene', () => {
     expect(scene.master.muted).toBe(false);
 
     expect(scene.tracks.length).toBe(2);
-    expect(scene.tracks[0]!.volume).toBe(0.75);
+    // A stored fader position, played through the app's cubic taper.
+    expect(scene.tracks[0]!.volume).toBe(0.75 * 0.75 * 0.75);
     expect(scene.tracks[0]!.pan).toBe(-0.2);
     expect(scene.tracks[0]!.muted).toBe(false);
     expect(scene.tracks[1]!.muted).toBe(true);

@@ -3,28 +3,28 @@
 The same graph is supposed to run in more than one place: a browser, an
 offline bounce, an AUv3, and the Android DAW. This document is how that is
 checked. Android runs the TypeScript interpreter on Hermes. It is a host,
-not a third independent port. Only the JavaScript-to-Swift comparison is a
-cross-check.
+not an independent port. The cross-checks are JavaScript against Swift,
+and JavaScript against C.
 
 ## What is proven, precisely
 
-An ASL interpreter exists twice: `asl/compile.ts` in TypeScript, and a
-Swift port (`CrateASL`). They were written independently against the
-same design. 83 graphs covering every node kind render in both and are
-compared sample by sample.
+An ASL interpreter exists three times: `asl/compile.ts` in TypeScript, a
+Swift port (`CrateASL`), and a C99 port for hardware (`CrateC`). 119 graphs
+covering every node kind render in all three and are compared sample by
+sample. The C port is held to the same fixture and tolerance with `double`
+evaluation; its float build is measured, not gated (see
+[`examples/CrateC`](../examples/CrateC/README.md)).
 
 ```
-cases            83, 49 of them stereo
-node kinds       70, 2 exempt
-bit-exact        83
-worst deviation  0.0
+cases            119, 55 of them stereo
+node kinds       71, none exempt
+tolerance        5e-6
 ```
 
 Bit-exactness is not the bar. V8 computes `Math.sin` with a bundled fdlibm
 port and Swift calls Apple's libm. Two correct implementations of the same
 function may disagree in the last bit. The asserted tolerance is 5e-6,
-about 106 dB down, far below a 24-bit LSB. Zero is what is currently
-measured, not what is demanded.
+about 106 dB down, far below a 24-bit LSB.
 
 Four caveats, all of which still hold:
 
@@ -35,8 +35,8 @@ Four caveats, all of which still hold:
    rate invariant, and a DAW may run at 44.1.
 3. **The offline renderer is not an independent implementation.** It shares
    `compile.ts` with the worklet, so agreement there is true by construction.
-   Only the JavaScript-to-Swift comparison is a cross-check.
-4. **Android is a host, not a third interpreter.** `example-android/` runs
+   The JavaScript-to-Swift and JavaScript-to-C comparisons are the cross-checks.
+4. **Android is a host, not an interpreter of its own.** `example-android/` runs
    the same `compile.ts` on Hermes, plus C++ kernels on Oboe because Hermes
    has no WebAssembly. On-device proof, not a second golden suite.
 
@@ -52,6 +52,7 @@ Four caveats, all of which still hold:
 | `test/asl/conformanceFixture.test.ts` | Is the file on disk still a description of this code |
 | `fixtures/asl-conformance.json` | The graphs, the input, and the expected samples |
 | `examples/CrateASL/Tests/CrateASLTests/ConformanceTests.swift` | Does the second implementation agree |
+| `examples/CrateC/test/conformance.c` | Does the third implementation agree |
 
 The vocabulary is an array rather than a bare union. A TypeScript union does
 not survive to runtime, so nothing could ask "is every kind covered" without
@@ -112,6 +113,10 @@ npm run fixtures:asl                    # only when you meant to change the fixt
 cd examples/CrateASL
 /usr/bin/swift test                     # the cross-implementation comparison
 /usr/bin/swift test -c release          # the same, plus a throughput number
+
+# C (examples/CrateC)
+make conformance                        # double, the same tolerance
+make conformance-float                  # float, reported per case
 ```
 
 **Use `/usr/bin/swift`, not `swift`.** A `swiftly`-managed toolchain earlier

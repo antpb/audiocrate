@@ -2,6 +2,7 @@ import { AudioNode3, type AudioNode3Options } from './AudioNode3';
 import type { Clip } from './Clip';
 import type { AudioMaterial } from './AudioMaterial';
 import type { MidiClip } from './MidiClip';
+import type { StreamClip } from '../stream/StreamClip';
 import type { Time } from '../Time';
 
 export interface ScheduledClip {
@@ -12,6 +13,11 @@ export interface ScheduledClip {
 
 export interface ScheduledMidiClip {
   readonly clip: MidiClip;
+  readonly at: Time;
+}
+
+export interface ScheduledStreamClip {
+  readonly clip: StreamClip;
   readonly at: Time;
 }
 
@@ -36,6 +42,7 @@ export class Track extends AudioNode3 {
 
   private readonly scheduledClips: ScheduledClip[] = [];
   private readonly scheduledMidi: ScheduledMidiClip[] = [];
+  private readonly scheduledStreams: ScheduledStreamClip[] = [];
 
   addClip(clip: Clip, options: { at: Time }): ScheduledClip {
     const scheduled: ScheduledClip = { clip, at: options.at };
@@ -69,5 +76,23 @@ export class Track extends AudioNode3 {
 
   get midiClips(): readonly ScheduledMidiClip[] {
     return this.scheduledMidi;
+  }
+
+  /** Places network-fed audio on the track (`stream/StreamClip.ts`). */
+  addStream(clip: StreamClip, options: { at: Time }): ScheduledStreamClip {
+    const scheduled: ScheduledStreamClip = { clip, at: options.at };
+    this.scheduledStreams.push(scheduled);
+    return scheduled;
+  }
+
+  removeStream(clip: StreamClip): boolean {
+    const index = this.scheduledStreams.findIndex((s) => s.clip === clip);
+    if (index === -1) return false;
+    this.scheduledStreams.splice(index, 1);
+    return true;
+  }
+
+  get streams(): readonly ScheduledStreamClip[] {
+    return this.scheduledStreams;
   }
 }

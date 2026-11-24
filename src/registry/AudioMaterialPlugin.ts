@@ -1,4 +1,5 @@
 import type { AudioMaterial } from '../graph/AudioMaterial';
+import type { ASLGraphDescriptor } from '../asl/graph';
 import type { AssetRequest } from '../graph/assets';
 import type { KernelBinaryMap } from '../renderers/kernel';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
@@ -48,6 +49,15 @@ export interface AudioMaterialPlugin<Preset = unknown> {
   create(): AudioMaterial;
 
   /**
+   * Builds the AudioMaterial from a decoded preset, for a plugin whose preset
+   * is the material itself rather than values for a fixed one: a patch host,
+   * whose saved state carries the whole graph. When present, `mapPluginSlot`
+   * decodes first and calls this instead of `create()` plus `applyPreset`.
+   * Throwing falls back to `create()` at defaults, like a failed decode.
+   */
+  createFromPreset?(preset: Preset): AudioMaterial;
+
+  /**
    * The native plugin this AudioMaterial mirrors, if any, so a project referencing
    * that plugin maps onto this AudioMaterial. Purely optional: an AudioMaterial with no
    * native counterpart simply never matches a project slot.
@@ -75,6 +85,24 @@ export interface AudioMaterialPlugin<Preset = unknown> {
    * crate never learns what a `.nam` file is.
    */
   assetRequests?(preset: Preset): readonly AssetRequest[];
+
+  /**
+   * Stores one hydrated asset (`AssetRequest.key`, the decoded value) on the
+   * material. Omit it and the loader calls `material.setAsset`. Supply it when
+   * the graph reads the file from somewhere of its own as well, as the drum's
+   * pads do: an asset that only reached `setAsset` would be stored and never
+   * heard.
+   */
+  applyAsset?(material: AudioMaterial, key: string, value: unknown): void;
+
+  /**
+   * The graph a live (real-time) voice compiles, when the authored one is too
+   * heavy to finish a worklet block in time. Offline renders and bakes keep
+   * `material.graph`. The drum's sixteen full pad chains are the case: live,
+   * it plays the same pads and samples without the per-pad character stage,
+   * as the patch editor always has.
+   */
+  liveGraph?(material: AudioMaterial): ASLGraphDescriptor;
 
   /**
    * Latency this AudioMaterial adds when it is in the chain, in samples, for
@@ -127,6 +155,14 @@ export interface HostPluginIdentity {
    * ships as both `aufx` and `aumf` under one subtype.
    */
   componentType?: number;
+  /**
+   * On a claim only: the component types this plugin answers to. Omitted, a
+   * claim matches any type, which is right for the usual case above. Set it
+   * when one native product hosts two roles under one subtype (homecrate's
+   * crate AU is an instrument as `aumu` and an effect as `aufx`), so each
+   * role can be its own plugin. A slot whose type is unknown still matches.
+   */
+  componentTypes?: readonly number[];
   componentSubType: number;
   /** Omit to match any manufacturer, which is usually wrong for a shipping plugin. */
   componentManufacturer?: number;

@@ -1,3 +1,4 @@
+import type { TransportSnapshot } from '../asl/transportNodes';
 /**
  * The extension seam for DSP that cannot be expressed as ASL nodes.
  *
@@ -83,6 +84,14 @@ export interface KernelProcessor {
   controlChange?(cc: number, value: number, params: Record<string, number>): void;
 
   setHostBpm?(bpm: number): void;
+
+  /**
+   * The song's position where the coming render starts: beats, tempo, playing,
+   * time signature. Called before each block (and each sub-block a MIDI split
+   * makes) by the worklet. For a kernel that runs its own musical clock, such
+   * as an interpreter of graphs with transport nodes.
+   */
+  setTransport?(transport: TransportSnapshot): void;
 
   /**
    * Slot-specific messages from the main thread (`VoiceHandle.sendKernel`).

@@ -99,6 +99,68 @@ extension PlanNode {
     var eagerList: Bool { kind == .mix }
 }
 
+/// One scheduled node as `CompiledVoice.runFrame` reads it: the fields the
+/// wiring kinds need, copied out of the `PlanNode` into one contiguous array,
+/// so the common case touches no object at all.
+///
+/// Only a cache of what the plan already says. The plan never changes after
+/// it is built, so neither does this.
+struct ScheduledOp {
+    enum Code: UInt8 {
+        /// One of the kinds `compute` handles itself and the frame loop does
+        /// not (`port`, `lane`, `mix`): call `compute`.
+        case compute
+        /// Any kind `compute` would forward to `evalOther`: call that directly.
+        case other
+        case const, param, mul, add, range
+    }
+
+    let code: Code
+    let slot: Int
+    /// `mul`/`add`: input `a`'s slot, or -1. `range`: `source`'s slot.
+    /// `param`: its `paramIndex`.
+    let a: Int
+    /// `mul`/`add`: input `b`'s slot, or -1.
+    let b: Int
+    /// `const`: the value. `range`: its minimum.
+    let c: Double
+    /// `range`: its maximum.
+    let d: Double
+    let node: Unmanaged<PlanNode>
+
+    init(_ node: PlanNode) {
+        slot = node.slot
+        self.node = .passUnretained(node)
+        var a = -1, b = -1
+        var c = 0.0, d = 0.0
+        switch node.kind {
+        case .const:
+            code = .const
+            c = node.c
+        case .param:
+            code = .param
+            a = node.paramIndex
+        case .mul, .add:
+            code = node.kind == .mul ? .mul : .add
+            a = node.childSlots[InputName.a.rawValue]
+            b = node.childSlots[InputName.b.rawValue]
+        case .range:
+            code = .range
+            a = node.childSlots[InputName.source.rawValue]
+            c = node.rangeMin
+            d = node.rangeMax
+        case .port, .lane, .mix:
+            code = .compute
+        default:
+            code = .other
+        }
+        self.a = a
+        self.b = b
+        self.c = c
+        self.d = d
+    }
+}
+
 /// Every node a frame is certain to evaluate, children first, root last.
 func buildSchedule(_ root: PlanNode) -> [PlanNode] {
     var order = [PlanNode]()

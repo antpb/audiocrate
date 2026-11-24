@@ -1,0 +1,13 @@
+{
+  "name": "audiocrate-dyneq",
+  "version": "0.0.1",
+  "private": true,
+  "description": "homecrate dynEQ (5-band dynamic EQ and compressor) and hc_send, as AudioMaterials with a WASM kernel.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  }
+}

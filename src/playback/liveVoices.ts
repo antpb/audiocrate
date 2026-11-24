@@ -5,6 +5,7 @@ import type { KernelBinaryMap } from '../renderers/kernel';
 import type { AudioMaterial } from '../graph/AudioMaterial';
 import type { Track } from '../graph/Track';
 import type { Bus } from '../graph/Bus';
+import { connectSplitVoices } from '../renderers/splitVoices';
 
 /**
  * The slice of `WebAudioRenderer` live-voice binding needs, matching this
@@ -18,7 +19,10 @@ export interface LiveVoiceRenderer {
    * read off it (`asl/ports.ts`), not passed alongside it, so an AudioMaterial that
    * grows a sidechain does not also have to be wired differently here.
    */
-  createVoice(graph: ASLGraphDescriptor, options?: { params?: Record<string, number> }): Promise<VoiceHandle>;
+  createVoice(
+    graph: ASLGraphDescriptor,
+    options?: { params?: Record<string, number>; sends?: boolean },
+  ): Promise<VoiceHandle>;
 }
 
 /**
@@ -32,7 +36,32 @@ export type LiveWasmBinaries = KernelBinaryMap;
 export interface LiveTrackVoices {
   /** Index-aligned with `track.materials.list`. */
   inserts: VoiceHandle[];
+  /** A kernel instrument: one voice that takes MIDI and does its own polyphony. */
   instrument?: VoiceHandle;
+  /**
+   * A pure ASL instrument (no kernel): `polyphony` voices, plus the bus voice
+   * of a split instrument, played by `scheduledPoolTarget`. `outputs` are the
+   * nodes that reach the track (the bus when there is one, else every voice).
+   */
+  instrumentPool?: LiveInstrumentPool;
+}
+
+export interface LiveInstrumentPool {
+  material: AudioMaterial;
+  voices: VoiceHandle[];
+  bus?: VoiceHandle;
+  outputs: VoiceHandle[];
+}
+
+export interface PrepareLiveVoicesOptions {
+  /**
+   * Play pure ASL instruments (a crate patch, the drum) from the scene's MIDI
+   * clips through a voice pool. On by default. A host that voices those
+   * instruments itself (the patch editor's timeline) turns it off, and then
+   * the drum gets no voice here and any other pure ASL instrument gets the
+   * single voice it always did.
+   */
+  poolInstruments?: boolean;
 }
 
 export interface LiveSceneVoices {
@@ -64,13 +93,44 @@ async function createVoiceFor(
 ): Promise<VoiceHandle> {
   // The values go with the voice as well as with the note: the note is a
   // message, and the first block can run before it lands.
-  const voice = await renderer.createVoice(material.graph, { params: material.snapshotParams() });
-  voice.noteOn(material.snapshotParams());
   const plugin = registry.forMaterial(material);
+  const graph = plugin?.liveGraph?.(material) ?? material.graph;
+  const voice = await renderer.createVoice(graph, { params: material.snapshotParams() });
+  voice.noteOn(material.snapshotParams());
   if (plugin?.bindLiveVoice) {
     await plugin.bindLiveVoice(voice, material, wasm);
   }
   return voice;
+}
+
+/**
+ * The voices for a pure ASL instrument: one per note of polyphony, and for a
+ * split instrument (voices summed into one bus, `flattenPatch`'s voicing) the
+ * bus voice they feed, wired the way `AudioMaterial.bind` wires them.
+ */
+async function createInstrumentPool(
+  renderer: LiveVoiceRenderer,
+  material: AudioMaterial,
+  registry: AudioMaterialRegistry,
+): Promise<LiveInstrumentPool> {
+  const params = material.snapshotParams();
+  const graph = registry.forMaterial(material)?.liveGraph?.(material) ?? material.graph;
+  const split = graph.bus && graph.sends ? graph.sends.length : 0;
+  const voices: VoiceHandle[] = [];
+  for (let i = 0; i < material.polyphony; i++) {
+    voices.push(await renderer.createVoice(graph, { params, ...(split > 0 ? { sends: true } : {}) }));
+  }
+  if (split === 0) return { material, voices, outputs: voices };
+  const bus = await renderer.createVoice(graph.bus!, { params });
+  // An effect on the voices' sum: its gate opens once and stays open.
+  bus.noteOn(params);
+  connectSplitVoices(voices, bus, split);
+  return { material, voices, bus, outputs: [bus] };
+}
+
+/** Whether an instrument is played as a pool here: no plugin of its own binds a live voice. */
+function isPooledInstrument(material: AudioMaterial, registry: AudioMaterialRegistry): boolean {
+  return !registry.forMaterial(material)?.bindLiveVoice;
 }
 
 /**
@@ -92,7 +152,9 @@ export async function prepareLiveVoices(
   master: Bus,
   wasm: LiveWasmBinaries = {},
   registry: AudioMaterialRegistry = audioMaterialRegistry,
+  options: PrepareLiveVoicesOptions = {},
 ): Promise<LiveSceneVoices> {
+  const pool = options.poolInstruments !== false;
   const masterVoices: VoiceHandle[] = [];
   for (const material of master.materials) {
     masterVoices.push(await createVoiceFor(renderer, material, wasm, registry));
@@ -104,8 +166,14 @@ export async function prepareLiveVoices(
     for (const material of track.materials) {
       inserts.push(await createVoiceFor(renderer, material, wasm, registry));
     }
+    if (track.instrument && pool && isPooledInstrument(track.instrument, registry)) {
+      tracksMap.set(track.id, { inserts, instrumentPool: await createInstrumentPool(renderer, track.instrument, registry) });
+      continue;
+    }
+    // A host voicing instruments itself (poolInstruments false: the patch
+    // editor) plays the drum its own way, so it gets no voice here.
     const instrument =
-      track.instrument && track.instrument.kind !== 'drum'
+      track.instrument && (pool || track.instrument.kind !== 'drum')
         ? await createVoiceFor(renderer, track.instrument, wasm, registry)
         : undefined;
     tracksMap.set(track.id, { inserts, instrument });
@@ -165,6 +233,10 @@ export function disposeLiveVoices(voices: LiveSceneVoices): void {
   for (const track of voices.tracks.values()) {
     all.push(...track.inserts);
     if (track.instrument) all.push(track.instrument);
+    if (track.instrumentPool) {
+      all.push(...track.instrumentPool.voices);
+      if (track.instrumentPool.bus) all.push(track.instrumentPool.bus);
+    }
   }
   for (const voice of all) disposeVoiceHandle(voice);
 }

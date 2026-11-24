@@ -37,7 +37,43 @@ import Foundation
     return jsMod(jsMod(x, m) + m, m)
 }
 
-@inline(__always) func oscillatorSample(_ shape: Int, _ phase: Double, _ width: Double = 0.5, _ freq: Double = 0, _ sr: Double = 1) -> Double {
+/// The `harmonic` shape's normalised sum of `maxHarm` partials, partial h
+/// (from 0) at amplitude `amp(h)`.
+///
+/// Partial n is sin(n * theta), walked by the Chebyshev recurrence
+/// sin((n+1)t) = 2cos(t) sin(nt) - sin((n-1)t): one `sin` and one `cos` per
+/// sample instead of one `sin` per partial, which was most of a harmonic
+/// pad's render. `harmonicSample` in compile.ts runs the same expressions in
+/// the same order, so the two engines differ only where libm and
+/// `Math.sin`/`Math.cos` already did. Plain multiplies and subtracts on
+/// purpose: Swift does not contract them into FMA, and V8 never does, so
+/// fusing one side would be a difference the other cannot follow.
+@inline(__always) func harmonicPartials(_ phase: Double, _ maxHarm: Int, _ amp: (Int) -> Double) -> Double {
+    let theta = 2 * Double.pi * phase
+    let k = 2 * cos(theta)
+    var prev = 0.0
+    var current = sin(theta)
+    var norm = 0.0
+    var sample = 0.0
+    for h in 0..<maxHarm {
+        let a = amp(h)
+        norm += a
+        sample += a * current
+        let next = k * current - prev
+        prev = current
+        current = next
+    }
+    return norm > 0 ? sample / norm : 0
+}
+
+/// `mem`, when given, holds the `harmonic` shape's amplitude table between
+/// samples (`NodeMemory.harmonicAmps`). Same values either way: the table is
+/// the very `pow` results the uncached loop computes, so the sum is the same
+/// to the bit.
+@inline(__always) func oscillatorSample(
+    _ shape: Int, _ phase: Double, _ width: Double = 0.5, _ freq: Double = 0, _ sr: Double = 1,
+    _ mem: UnsafeMutablePointer<NodeMemory>? = nil
+) -> Double {
     switch shape {
     case Shape.saw: return 2 * phase - 1
     case Shape.square: return phase < 0.5 ? 1 : -1
@@ -62,16 +98,18 @@ import Foundation
         if maxHarm < 1 { maxHarm = 1 }
         let tilt = min(max(width, 0), 1)
         let exponent = 2 * (1 - tilt)
-        var norm = 0.0
-        var sample = 0.0
-        for h in 0..<maxHarm {
-            let n = Double(h + 1)
-            let amp = 1 / pow(n, exponent)
-            norm += amp
-            let harmPhase = phase * n
-            sample += amp * sin(2 * Double.pi * (harmPhase - floor(harmPhase)))
+        if let mem {
+            return withUnsafeMutablePointer(to: &mem.pointee.harmonicAmps) { tuple in
+                tuple.withMemoryRebound(to: Double.self, capacity: 16) { amps in
+                    if mem.pointee.harmonicExponent != exponent {
+                        for h in 0..<16 { amps[h] = 1 / pow(Double(h + 1), exponent) }
+                        mem.pointee.harmonicExponent = exponent
+                    }
+                    return harmonicPartials(phase, maxHarm) { amps[$0] }
+                }
+            }
         }
-        return norm > 0 ? sample / norm : 0
+        return harmonicPartials(phase, maxHarm) { 1 / pow(Double($0 + 1), exponent) }
     default: return sin(2 * Double.pi * phase)
     }
 }
@@ -100,10 +138,12 @@ public final class CompiledVoice {
     private let mainPortSlot: Int
     /// Parameters whose `setParam` glides, `graph.smooth` in the document.
     private let smoothed: Set<String>
-    /// Every node a frame always evaluates, children first (`Schedule.swift`).
-    /// Unretained, like `PlanNode.inputs`: `plan.nodes` owns them for the
-    /// voice's whole life, and walking them per sample must cost no retain.
-    private let schedule: UnsafeMutablePointer<Unmanaged<PlanNode>>
+    /// Every node a frame always evaluates, children first (`Schedule.swift`),
+    /// flattened into `ScheduledOp`s so the frame loop reads one dense array
+    /// rather than chasing a `PlanNode` per node per sample. Unretained, like
+    /// `PlanNode.inputs`: `plan.nodes` owns them for the voice's whole life,
+    /// and walking them per sample must cost no retain.
+    private let schedule: UnsafeMutablePointer<ScheduledOp>
     private let scheduleCount: Int
     /// A split instrument's voice outputs (`ASLGraphDocument.sends`): how
     /// many, and each one's slot in the value cache.
@@ -146,7 +186,7 @@ public final class CompiledVoice {
         let order = buildSchedule(plan.root)
         scheduleCount = order.count
         schedule = .allocate(capacity: max(order.count, 1))
-        for (i, node) in order.enumerated() { (schedule + i).initialize(to: .passUnretained(node)) }
+        for (i, node) in order.enumerated() { (schedule + i).initialize(to: ScheduledOp(node)) }
         let sends = document.sends ?? []
         sendCount = sends.count
         sendSlots = .allocate(capacity: max(sends.count, 1))
@@ -168,13 +208,57 @@ public final class CompiledVoice {
     /// One frame: the schedule front to back, then the root's cached value.
     /// The same nodes `eval(root)` would compute, computed bottom up, so each
     /// evaluator's input reads are cache loads rather than recursive calls.
+    ///
+    /// The wiring kinds a patch is mostly made of (`const`, `param`, `mul`,
+    /// `add`, `range`) are computed right here from the op's own fields, with
+    /// no call. On device, 8 crate instances spent about half their CPU in
+    /// `compute`'s prologue and epilogue: saving and restoring fourteen
+    /// registers to multiply two cached numbers. The arithmetic is the same
+    /// expression `compute` evaluates, so the bits are the same. Whenever an
+    /// input is not already cached this frame (a lazy edge), the op falls
+    /// back to `compute`, which recurses exactly as before.
+    ///
+    /// `generation` and `frameIndex` are read once: nothing inside a frame
+    /// writes them (only the block loops in `render` do), and reading them
+    /// through `hot` after every call was a reload the compiler could not
+    /// prove away.
     @inline(__always) private func runFrame(_ state: VoiceState, _ sampleRate: Double) -> Double {
-        // `_withUnsafeGuaranteedRef` keeps the node unretained;
-        // `takeUnretainedValue` retains and measured half again slower.
+        let stamps = state.stamps
+        let values = state.values
+        let generation = state.generation
+        let frame = state.frameIndex
+        @inline(__always) func ready(_ slot: Int) -> Bool { slot < 0 || stamps[slot] == generation }
+        @inline(__always) func read(_ slot: Int) -> Double { slot < 0 ? 0 : values[slot] }
         for i in 0..<scheduleCount {
-            schedule[i]._withUnsafeGuaranteedRef { _ = eval($0, state, sampleRate) }
+            let op = schedule + i
+            let slot = op.pointee.slot
+            if stamps[slot] == generation { continue }
+            let result: Double
+            switch op.pointee.code {
+            case .const:
+                result = op.pointee.c
+            case .param:
+                result = state.paramValue(op.pointee.a, frame: frame)
+            case .mul where ready(op.pointee.a) && ready(op.pointee.b):
+                result = read(op.pointee.a) * read(op.pointee.b)
+            case .add where ready(op.pointee.a) && ready(op.pointee.b):
+                result = read(op.pointee.a) + read(op.pointee.b)
+            case .range where ready(op.pointee.a):
+                let source = read(op.pointee.a)
+                result = op.pointee.c + ((source + 1) / 2) * (op.pointee.d - op.pointee.c)
+            case .other:
+                // Not one of `compute`'s own kinds, so `compute` would only
+                // have forwarded here: skip its frame and go straight in.
+                result = op.pointee.node._withUnsafeGuaranteedRef { evalOther($0, state, sampleRate) }
+            default:
+                // `_withUnsafeGuaranteedRef` keeps the node unretained;
+                // `takeUnretainedValue` retains and measured half again slower.
+                result = op.pointee.node._withUnsafeGuaranteedRef { compute($0, state, sampleRate) }
+            }
+            values[slot] = result
+            stamps[slot] = generation
         }
-        return state.values[root.slot]
+        return values[root.slot]
     }
 
     public convenience init(json: Data) throws {

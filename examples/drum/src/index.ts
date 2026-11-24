@@ -61,3 +61,5 @@ export {
 } from './drumConstants';
 /** The C++ port the parity tests measure against, not something the graph calls. */
 export { DrumKernel, defaultMasterIR, srCurve } from './reference/DrumKernel';
+export { DRUM_KERNEL_SLOT } from './kernelSlot';
+export { drumKernelFactory, type DrumKernelMessage, type DrumKernelPayload } from './kernel';

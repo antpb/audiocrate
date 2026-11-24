@@ -16,3 +16,11 @@ say what moved.
 Not copied: the Swift voice (playhead, SOLA stretch, sequencer, sample
 record), which is sampler plumbing rather than the 026S character chain.
 README.md lists what the ASL material reproduces and what it does not.
+
+Added 2026-11-23: vst3/ from ~/Desktop/homecrate-drum-vst3/src
+  dsp/*            ->  vst3/dsp/      (the kernel, portable: no AudioToolbox, pffft convolver)
+  engine/DrumEngine.h, engine/WavFile.h  ->  vst3/engine/
+DrumEngine.h ports the AUv3's Swift voice as well (playheads, pitch, pan,
+SOLA stretch, character and humanize, hi-hat choke), so vst3/ IS a build
+input: wasm/build_drum_fx.sh compiles it to drum_fx.wasm, the kernel the
+web plays live. Re-copy when the VST3 port changes.

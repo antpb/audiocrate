@@ -9,7 +9,14 @@ import { planScenePlayback } from './playback/plan';
 import { MidiPlayback, type MidiVoiceTarget } from './playback/MidiPlayback';
 import { ScenePlayback } from './playback/ScenePlayback';
 import { bakeTrackInserts, type BakeTrackInsertsOptions } from './playback/bakeInserts';
-import { prepareLiveVoices, disposeLiveVoices, type LiveVoiceRenderer, type LiveWasmBinaries, type LiveSceneVoices } from './playback/liveVoices';
+import {
+  prepareLiveVoices,
+  disposeLiveVoices,
+  type LiveVoiceRenderer,
+  type LiveWasmBinaries,
+  type LiveSceneVoices,
+  type PrepareLiveVoicesOptions,
+} from './playback/liveVoices';
 import type { VoiceHandle } from './renderers/WebAudioRenderer';
 import { HostedAutomationBridge } from './playback/hostedAutomation';
 import { InputMonitor, type MonitorTrackConfig, type MonitorStart } from './playback/InputMonitor';
@@ -82,6 +89,10 @@ export class AudioScene implements TransportHost {
     for (const track of this.liveVoices.tracks.values()) {
       for (const handle of track.inserts) yield handle;
       if (track.instrument) yield track.instrument;
+      if (track.instrumentPool) {
+        for (const handle of track.instrumentPool.voices) yield handle;
+        if (track.instrumentPool.bus) yield track.instrumentPool.bus;
+      }
     }
     for (const handle of this.liveVoices.master) yield handle;
   }
@@ -131,9 +142,13 @@ export class AudioScene implements TransportHost {
    * the same "no await inside sync play()" reason as `prepareTrackInserts`.
    * Disposes any previously-prepared live voices first.
    */
-  async prepareLiveVoices(renderer: LiveVoiceRenderer, wasm: LiveWasmBinaries = {}): Promise<void> {
+  async prepareLiveVoices(
+    renderer: LiveVoiceRenderer,
+    wasm: LiveWasmBinaries = {},
+    options: PrepareLiveVoicesOptions = {},
+  ): Promise<void> {
     if (this.liveVoices) disposeLiveVoices(this.liveVoices);
-    this.liveVoices = await prepareLiveVoices(renderer, this.trackList, this.master, wasm);
+    this.liveVoices = await prepareLiveVoices(renderer, this.trackList, this.master, wasm, undefined, options);
     // Automation follows the voices, not the transport. `startPlayback` binds
     // again for its own freshly built graph, but binding only there meant a
     // scene with live voices and no `play()` (an armed track under the input
@@ -228,6 +243,7 @@ export class AudioScene implements TransportHost {
       timeContext: this.transport.timeContext,
       resolveOffsetSec: (track, clipIndex) => this.transport.resolve(track.clips[clipIndex]!.at),
       resolveMidiOffsetSec: (track, clipIndex) => this.transport.resolve(track.midiClips[clipIndex]!.at),
+      resolveStreamOffsetSec: (track, index) => this.transport.resolve(track.streams[index]!.at),
       playheadSec,
       sampleRate: this.context.sampleRate,
     });

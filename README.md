@@ -130,10 +130,11 @@ and a transport that offline and live rendering share.
 ## Same graph, more than one place
 
 A second interpreter exists in Swift
-([`examples/CrateASL`](examples/CrateASL/)). A conformance gate renders 83 graphs
-covering all 70 node kinds through both, comparing sample by sample to a
-tolerance of 5e-6. Adding a node kind to one implementation and not the other
-fails the build on both sides.
+([`examples/CrateASL`](examples/CrateASL/)), and a third in C
+([`examples/CrateC`](examples/CrateC/)). A conformance gate renders 119 graphs
+covering every node kind through each of them, comparing sample by sample to a
+tolerance of 5e-6. Adding a node kind to one implementation and not the others
+fails the build.
 
 ## Size
 
@@ -144,10 +145,10 @@ are in that script.
 | What you import | Bundled |
 |---|---|
 | `audiocrate/theory` alone | 1.1 KB |
-| Scene graph plus offline rendering | 73 KB |
-| Everything including real-time audio | 181 KB |
+| Scene graph plus offline rendering | 89 KB |
+| Everything including real-time audio | 228 KB |
 
-The AudioWorklet is 101 KB of that last row. A worklet realm cannot import,
+The AudioWorklet is 131 KB of that last row. A worklet realm cannot import,
 so it carries the whole interpreter as a string and minifying does not
 shrink it. Apps that never play real-time audio tree-shake it away. That
 is the difference between the second row and the third.
@@ -175,6 +176,7 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 | **Collaboration** | Shared session state over a transport you supply. Audiocrate does not open a socket. |
 | **Hooks** | Named extension points for a host application. |
 | **Testing** | Offline render-diff harness and wav encode/decode. |
+| **homecrate** | `audiocrate/homecrate`: homecrate's plugins, their worklet, and the WASM they load. |
 
 ## Documentation
 
@@ -206,17 +208,15 @@ To serve it as a cacheable asset, import `audiocrate/worklet` and pass
 - **Not a cloud service.** Nothing here requires a server. The collaboration
   layer takes a transport you supply.
 - **Not a sample library.** Core ships primitives: filters, envelopes,
-  delays, the usual building blocks. Custom kernels that need a worklet
-  entry live in [`examples/`](examples/README.md) and are not published.
+  delays, the usual building blocks. homecrate's plugins ship as
+  `audiocrate/homecrate` (materials, worklet, and WASM). The editor and the
+  other examples are not published.
 
 ## Status
 
-**0.1.0, first public release.** Expect breaking changes in minor versions
-until 1.0.
+**0.4.0.** Expect breaking changes in minor versions until 1.0.
 
-Known limits, also listed in the docs: the conformance gate renders only
-fixed parameters, mobile voice budgets are estimated rather than profiled,
-and the kernel path has one shipped implementation.
+Known limits: mobile voice budgets are estimated rather than profiled.
 
 ## License
 

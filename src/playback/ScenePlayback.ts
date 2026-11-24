@@ -1,4 +1,5 @@
 import type { AudioContextLike } from '../AudioContextLike';
+import { scheduledPoolTarget } from './scheduledPool';
 import { applyClipGainAndFades } from '../clip/fades';
 import { resampleAudioBufferLike } from '../clip/resample';
 import type { AudioBufferLike } from '../graph/Clip';
@@ -7,6 +8,7 @@ import type { Track } from '../graph/Track';
 import type { AudioMaterial } from '../graph/AudioMaterial';
 import { PDC_SCHEDULE_AHEAD_SEC, pdcAudibleOriginSec } from '../host/pdc';
 import type { PlaybackPlan, PlannedClipJob } from './plan';
+import type { StreamClip } from '../stream/StreamClip';
 import type { MidiVoiceTarget } from './MidiPlayback';
 import type { LiveSceneVoices } from './liveVoices';
 import type { VoiceHandle } from '../renderers/WebAudioRenderer';
@@ -137,6 +139,7 @@ export class ScenePlayback {
   lastStart: PlaybackStart | null = null;
   private sources: ScheduledSource[] = [];
   private nodes: Array<{ disconnect(): void }> = [];
+  private streamStops: Array<() => void> = [];
 
   start(
     ctx: AudioContextLike,
@@ -210,6 +213,13 @@ export class ScenePlayback {
             (live.instrument.node as unknown as { connect(n: unknown): void }).connect(entry);
             this.nodes.push({ disconnect: () => live.instrument!.node.disconnect() });
             instrumentTargets.set(trackId, asMidiTarget(live.instrument));
+          } else if (live.instrumentPool) {
+            const pool = live.instrumentPool;
+            for (const output of pool.outputs) {
+              (output.node as unknown as { connect(n: unknown): void }).connect(entry);
+              this.nodes.push({ disconnect: () => output.node.disconnect() });
+            }
+            instrumentTargets.set(trackId, scheduledPoolTarget(pool.material, pool.voices, () => web.currentTime));
           }
         }
 
@@ -227,7 +237,7 @@ export class ScenePlayback {
       // haven't started yet still needs its voice connected and ready).
       if (liveVoices) {
         for (const [trackId, live] of liveVoices.tracks) {
-          if (live.inserts.length === 0 && !live.instrument) continue;
+          if (live.inserts.length === 0 && !live.instrument && !live.instrumentPool) continue;
           const track = trackById.get(trackId);
           buildTrackEntry(trackId, track?.volume ?? 1, track?.pan ?? 0);
         }
@@ -285,7 +295,8 @@ export class ScenePlayback {
         }
       }
 
-      const destFor = (job: PlannedClipJob) => buildTrackEntry(job.trackId, job.volume, job.pan);
+      const destFor = (job: { trackId: number; volume: number; pan: number }) =>
+        buildTrackEntry(job.trackId, job.volume, job.pan);
 
       const pending: Array<{
         source: ReturnType<WebAudioBits['createBufferSource']>;
@@ -327,6 +338,35 @@ export class ScenePlayback {
           );
         }
       }
+
+      // Streams join the same track entry a clip source would, through their
+      // own static gain, and are told the same origin: media time
+      // `fileOffsetSec` is heard at `origin + whenSec + pdcSec`.
+      const streamById = new Map<number, StreamClip>();
+      for (const track of tracks) for (const s of track.streams) streamById.set(s.clip.id, s.clip);
+      for (const job of plan.streamJobs ?? []) {
+        const clip = streamById.get(job.clipId);
+        if (!clip) continue;
+        const node = clip.source.outputFor(ctx);
+        const gain = web.createGain();
+        gain.gain.value = job.gainDb <= -60 ? 0 : Math.pow(10, job.gainDb / 20);
+        node.connect(gain);
+        gain.connect(destFor(job));
+        this.nodes.push(gain);
+        this.streamStops.push(() => {
+          clip.source.stop();
+          try {
+            node.disconnect(gain);
+          } catch {
+            /* already disconnected */
+          }
+        });
+        try {
+          clip.source.start(origin + job.whenSec + job.pdcSec, job.fileOffsetSec);
+        } catch (err) {
+          console.warn(`[crate] stream start failed offset=${job.fileOffsetSec.toFixed(3)}`, err);
+        }
+      }
     }
 
     const start: PlaybackStart = {
@@ -344,6 +384,8 @@ export class ScenePlayback {
   }
 
   stop(): void {
+    for (const stopStream of this.streamStops) stopStream();
+    this.streamStops = [];
     for (const source of this.sources) {
       try {
         source.stop();

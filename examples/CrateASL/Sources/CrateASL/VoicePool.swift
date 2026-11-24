@@ -389,3 +389,45 @@ public final class VoicePool {
         return rendered
     }
 }
+
+// MARK: - Probes (Probes.swift)
+
+extension VoicePool {
+    /// Every voice's probes: per module, the loudest of the voices playing
+    /// now. Render thread only, after `render`; allocates nothing.
+    public func sampleProbes(
+        _ table: ProbeTable,
+        master: Float,
+        line: Float,
+        into out: UnsafeMutablePointer<Float>
+    ) {
+        table.fillHost(master: master, line: line, into: out)
+        var held = 0
+        for index in slots.indices where slots[index].note != nil && slots[index].held { held += 1 }
+        let notes = held == 0 ? 0 : min(1, 0.5 + Float(held) / Float(max(polyphony, 1)))
+        let busLive = busState != nil && busQuietBlocks < quietBlocksToRetire
+        for index in 0..<table.count {
+            switch table.kinds[index] {
+            case CrateProbeLayout.Kind.module.rawValue:
+                let slot = table.slots[index]
+                if table.onBus[index] {
+                    out[index] = busLive ? (busState?.probeMagnitude(slot) ?? 0) : 0
+                    continue
+                }
+                var loudest: Float = 0
+                // Only the voices this block rendered: a retired voice keeps
+                // its last values and its own generation, so the stamp alone
+                // would call a silent voice current.
+                for voice in slots.indices where slots[voice].note != nil {
+                    let value = states[voice].probeMagnitude(slot)
+                    if value > loudest { loudest = value }
+                }
+                out[index] = loudest
+            case CrateProbeLayout.Kind.notes.rawValue:
+                out[index] = notes
+            default:
+                break
+            }
+        }
+    }
+}

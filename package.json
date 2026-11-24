@@ -1,6 +1,6 @@
 {
   "name": "audiocrate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A scene graph and AudioMaterial system for audio, organized like three.js. Serialisable DSP that the same interpreter runs offline and in an AudioWorklet.",
   "keywords": [
     "audio",
@@ -61,6 +61,12 @@
       "default": "./dist/testing/index.js"
     },
     "./worklet": "./dist/crate-voice-processor.js",
+    "./homecrate": {
+      "types": "./dist/homecrate/index.d.ts",
+      "default": "./dist/homecrate/index.js"
+    },
+    "./homecrate/worklet": "./dist/homecrate/voice-processor.js",
+    "./homecrate/wasm/*": "./dist/homecrate/wasm/*",
     "./package.json": "./package.json"
   },
   "files": [
@@ -71,10 +77,11 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "npm run build:worklet && npm run build:js && npm run build:types",
+    "build": "npm run build:worklet && npm run build:js && npm run build:types && npm run build:homecrate",
     "build:worklet": "node scripts/build-worklet.mjs",
     "build:js": "vite build",
     "build:types": "tsc -p tsconfig.build.json",
+    "build:homecrate": "node scripts/build-homecrate.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -87,7 +94,7 @@
     "fixtures:flatten": "esbuild editor/scripts/emit-flatten-fixtures.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/emit-flatten-fixtures.mjs && node node_modules/.cache/emit-flatten-fixtures.mjs fixtures/flatten-conformance.json",
     "fixtures:factory": "esbuild editor/scripts/emit-factory-patches.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/emit-factory-patches.mjs --log-level=error && node node_modules/.cache/emit-factory-patches.mjs examples/CrateASL/Sources/CrateASL/Resources/factory-patches.json",
     "audit:presets": "esbuild editor/scripts/audit-factory-sound.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/audit-factory-sound.mjs --log-level=error && node node_modules/.cache/audit-factory-sound.mjs",
-    "test:examples": "vitest run --config examples/amp/vitest.config.ts --dir examples/amp && vitest run --config examples/drum/vitest.config.ts --dir examples/drum && vitest run --config examples/grain/vitest.config.ts --dir examples/grain && vitest run --config examples/synth/vitest.config.ts --dir examples/synth && vitest run --config examples/space-reverb/vitest.config.ts --dir examples/space-reverb && vitest run --config examples/xr/vitest.config.ts --dir examples/xr",
+    "test:examples": "vitest run --config examples/amp/vitest.config.ts --dir examples/amp && vitest run --config examples/drum/vitest.config.ts --dir examples/drum && vitest run --config examples/grain/vitest.config.ts --dir examples/grain && vitest run --config examples/synth/vitest.config.ts --dir examples/synth && vitest run --config examples/space-reverb/vitest.config.ts --dir examples/space-reverb && vitest run --config examples/dyneq/vitest.config.ts --dir examples/dyneq && vitest run --config examples/xr/vitest.config.ts --dir examples/xr",
     "test:swift": "/usr/bin/swift test --package-path examples/CrateASL",
     "prepublishOnly": "npm run test && npm run build && npm run verify:package"
   },

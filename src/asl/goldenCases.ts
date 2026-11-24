@@ -244,6 +244,15 @@ export const sourceCases: Record<string, ASLGraphDescriptor> = {
   'osc square': ASL.node(({ note }) => osc({ freq: note.toFrequency(), type: 'square' })),
   'osc triangle': ASL.node(({ note }) => osc({ freq: note.toFrequency(), type: 'triangle' })),
   'osc pulse': ASL.node(({ note }) => osc({ freq: note.toFrequency(), type: 'pulse', width: uniform(0.2) })),
+  // The harmonic shape at its default tilt, flat (every partial at 1), a
+  // low note so all sixteen partials run, and a tilt swept by an LFO so the
+  // partial-amplitude cache is invalidated on every sample.
+  'osc harmonic': ASL.node(({ note }) => osc({ freq: note.toFrequency(), type: 'harmonic' })),
+  'osc harmonic flat': ASL.node(({ note }) => osc({ freq: note.toFrequency(), type: 'harmonic', width: uniform(1) })),
+  'osc harmonic low': ASL.node(() => osc({ freq: uniform(55), type: 'harmonic', width: uniform(0.2) })),
+  'osc harmonic swept': ASL.node(() =>
+    osc({ freq: uniform(110), type: 'harmonic', width: lfo({ rate: uniform(7) }).range(0, 1) }),
+  ),
   lfo: ASL.node(() => lfo({ rate: uniform(30), shape: 'triangle' })),
   range: ASL.node(() => lfo({ rate: uniform(25) }).range(-3, 9)),
   adsr: ASL.node(() => env.adsr({ a: 0.002, d: 0.01, s: 0.5, r: 0.05 }).trigger(uniform(0.8))),

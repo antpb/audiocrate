@@ -42,6 +42,27 @@ export function mapPluginSlot(
   const entry = registry.matchHost(plugin);
   if (!entry) return { bound: false, kind: 'skip', reason: 'unknown', subtype: plugin.componentSubType };
 
+  if (entry.createFromPreset) {
+    // The preset is the material (a patch host). Decode, then build from it.
+    let preset: unknown = entry.emptyPreset?.();
+    if (savedPresetData && entry.decodePreset) {
+      try {
+        preset = entry.decodePreset(savedPresetData);
+      } catch (err) {
+        console.warn(`[crate] "${entry.kind}" preset decode failed; defaults only`, err);
+      }
+    }
+    let material: AudioMaterial;
+    try {
+      material = entry.createFromPreset(preset);
+    } catch (err) {
+      console.warn(`[crate] "${entry.kind}" could not build from its preset; defaults only`, err);
+      material = entry.create();
+      preset = entry.emptyPreset?.();
+    }
+    return { bound: true, kind: entry.kind, role: entry.role, material, preset, plugin: entry };
+  }
+
   const material = entry.create();
   // A slot with no saved state still has a preset, just an empty one. Keeping
   // that distinction out of every caller is why `emptyPreset` exists.

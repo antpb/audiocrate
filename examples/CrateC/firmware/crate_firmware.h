@@ -1,0 +1,59 @@
+/*
+ * The whole surface a firmware calls to run one embedded crate patch in its
+ * audio frame. No allocation, no files, no OS: a static arena, the plan
+ * compiled into the image (crate_embed.h), and three calls.
+ *
+ * The host's audio frame hands a block of interleaved 16-bit stereo at the
+ * project rate (44100 on the Pocket Master, 256 frames). For an insert
+ * patch the left channel is the guitar; crate_fw_process replaces the block
+ * with the engine's output. Call crate_fw_init once before audio starts.
+ */
+#ifndef CRATE_FIRMWARE_H
+#define CRATE_FIRMWARE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* The engine's working memory comes from the host's own allocator, so an
+ * injected build needs no static RAM window of its own: the stock heap hands
+ * it a block it knows is free. `alloc` must return at least `bytes` of
+ * zeroable storage (crate zeroes it), 8-byte aligned, and need never be
+ * freed (one block for the life of the patch). On the desktop this is
+ * malloc; on the Pocket Master it is the stock firmware's allocator. */
+typedef void *(*crate_fw_alloc)(unsigned long bytes);
+
+/* Returns 0 on success, or a negative crate_engine_error. Reads the embedded
+ * plan, takes its arena from `alloc`, and seeds parameter defaults.
+ * sample_rate is the host's (44100). */
+int crate_fw_init(double sample_rate, crate_fw_alloc alloc);
+
+/* Processes one block in place. `interleaved` is 2*frames int16 samples,
+ * L,R,L,R... The engine reads channel L as its input and writes both. */
+void crate_fw_process(int16_t *interleaved, int frames);
+
+/* The same engine, for a host whose audio is float: mono `in` (the
+ * guitar), stereo out, any number of frames (processed in chunks of
+ * CRATE_FW_MAX_FRAMES). Samples are full scale at +/-1. `in` may alias
+ * `out_l`. */
+void crate_fw_process_float(const float *in, float *out_l, float *out_r, int frames);
+
+/* One raw MIDI byte stream (from the chip's USB or BLE MIDI). Applied at the
+ * next block: CC n moves the parameter whose address is n. */
+void crate_fw_midi(const uint8_t *bytes, int count);
+
+/* Whether init succeeded, for a status readout. */
+int crate_fw_ready(void);
+
+/* Bytes init takes from the host allocator, and how much of the arena inside
+ * it the embedded patch used, for sizing CRATE_FW_ARENA_BYTES to the patch. */
+unsigned long crate_fw_footprint(void);
+unsigned long crate_fw_arena_used(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

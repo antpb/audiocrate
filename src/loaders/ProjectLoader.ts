@@ -10,6 +10,7 @@ import { listPluginSlots, resolveProjectAssetPath } from '../host/pluginSlots';
 import { mapPluginSlot } from '../host/mapPluginSlot';
 import { HOSTED_MASTER_TRACK_INDEX } from '../automation/hosted';
 import { audioMaterialRegistry, type AudioMaterialRegistry } from '../registry/AudioMaterialRegistry';
+import type { AudioMaterialPlugin } from '../registry/AudioMaterialPlugin';
 import type { AssetRequest, AudioAssetData, TextAssetData } from '../graph/assets';
 import type { AudioMaterial } from '../graph/AudioMaterial';
 
@@ -270,7 +271,12 @@ async function hydratePluginAssets(
   material: AudioMaterial,
   requests: readonly AssetRequest[],
   readFile: (relativePath: string) => Promise<Uint8Array>,
+  plugin?: Pick<AudioMaterialPlugin, 'applyAsset'>,
 ): Promise<void> {
+  const store = (key: string, value: unknown): void => {
+    if (plugin?.applyAsset) plugin.applyAsset(material, key, value);
+    else material.setAsset(key, value);
+  };
   for (const request of requests) {
     if (!request.filename) continue;
     let bytes: Uint8Array | null = null;
@@ -288,14 +294,14 @@ async function hydratePluginAssets(
       throw lastError;
     }
     if (request.decode === 'text') {
-      material.setAsset(request.key, {
+      store(request.key, {
         filename: request.filename,
         text: new TextDecoder().decode(bytes),
       } satisfies TextAssetData);
       continue;
     }
     const buffer = decodeAudioFile(bytes, request.filename);
-    material.setAsset(request.key, {
+    store(request.key, {
       filename: request.filename,
       samples: buffer.getChannelData(0),
       samplesR: buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : undefined,
@@ -368,6 +374,19 @@ export interface LoadProjectSceneOptions {
  * `midiTracks` become `MidiClip`s on the instrument track (or the track
  * at `trackIndex` when there is no instrument id).
  */
+/**
+ * The gain of a homecrate track fader. A project stores the fader's position
+ * (0..1), and the app plays it through a cubic taper (`faderGain` in
+ * AudioRecorderManager.swift: every live and export path goes through it).
+ * Read linearly, a track at 0.47 played 13 dB hot, and the mix's balance
+ * was not the one the artist set. The master volume is applied linearly by
+ * the app, and is here too.
+ */
+export function projectFaderGain(position: number): number {
+  const v = Math.max(0, Math.min(1, Number.isFinite(position) ? position : 1));
+  return v * v * v;
+}
+
 export async function loadProjectScene(parsed: ParsedProject, options: LoadProjectSceneOptions = {}): Promise<AudioScene> {
   const scene = (options.createScene ?? (() => new AudioScene()))();
   const { project } = parsed;
@@ -396,7 +415,7 @@ export async function loadProjectScene(parsed: ParsedProject, options: LoadProje
     mapped.material.hostedSlot = { trackIndex, slotIndex };
     const latency = mapped.plugin.latencySamples?.(mapped.material) ?? 0;
     if (options.readFile && mapped.plugin.assetRequests) {
-      await hydratePluginAssets(mapped.material, mapped.plugin.assetRequests(mapped.preset), options.readFile);
+      await hydratePluginAssets(mapped.material, mapped.plugin.assetRequests(mapped.preset), options.readFile, mapped.plugin);
     }
     return { material: mapped.material, role: mapped.role, latency };
   };
@@ -431,7 +450,7 @@ export async function loadProjectScene(parsed: ParsedProject, options: LoadProje
     trackById.set(trackData.id, track);
     trackByIndex.set(trackData.trackIndex, track);
     track.pan = trackData.pan;
-    track.volume = trackData.volume;
+    track.volume = projectFaderGain(trackData.volume);
     track.muted = trackData.isMuted;
 
     const trackSlots = listPluginSlots(trackData);

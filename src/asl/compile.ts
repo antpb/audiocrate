@@ -922,14 +922,26 @@ function harmonicSample(phase: number, tilt: number, freq: number, sampleRate: n
   let maxHarm = Math.min(16, Math.floor(0.5 / Math.max(freqNorm, 1e-9)));
   if (maxHarm < 1) maxHarm = 1;
   const exponent = 2 * (1 - (tilt < 0 ? 0 : tilt > 1 ? 1 : tilt));
+  // Partial n is sin(n * theta), walked by the Chebyshev recurrence
+  // sin((n+1)t) = 2cos(t) sin(nt) - sin((n-1)t): one sin and one cos per
+  // sample instead of one sin per partial. The Swift interpreter
+  // (`harmonicPartials` in Interpreter.swift) runs the same expressions in
+  // the same order, so the two engines differ only where Math.sin/Math.cos
+  // and libm already did. Changed from a sin per partial on 2026-11-11; the
+  // recurrence moves the samples by around 1e-15.
+  const theta = 2 * Math.PI * phase;
+  const k = 2 * Math.cos(theta);
+  let prev = 0;
+  let current = Math.sin(theta);
   let norm = 0;
   let sample = 0;
   for (let h = 0; h < maxHarm; h++) {
-    const n = h + 1;
-    const amp = 1 / Math.pow(n, exponent);
+    const amp = 1 / Math.pow(h + 1, exponent);
     norm += amp;
-    const harmPhase = phase * n;
-    sample += amp * Math.sin(2 * Math.PI * (harmPhase - Math.floor(harmPhase)));
+    sample += amp * current;
+    const next = k * current - prev;
+    prev = current;
+    current = next;
   }
   return norm > 0 ? sample / norm : 0;
 }

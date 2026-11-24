@@ -27,6 +27,19 @@ export interface PlannedClipJob {
   trimEndSec: number;
 }
 
+/** One StreamClip window: start the source at `fileOffsetSec`, `whenSec` from the origin. */
+export interface PlannedStreamJob {
+  trackId: number;
+  clipId: number;
+  whenSec: number;
+  fileOffsetSec: number;
+  fileDurationSec: number;
+  volume: number;
+  pan: number;
+  pdcSec: number;
+  gainDb: number;
+}
+
 export interface PlannedMidiJob {
   trackId: number;
   clipId: number;
@@ -48,6 +61,8 @@ export interface PlannedMidiCcJob {
 
 export interface PlaybackPlan {
   jobs: PlannedClipJob[];
+  /** StreamClip windows. Optional so a hand-built plan without streams stays valid. */
+  streamJobs?: PlannedStreamJob[];
   midiJobs: PlannedMidiJob[];
   midiCcJobs: PlannedMidiCcJob[];
   playheadSec: number;
@@ -62,6 +77,7 @@ export interface PlanScenePlaybackInput {
   timeContext: TimeContext;
   resolveOffsetSec: (track: Track, clipIndex: number) => number;
   resolveMidiOffsetSec?: (track: Track, clipIndex: number) => number;
+  resolveStreamOffsetSec?: (track: Track, streamIndex: number) => number;
   playheadSec: number;
   sampleRate: number;
 }
@@ -69,6 +85,7 @@ export interface PlanScenePlaybackInput {
 function emptyPlan(input: PlanScenePlaybackInput, playheadSec: number): PlaybackPlan {
   return {
     jobs: [],
+    streamJobs: [],
     midiJobs: [],
     midiCcJobs: [],
     playheadSec,
@@ -115,6 +132,7 @@ export function planScenePlayback(input: PlanScenePlaybackInput): PlaybackPlan {
   }
 
   const jobs: PlannedClipJob[] = [];
+  const streamJobs: PlannedStreamJob[] = [];
   const midiJobs: PlannedMidiJob[] = [];
   const midiCcJobs: PlannedMidiCcJob[] = [];
   const secPerBeat = 60 / (input.timeContext.bpm > 0 ? input.timeContext.bpm : 120);
@@ -182,6 +200,28 @@ export function planScenePlayback(input: PlanScenePlaybackInput): PlaybackPlan {
       }
     });
 
+    // A stream plays its media from the start: no trims or stretch, so its
+    // window is just where the playhead falls inside [offset, offset + length).
+    track.streams.forEach((scheduled, streamIndex) => {
+      const offsetSec = input.resolveStreamOffsetSec
+        ? input.resolveStreamOffsetSec(track, streamIndex)
+        : scheduled.at.toSeconds(input.timeContext);
+      const lengthSec = scheduled.clip.durationSec;
+      if (!(lengthSec > 0) || playheadSec >= offsetSec + lengthSec) return;
+      const fileOffsetSec = Math.max(0, playheadSec - offsetSec);
+      streamJobs.push({
+        trackId: track.id,
+        clipId: scheduled.clip.id,
+        whenSec: Math.max(0, offsetSec - playheadSec),
+        fileOffsetSec,
+        fileDurationSec: lengthSec - fileOffsetSec,
+        volume,
+        pan,
+        pdcSec,
+        gainDb: scheduled.clip.gainDb,
+      });
+    });
+
     track.midiClips.forEach((scheduled, clipIndex) => {
       const offsetSec = input.resolveMidiOffsetSec
         ? input.resolveMidiOffsetSec(track, clipIndex)
@@ -247,6 +287,7 @@ export function planScenePlayback(input: PlanScenePlaybackInput): PlaybackPlan {
 
   return {
     jobs,
+    streamJobs,
     midiJobs,
     midiCcJobs,
     playheadSec,

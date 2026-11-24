@@ -22,7 +22,8 @@
  */
 import { compileVoice, type PortBlocks, type VoiceRuntimeState, type CompiledVoice } from '../../asl/compile';
 import type { ASLGraphDescriptor } from '../../asl/graph';
-import { auxAudioPorts } from '../../asl/ports';
+import { audioPortNames, auxAudioPorts } from '../../asl/ports';
+import type { ASLNode } from '../../asl/types';
 import {
   DEFAULT_TRANSPORT_ANCHOR,
   advanceTransport,
@@ -54,6 +55,32 @@ const SILENCE_FLOOR = 1e-5;
 /** Quiet blocks before an idle voice stops rendering. A few, so one zero crossing is never mistaken for the end. */
 const QUIET_BLOCKS_TO_IDLE = 4;
 
+/**
+ * The longest a graph can hold a signal and give it back later, in seconds:
+ * its longest delay line (or reverse / pitch-shift buffer), plus a margin.
+ * An effect whose input and output have been silent for longer than this has
+ * nothing left in flight: an echo still in a delay line would have come back
+ * out within that time and reset the count.
+ */
+function memorySeconds(graph: ASLGraphDescriptor): number {
+  let longest = 0;
+  const seen = new Set<ASLNode>();
+  const walk = (node: ASLNode): void => {
+    if (seen.has(node)) return;
+    seen.add(node);
+    const p = node.params as Record<string, unknown>;
+    if (node.kind === 'delay') longest = Math.max(longest, Number(p.maxTimeSec) || 2);
+    else if (node.kind === 'reverse') longest = Math.max(longest, Number(p.maxTimeSec) || 2);
+    else if (node.kind === 'pitchShift') longest = Math.max(longest, 0.2);
+    else if (node.kind === 'comb') longest = Math.max(longest, 0.06);
+    for (const child of Object.values(node.inputs)) walk(child);
+    for (const child of node.list ?? []) walk(child);
+  };
+  walk(graph.output);
+  for (const send of graph.sends ?? []) walk(send);
+  return longest + 0.25;
+}
+
 function isSilent(channel: Float32Array | undefined): boolean {
   if (!channel) return true;
   for (let i = 0; i < channel.length; i++) {
@@ -84,8 +111,13 @@ interface CrateVoiceProcessorOptions {
 }
 
 export type PortMessage =
-  | { type: 'noteOn'; params: Record<string, number> }
-  | { type: 'noteOff' }
+  /**
+   * The voice's own note. `when` (AudioContext time) schedules it with the
+   * same sample accuracy as MIDI, which is how a pool of pure ASL voices plays
+   * a MIDI clip without main-thread timers. Absent, it lands at once.
+   */
+  | { type: 'noteOn'; params: Record<string, number>; when?: number }
+  | { type: 'noteOff'; when?: number }
   /**
    * The host is done with this voice. `process` returns false from then on,
    * which is the only thing that lets the browser release a processor:
@@ -115,7 +147,9 @@ type ScheduledMidi =
   | { when?: number; kind: 'on'; note: number; velocity: number }
   | { when?: number; kind: 'off'; note: number }
   | { when?: number; kind: 'cc'; cc: number; value: number }
-  | { when?: number; kind: 'allOff' };
+  | { when?: number; kind: 'allOff' }
+  | { when?: number; kind: 'voiceOn'; params: Record<string, number> }
+  | { when?: number; kind: 'voiceOff' };
 
 /**
  * Registers a crate voice processor under `processorName`, able to create the
@@ -187,6 +221,13 @@ export function defineCrateVoiceProcessor(
      * pad of eight voices cost eight reverbs with one key down.
      */
     private quietBlocks = 0;
+    /**
+     * Quiet blocks after which a voice with its gate held may rest: an effect
+     * or bus, once nothing reaches it and its own memory has drained
+     * (`memorySeconds`). Infinity for an instrument, whose held note can
+     * still rise from silence (a slow attack, an LFO), so it keeps running.
+     */
+    private readonly heldIdleBlocks: number;
     /** Outputs this voice writes its sends to; 0 for an ordinary voice. */
     private readonly sendCount: number;
     /** The voice's own mix of its sends, which idling is judged on. */
@@ -200,6 +241,13 @@ export function defineCrateVoiceProcessor(
       this.voice = compileVoice(graph, { sends: sends === true });
       this.sendCount = sends === true ? this.voice.sendCount : 0;
       this.auxPorts = auxAudioPorts(graph);
+      // An effect or a bus (it reads audio) holds its gate open for good, so
+      // the released-voice rule never lets it rest; it may once its inputs
+      // and output have been silent for longer than it can hold a signal.
+      this.heldIdleBlocks =
+        audioPortNames(graph).length > 0
+          ? QUIET_BLOCKS_TO_IDLE + Math.ceil((memorySeconds(graph) * sampleRate) / 128)
+          : Infinity;
       this.state = this.voice.createState({ seed });
       this.state.kernels = new Map();
       // Before the first render, so nothing glides and nothing is read unset.
@@ -213,10 +261,10 @@ export function defineCrateVoiceProcessor(
         const msg = event.data;
         switch (msg.type) {
           case 'noteOn':
-            this.voice.noteOn(this.state, msg.params);
+            this.enqueueMidi({ kind: 'voiceOn', params: msg.params, when: msg.when });
             break;
           case 'noteOff':
-            this.voice.noteOff(this.state);
+            this.enqueueMidi({ kind: 'voiceOff', when: msg.when });
             break;
           case 'dispose':
             this.disposed = true;
@@ -342,6 +390,15 @@ export function defineCrateVoiceProcessor(
     }
 
     private applyMidi(event: ScheduledMidi): void {
+      // The voice's own gate: the graph, not a kernel, so never held back.
+      if (event.kind === 'voiceOn') {
+        this.voice.noteOn(this.state, event.params);
+        return;
+      }
+      if (event.kind === 'voiceOff') {
+        this.voice.noteOff(this.state);
+        return;
+      }
       if (!this.hasKernels()) {
         // Hold it: the kernel that would answer this has not loaded yet. A
         // note or a CC posted during WASM instantiation is real state, not
@@ -390,6 +447,10 @@ export function defineCrateVoiceProcessor(
         }
         ports = sliced;
       }
+      const at = advanceTransport(transport, start, sampleRate);
+      // A kernel keeps its own clock (a crate patch's synced delay, its
+      // pulses): it hears the position each range starts at.
+      if (this.hasKernels()) this.eachKernel((k) => k.setTransport?.(at));
       return this.voice.renderBlock(
         this.state,
         sampleRate,
@@ -404,7 +465,7 @@ export function defineCrateVoiceProcessor(
           // block's own position would restart the musical clock at every
           // note, which is audible as a synced LFO stuttering under a busy
           // MIDI part.
-          transport: advanceTransport(transport, start, sampleRate),
+          transport: at,
           ...(sends ? { sends } : {}),
         },
       );
@@ -443,9 +504,11 @@ export function defineCrateVoiceProcessor(
      * Whether this block can be skipped: the voice is released (gate low),
      * has been silent for `QUIET_BLOCKS_TO_IDLE` blocks, nothing is due to
      * wake it, and nothing is arriving at any input. The same rule the Swift
-     * `VoicePool` retires a tail by. A held voice is never skipped however
-     * quiet, so an insert (whose gate is held open) and a sustained note at
-     * zero level both keep running; a kernel voice is never skipped, because
+     * `VoicePool` retires a tail by. A held instrument note is never skipped
+     * however quiet, since it can still rise from silence. An effect or bus
+     * (gate held open for good) rests once its inputs and output have been
+     * silent longer than its longest delay line (`memorySeconds`), and wakes
+     * the block anything reaches it. A kernel voice is never skipped, because
      * a kernel plays notes the gate does not describe.
      */
     private canIdle(
@@ -453,8 +516,15 @@ export function defineCrateVoiceProcessor(
       inR: Float32Array | undefined,
       aux: Record<string, readonly (Float32Array | undefined)[] | undefined> | undefined,
     ): boolean {
-      if (this.quietBlocks < QUIET_BLOCKS_TO_IDLE || this.state.gate || this.hasKernels()) return false;
-      if (this.scheduledMidi.length > 0 || this.pendingMidi.length > 0) return false;
+      if (this.quietBlocks < QUIET_BLOCKS_TO_IDLE || this.hasKernels()) return false;
+      if (this.state.gate && this.quietBlocks < this.heldIdleBlocks) return false;
+      // Notes scheduled for later do not keep a voice awake: this is only
+      // asked when nothing is due in this block, and a due note wakes it on
+      // its sample. A pool voice holds a whole song's notes from the first
+      // block; waiting for an empty queue kept every voice of every pool
+      // rendering silence, and a session with four pads ran at a third of
+      // real time.
+      if (this.pendingMidi.length > 0) return false;
       if (!isSilent(inL) || !isSilent(inR)) return false;
       if (aux) {
         for (const channels of Object.values(aux)) {
@@ -554,7 +624,7 @@ export function defineCrateVoiceProcessor(
 
       this.maybePostAnalysis();
 
-      if (this.state.gate) {
+      if (this.state.gate && this.heldIdleBlocks === Infinity) {
         this.quietBlocks = 0;
       } else {
         let peak = 0;

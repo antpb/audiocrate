@@ -87,6 +87,17 @@ struct NodeMemory {
 
     /// A `noise` or `random` node's stream (Rng.swift), seeded on first use.
     var rng: UInt32 = 0
+
+    /// The `harmonic` shape's partial amplitudes, `1 / pow(n, exponent)` for
+    /// n = 1...16, valid while the exponent equals `harmonicExponent`. The
+    /// exponent only moves with the tilt knob, and sixteen `pow` calls per
+    /// sample per voice were a seventh of a pad patch's render. A fixed tuple
+    /// rather than an array: nothing to allocate on the render thread.
+    var harmonicExponent = Double.nan
+    var harmonicAmps: (
+        Double, Double, Double, Double, Double, Double, Double, Double,
+        Double, Double, Double, Double, Double, Double, Double, Double
+    ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 }
 
 /// What a `tap.meter` reports for the interval since it was last read.
